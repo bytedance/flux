@@ -1,0 +1,27 @@
+#include "@IMPL_HEADER@"
+
+namespace bytedance::flux {
+
+static int _@IMPL_NAME@_@SPLIT_IDX@_@NSPLITS@_@ARCH@_ops [[maybe_unused]] = []() {
+  static_assert(is_flux_op_space_v<@IMPL_NAME@_Space>);
+  
+  tuple_for_each(
+    @IMPL_NAME@_Space::enumerate_split_meta_hparams_pairs<@SPLIT_IDX@, @NSPLITS@, @ARCH@>(),
+    [](auto item) {
+      auto [idx, meta_hparams_pair] = item;
+      auto [meta, hparams] = meta_hparams_pair;
+      using GemmMetaT = decltype(meta);
+      using GemmHParamsT = decltype(hparams);
+
+      OpRegistry::instance().register_creator(
+        []() {
+          OpRegistry::OpPtr op = std::make_unique<@IMPL_NAME@<GemmMetaT, GemmHParamsT>>();
+          return op;
+        },
+        GemmMetaT{},
+        GemmHParamsT{},
+        idx);
+    });
+  return 0;
+}();
+}
