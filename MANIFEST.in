@@ -1,0 +1,5 @@
+include src/ths_op/*.cc.inc
+exclude pynvshmem/
+recursive-include src *
+recursive-include include *
+recursive-include python/flux_ths_pybind
