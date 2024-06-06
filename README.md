@@ -41,10 +41,10 @@ FLUX_FINAL_RELEASE=0 ./build.sh --arch 80 --package
 PYTHONPATH=./python:$PYTHONPATH python3 test/test_gemm_only.py 4096 12288 6144 --dtype=float16
 
 # gemm fused with reduce-scatter
-./launch.sh test/test_gemm_rs.py 4096 12288 49152 --dtype=float16 --iters=10
+./scripts/launch.sh test/test_gemm_rs.py 4096 12288 49152 --dtype=float16 --iters=10
 
 # all-gather fused with gemm
-./launch.sh test/test_ag_kernel.py 4096 49152 12288 --dtype=float16 --iters=10
+./scripts/launch.sh test/test_ag_kernel.py 4096 49152 12288 --dtype=float16 --iters=10
 ```
 
 
