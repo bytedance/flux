@@ -47,7 +47,24 @@ PYTHONPATH=./python:$PYTHONPATH python3 test/test_gemm_only.py 4096 12288 6144 -
 ./scripts/launch.sh test/test_ag_kernel.py 4096 49152 12288 --dtype=float16 --iters=10
 ```
 
+## Citing
 
+If you use Flux in a scientific publication, we encourage you to add the following reference
+to the related papers:
+```
+@misc{chang2024flux,
+      title={FLUX: Fast Software-based Communication Overlap On GPUs Through Kernel Fusion},
+      author={Liwen Chang and Wenlei Bao and Qi Hou and Chengquan Jiang and Ningxin Zheng and Xuanrun Zhang and Zuquan Song and Ziheng Jiang and Haibin Lin and Xin Liu},
+      year={2024},
+      eprint={2406.06858},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
+}
+```
+
+## Reference
+
+* [ArXiv Paper](http://arxiv.org/abs/2406.06858)
 
 ## [License](./LICENSE)
 
