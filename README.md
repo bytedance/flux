@@ -54,7 +54,7 @@ to the related papers:
 ```
 @misc{chang2024flux,
       title={FLUX: Fast Software-based Communication Overlap On GPUs Through Kernel Fusion},
-      author={Liwen Chang and Wenlei Bao and Qi Hou and Chengquan Jiang and Ningxin Zheng and Xuanrun Zhang and Zuquan Song and Ziheng Jiang and Haibin Lin and Xin Liu},
+      author={Liwen Chang and Wenlei Bao and Qi Hou and Chengquan Jiang and Ningxin Zheng and Yinmin Zhong and Xuanrun Zhang and Zuquan Song and Ziheng Jiang and Haibin Lin and Xin Jin and Xin Liu},
       year={2024},
       eprint={2406.06858},
       archivePrefix={arXiv},
