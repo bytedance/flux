@@ -114,6 +114,8 @@ auto
 to_cutlass_archtag(cute::C<E> arch) {
   if constexpr (arch == _Sm80{}) {
     return make_declval<cutlass::arch::Sm80>();
+  } else if constexpr (arch == _Sm89{}) {
+    return make_declval<cutlass::arch::Sm89>();
   } else if constexpr (arch == _Sm90{}) {
     return make_declval<cutlass::arch::Sm90>();
   } else {
@@ -201,8 +203,7 @@ struct GpuTimer {
 
 // exit if error
 void ensure_nvml_init();
-// exit if error
-[[deprecated]] bool has_nvlink_support(int devid);
+
 // exit if error
 const char *get_gpu_device_name(int devid);
 // exit if error

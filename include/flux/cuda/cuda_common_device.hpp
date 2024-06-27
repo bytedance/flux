@@ -38,24 +38,48 @@ global_timer() {
 
 template <typename... T>
 CUTLASS_DEVICE void
-dprint_t0(const T &...args) {
+print_if(bool condition, T &&...args) {
 #ifdef FLUX_DEBUG
-  if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {
+  if (condition)
     printf(args...);
-  }
 #endif
 }
 
-#define DPRINT_T0(fmt, ...)                                                     \
-  bytedance::flux::dprint_t0(                                                   \
-      "[%d] " fmt,                                                              \
+CUTLASS_DEVICE
+int
+blockid() {
+  return blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y;
+}
+
+CUTLASS_DEVICE
+int
+threadid() {
+  return threadIdx.x + threadIdx.y * blockDim.x + threadIdx.z * blockDim.x * blockDim.y;
+}
+
+template <typename... T>
+CUTLASS_DEVICE void
+print_per_block_(T &&...args) {
+  print_if(threadid() == 0, args...);
+}
+
+#define print_per_block(fmt, ...)                                               \
+  bytedance::flux::print_per_block_(                                            \
+      "L%d@[%d] " fmt,                                                          \
+      __LINE__,                                                                 \
       blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y, \
       ##__VA_ARGS__)
 
-// usage: dprint_cute0(layout, "layout: i = %d", i);
+template <typename... T>
+CUTLASS_DEVICE void
+print_per_kernel(const T &...args) {
+  print_if(threadid() == 0 && blockid() == 0, args...);
+}
+
+// usage: print_cute_per_kernel(layout, "layout: i = %d", i);
 template <typename CuteType, typename... T>
 CUTLASS_DEVICE void
-dprint_cute0(const CuteType &value, const T &...args) {
+print_cute_per_kernel(const CuteType &value, const T &...args) {
 #if defined(FLUX_DEBUG)
   if (cute::thread0()) {
     printf(args...);
@@ -135,24 +159,6 @@ atomic_add_release_dev(int *ptr, int value) {
 }
 
 CUTLASS_DEVICE void
-write_t0(uint64_t *ptr, uint64_t value) {
-  if constexpr (1) {
-    if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {
-      *ptr = value;
-    }
-  }
-}
-
-CUTLASS_DEVICE void
-write_clock_t0(uint64_t *ptr) {
-  if constexpr (1) {
-    if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {
-      *ptr = global_timer();
-    }
-  }
-}
-
-CUTLASS_DEVICE void
 nanosleep(unsigned int nanoseconds) {
   if (nanoseconds == 0)
     return;
@@ -160,6 +166,12 @@ nanosleep(unsigned int nanoseconds) {
   clock_t start = global_timer();
   while (global_timer() - start < nanoseconds) {
   }
+}
+
+CUTLASS_DEVICE
+void
+sub_barrier_sync(uint32_t barrier_id, uint32_t num_threads) {
+  asm volatile("bar.sync %0, %1;" : : "r"(barrier_id), "r"(num_threads));
 }
 
 }  // namespace bytedance::flux

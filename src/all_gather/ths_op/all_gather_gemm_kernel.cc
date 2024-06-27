@@ -15,6 +15,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "all_gather_ring_order.h"
+
 #include "flux/cuda/cuda_common.h"
 #include "flux/cuda/cuda_stub.h"
 #include "flux/flux.h"
@@ -41,12 +43,15 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cuda_runtime_api.h>
+#ifdef FLUX_SHM_USE_NVSHMEM
 #include <nvshmem.h>
 #include <nvshmemx.h>
+#endif
 #include <pybind11/cast.h>
 #include <pybind11/pytypes.h>
 #include <torch/all.h>
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
+#include <variant>
 #include <torch/python.h>
 #include "all_gather_types.h"
 #include "pybind11/pybind11.h"
@@ -84,13 +89,20 @@ class AGKernel : public torch::CustomClassHolder {
   c10::ScalarType output_dtype;
   const bool transpose_weight;
   const bool local_copy;
+  const bool is_fp8_gemm;
 
  private:
   int32_t rank;
   int32_t world_size;
   int32_t local_world_size;
   int32_t local_rank;
-
+#ifndef FLUX_SHM_USE_NVSHMEM
+  // used for the cuda-ipc-barrier
+  std::vector<torch::Tensor> sync_buffers;
+#endif
+  std::vector<torch::Tensor> input_buffers;
+  std::vector<torch::Tensor> output_buffers;
+  std::vector<torch::Tensor> barrier_buffers;
   torch::Tensor input_buffer;
   torch::Tensor output_buffer;
   torch::Tensor barrier_buffer;
@@ -100,7 +112,7 @@ class AGKernel : public torch::CustomClassHolder {
   AGRingMode ring_mode;
 
   // cutlass gemm
-  AGKernelArguments gemm_args;
+  std::any gemm_args;  // AGKernelArguments/AGFP8KernelArguments
   torch::Tensor gemm_buffer;
   void *workspace;
   std::unique_ptr<GemmOperatorBase> cutlass_op;
@@ -137,6 +149,7 @@ class AGKernel : public torch::CustomClassHolder {
         output_dtype(output_dtype),
         transpose_weight(transpose_weight),
         local_copy(local_copy),
+        is_fp8_gemm(is_fp8_torch_dtype(input_dtype)),
         rank(tp_group.getRank()),
         world_size(tp_group.getSize()),
         local_world_size(world_size / nnodes),
@@ -147,16 +160,20 @@ class AGKernel : public torch::CustomClassHolder {
         << "invalid rank: " << rank << " and world_size: " << world_size;
     FLUX_CHECK(world_size % nnodes == 0)
         << "invalid nnodes: world_size[" << world_size << "] %% nnodes[" << nnodes << "] != 0";
+    FLUX_CHECK(!(transpose_weight == true && is_fp8_gemm == true))
+        << "FP8 GEMM does not support transpose weight";
     _ensure_topo_initialized();
     this->ring_mode = get_ring_mode(ring_mode_);
 
     // input buffer
-    this->input_buffer = nvshmem_create_tensor({full_m, k_dim}, input_dtype);
+    this->input_buffers = flux_create_tensor_list({full_m, k_dim}, input_dtype, this->tp_group);
+    this->input_buffer = this->input_buffers[this->local_rank];
     for (int i = 0; i < world_size; ++i) {
-      if (i == rank) {
-        this->input_ptrs[i] = this->input_buffer.data_ptr();
+      if (i / this->local_world_size == rank / this->local_world_size) {
+        // on the same node
+        this->input_ptrs[i] = this->input_buffers[i].data_ptr();
       } else {
-        this->input_ptrs[i] = nvshmem_ptr(this->input_buffer.data_ptr(), i);
+        this->input_ptrs[i] = nullptr;
       }
     }
 
@@ -170,10 +187,21 @@ class AGKernel : public torch::CustomClassHolder {
 
     // barrier buffer
     int num_signals = MAX_NUM_SIGNAL;
-    this->barrier_buffer = nvshmem_create_tensor({num_signals}, c10::ScalarType::Int);
+    this->barrier_buffers =
+        flux_create_tensor_list({num_signals}, c10::ScalarType::Int, this->tp_group);
+    this->barrier_buffer = this->barrier_buffers[this->local_rank];
     for (int i = 0; i < world_size; ++i) {
-      this->barrier_ptrs[i] = (FlagType *)nvshmem_ptr(this->barrier_buffer.data_ptr(), i);
+      if (i / this->local_world_size == rank / this->local_world_size) {
+        // on the same node
+        this->barrier_ptrs[i] = (FlagType *)this->barrier_buffers[i].data_ptr();
+      } else {
+        this->barrier_ptrs[i] = (FlagType *)nullptr;
+      }
     }
+
+    // for (int i = 0; i < world_size; ++i) {
+    //   this->barrier_ptrs[i] = (FlagType *)nvshmem_ptr(this->barrier_buffer.data_ptr(), i);
+    // }
 
     // copy stream
     this->num_cp_streams = 1;
@@ -188,6 +216,11 @@ class AGKernel : public torch::CustomClassHolder {
     for (int i = 0; i < 1; ++i) {
       this->reset_stream.push_back(at::cuda::getStreamFromPool());
     }
+#ifndef FLUX_SHM_USE_NVSHMEM
+    this->sync_buffers =
+        flux_create_tensor_list({this->world_size}, c10::ScalarType::Int, this->tp_group);
+    this->sync_buffers[this->rank].zero_();  // zeros the sync buffer for cuda ipc at the start
+#endif
   }
 
   void
@@ -201,6 +234,22 @@ class AGKernel : public torch::CustomClassHolder {
     }
   }
 
+  torch::Tensor
+  get_optional_scale_tensor(c10::optional<torch::Tensor> optional_scale_tensor) {
+    torch::Tensor scale_tensor;
+    if (optional_scale_tensor.has_value()) {
+      scale_tensor = optional_scale_tensor.value();
+    } else {
+      scale_tensor = torch::empty(
+          {1},
+          at::TensorOptions()
+              .dtype(c10::ScalarType::Float)
+              .device(at::kCUDA)
+              .device_index(c10::cuda::current_device()));
+    }
+    return scale_tensor;
+  }
+
   ~AGKernel() {
     cudaEventDestroy(cp_event);
     cudaEventDestroy(ready_event);
@@ -208,19 +257,25 @@ class AGKernel : public torch::CustomClassHolder {
   }
 
   auto
-  get_gemm_meta(bool has_bias) {
+  get_gemm_meta(bool has_bias, bool fast_accum = false) {
     ArchEnum arch = get_arch();
-    auto gemm_layout = this->transpose_weight ? _RRR{}() : _RCR{}();
     auto input_dtype = from_torch_dtype(this->input_dtype);
     auto output_dtype = from_torch_dtype(this->output_dtype);
     auto dtype_config = make_gemm_dtype_config(
         input_dtype, input_dtype, has_bias ? output_dtype : _Void{}(), output_dtype);
-    auto meta = make_gemm_meta(
-        dtype_config,
-        arch,
-        _AGKernel{},
-        gemm_layout,
-        ((int)arch < (int)_Sm90{}()) ? _GemmV2{}() : _GemmV3{}());
+
+    auto gemm_layout = this->transpose_weight ? _RRR{}() : _RCR{}();
+    UnifiedImplMeta impl_spec = None{};
+
+    bool use_fast_accum = fast_accum and dtype_config.is_input_fp8();
+    auto impl = ((int)arch < (int)_Sm90{}()) ? _GemmV2{}() : _GemmV3{}();
+    if (impl == _GemmV2{}) {
+      impl_spec = make_gemm_v2_meta(use_fast_accum);
+    } else if (impl == _GemmV3{}) {
+      impl_spec = make_gemm_v3_meta(use_fast_accum);
+    }
+
+    auto meta = make_gemm_meta(dtype_config, arch, _AGKernel{}, gemm_layout, impl, impl_spec);
     return meta;
   }
 
@@ -236,7 +291,11 @@ class AGKernel : public torch::CustomClassHolder {
     if (bias.has_value()) {
       CHECK_INPUT(bias.value(), this->output_dtype);
       FLUX_CHECK_EQ(bias->dim(), 2);
-      FLUX_CHECK_EQ(input.size(0) * this->world_size, bias->size(0));
+      if (this->is_fp8_gemm) {
+        FLUX_CHECK_EQ(1, bias->size(0));
+      } else {
+        FLUX_CHECK_EQ(input.size(0) * this->world_size, bias->size(0));
+      }
       FLUX_CHECK_EQ(n_dim, bias->size(1));
     }
 
@@ -258,8 +317,12 @@ class AGKernel : public torch::CustomClassHolder {
       torch::Tensor input,
       torch::Tensor weight,
       c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum,
       c10::optional<UnifiedGemmHParams> const &hparams) {
-    auto meta = get_gemm_meta(/*has_bias=*/bias.has_value());
+    auto meta = get_gemm_meta(/*has_bias=*/bias.has_value(), /*fast_accum=*/fast_accum);
     auto rt_config = get_rt_config(input, weight, bias);
 
     if (hparams.has_value()) {
@@ -269,22 +332,53 @@ class AGKernel : public torch::CustomClassHolder {
       this->cutlass_op = OpRegistry::instance().get_op(meta, params);
     }
 
-    // AG GEMM Arguments
-    this->gemm_args = {
-        .m = rt_config.m(),
-        .n = rt_config.n(),
-        .k = rt_config.k(),
-        .rank = static_cast<int>(rank),
-        .world_size = static_cast<int>(world_size),
-        .nnodes = static_cast<int>(nnodes),
-        .alpha = 1.0f,
-        .beta = bias.has_value() ? 1.0f : 0.0f,
-        .input = input.data_ptr(),
-        .input_buffer = this->input_buffer.data_ptr(),
-        .weight = weight.data_ptr(),
-        .bias = bias.has_value() ? bias->data_ptr() : nullptr,
-        .output = this->output_buffer.data_ptr(),
-        .barrier_buffer = this->barrier_buffer.data_ptr()};
+    if (this->is_fp8_gemm) {
+      torch::Tensor in_scale = get_optional_scale_tensor(input_scale);
+      torch::Tensor w_scale = get_optional_scale_tensor(weight_scale);
+      torch::Tensor out_scale = get_optional_scale_tensor(output_scale);
+
+      this->gemm_args = AGFP8KernelArguments{
+          .m = rt_config.m(),
+          .n = rt_config.n(),
+          .k = rt_config.k(),
+          .rank = static_cast<int>(rank),
+          .world_size = static_cast<int>(world_size),
+          .nnodes = static_cast<int>(nnodes),
+          .alpha = 1.0f,
+          .beta = 0.0f,
+          .A = input.data_ptr(),
+          .agA = this->input_buffer.data_ptr(),
+          .B = weight.data_ptr(),
+          .C = nullptr,
+          .Aux = nullptr,
+          .D = this->output_buffer.data_ptr(),
+          .barrier_buffer = this->barrier_buffer.data_ptr(),
+          .Vector = bias.has_value() ? bias->data_ptr() : nullptr,
+          .abs_max_Aux = nullptr,
+          .abs_max_D = nullptr,
+          .scaleA = (float *)in_scale.data_ptr(),
+          .scaleB = (float *)w_scale.data_ptr(),
+          .scaleC = nullptr,
+          .scaleD = (float *)out_scale.data_ptr(),
+          .scaleAux = nullptr};
+    } else {
+      // AG GEMM Arguments
+      this->gemm_args = AGKernelArguments{
+          .m = rt_config.m(),
+          .n = rt_config.n(),
+          .k = rt_config.k(),
+          .rank = static_cast<int>(rank),
+          .world_size = static_cast<int>(world_size),
+          .nnodes = static_cast<int>(nnodes),
+          .alpha = 1.0f,
+          .beta = bias.has_value() ? 1.0f : 0.0f,
+          .input = input.data_ptr(),
+          .input_buffer = this->input_buffer.data_ptr(),
+          .weight = weight.data_ptr(),
+          .bias = bias.has_value() ? bias->data_ptr() : nullptr,
+          .output = this->output_buffer.data_ptr(),
+          .barrier_buffer = this->barrier_buffer.data_ptr()};
+    }
 
     // AG Gemm Workspace
     int64_t workspace_size = cutlass_op->get_workspace_size(this->gemm_args);
@@ -309,8 +403,28 @@ class AGKernel : public torch::CustomClassHolder {
     if (ring_mode == AGRingMode::All2All) {
       /// All2All algorithm
       copy_all_to_all(input, this->cp_streams[0]);
-    } else {
-      FLUX_CHECK(false) << "only support world_size 4 and 8";
+    } else if (ring_mode == AGRingMode::RingCustom) {
+      auto stream = cp_streams[0];
+      at::cuda::CUDAStreamGuard guard(stream);
+      CUDA_CHECK(cudaStreamWaitEvent(stream, this->ready_event));
+      ring_all_gather(stream);
+    } else {  // copy in ring mode. PCI-e path
+      auto stream = cp_streams[0];
+      at::cuda::CUDAStreamGuard guard(stream);
+      CUDA_CHECK(cudaStreamWaitEvent(stream, this->ready_event));
+      // always the  0 <- 1 <- 2 <- 3 <- 0 order
+      if (kPushMode) {
+        if (ring_mode == AGRingMode::Ring1D) {
+          copy_ring_push_1d(input, stream);
+        } else if (ring_mode == AGRingMode::Ring2D) {
+          // TODO(houqi.1993) check performance if NUMA nodes != 2
+          copy_ring_push_2d_pcie(input, stream);
+        } else {
+          FLUX_CHECK(false) << "only support world_size 4 and 8";
+        }
+      } else {
+        copy_ring_pull(input, stream);
+      }
     }
     CUDA_CHECK(cudaEventRecord(this->cp_event, this->cp_streams[0]));
 
@@ -329,8 +443,12 @@ class AGKernel : public torch::CustomClassHolder {
       torch::Tensor input,
       torch::Tensor weight,
       c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum,
       c10::optional<UnifiedGemmHParams> const &hparams) {
-    auto meta = get_gemm_meta(/*has_bias=*/bias.has_value());
+    auto meta = get_gemm_meta(/*has_bias=*/bias.has_value(), /*fast_accum=*/fast_accum);
     auto rt_config = get_rt_config(input, weight, bias);
 
     if (hparams.has_value()) {
@@ -344,22 +462,53 @@ class AGKernel : public torch::CustomClassHolder {
     int n = rt_config.n();
     int k = rt_config.k();
 
-    // AG GEMM Arguments
-    this->gemm_args = {
-        .m = m,
-        .n = n,
-        .k = k,
-        .rank = static_cast<int>(rank),
-        .world_size = static_cast<int>(world_size),
-        .nnodes = static_cast<int>(nnodes),
-        .alpha = 1.0f,
-        .beta = bias.has_value() ? 1.0f : 0.0f,
-        .input = input.data_ptr(),
-        .input_buffer = this->input_buffer.data_ptr(),
-        .weight = weight.data_ptr(),
-        .bias = bias.has_value() ? bias->data_ptr() : nullptr,
-        .output = this->output_buffer.data_ptr(),
-        .barrier_buffer = this->barrier_buffer.data_ptr()};
+    if (this->is_fp8_gemm) {
+      torch::Tensor in_scale = get_optional_scale_tensor(input_scale);
+      torch::Tensor w_scale = get_optional_scale_tensor(weight_scale);
+      torch::Tensor out_scale = get_optional_scale_tensor(output_scale);
+
+      this->gemm_args = AGFP8KernelArguments{
+          .m = m,
+          .n = n,
+          .k = k,
+          .rank = static_cast<int>(rank),
+          .world_size = static_cast<int>(world_size),
+          .nnodes = static_cast<int>(nnodes),
+          .alpha = 1.0f,
+          .beta = 0.0f,
+          .A = input.data_ptr(),
+          .agA = this->input_buffer.data_ptr(),
+          .B = weight.data_ptr(),
+          .C = nullptr,
+          .Aux = nullptr,
+          .D = this->output_buffer.data_ptr(),
+          .barrier_buffer = this->barrier_buffer.data_ptr(),
+          .Vector = bias.has_value() ? bias->data_ptr() : nullptr,
+          .abs_max_Aux = nullptr,
+          .abs_max_D = nullptr,
+          .scaleA = (float *)in_scale.data_ptr(),
+          .scaleB = (float *)w_scale.data_ptr(),
+          .scaleC = nullptr,
+          .scaleD = (float *)out_scale.data_ptr(),
+          .scaleAux = nullptr};
+    } else {
+      // AG GEMM Arguments
+      this->gemm_args = AGKernelArguments{
+          .m = m,
+          .n = n,
+          .k = k,
+          .rank = static_cast<int>(rank),
+          .world_size = static_cast<int>(world_size),
+          .nnodes = static_cast<int>(nnodes),
+          .alpha = 1.0f,
+          .beta = bias.has_value() ? 1.0f : 0.0f,
+          .input = input.data_ptr(),
+          .input_buffer = this->input_buffer.data_ptr(),
+          .weight = weight.data_ptr(),
+          .bias = bias.has_value() ? bias->data_ptr() : nullptr,
+          .output = this->output_buffer.data_ptr(),
+          .barrier_buffer = this->barrier_buffer.data_ptr()};
+    }
 
     // AG GEMM Workspace
     int64_t workspace_size = cutlass_op->get_workspace_size(this->gemm_args);
@@ -410,7 +559,11 @@ class AGKernel : public torch::CustomClassHolder {
         for (int j = 0; j < SPLIT; ++j) {
           set_ready(this->rank, this->rank, j, all_gather_stream);
         }
-        nvshmemx_barrier_all_on_stream(all_gather_stream);
+#ifdef FLUX_SHM_USE_NVSHMEM
+        flux_barrier_all_on_stream(all_gather_stream);
+#else
+        flux_barrier_all_on_stream(all_gather_stream, this->sync_buffers, this->rank);
+#endif
         CUDA_CHECK(cudaEventRecord(this->all_gather_event, all_gather_stream));
       }
 
@@ -438,31 +591,76 @@ class AGKernel : public torch::CustomClassHolder {
   }
 
   torch::Tensor
-  forward_gemm(torch::Tensor input, torch::Tensor weight, c10::optional<torch::Tensor> bias) {
+  forward_gemm(
+      torch::Tensor input,
+      torch::Tensor weight,
+      c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum) {
     this->chunk_size = input.numel() * input.element_size();
     this->split_chunk_size = this->chunk_size / SPLIT;
-    return forward_gemm_impl(std::move(input), std::move(weight), std::move(bias), c10::nullopt);
+    return forward_gemm_impl(
+        std::move(input),
+        std::move(weight),
+        std::move(bias),
+        std::move(input_scale),
+        std::move(weight_scale),
+        std::move(output_scale),
+        fast_accum,
+        c10::nullopt);
   }
 
   torch::Tensor
-  gemm_only(torch::Tensor input, torch::Tensor weight, c10::optional<torch::Tensor> bias) {
+  gemm_only(
+      torch::Tensor input,
+      torch::Tensor weight,
+      c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum) {
     this->chunk_size = input.numel() * input.element_size();
     this->split_chunk_size = this->chunk_size / SPLIT;
 
     // set signals to 1
     this->barrier_buffer.fill_(1);
-    return forward_gemm_impl(std::move(input), std::move(weight), std::move(bias), c10::nullopt);
+    return forward_gemm_impl(
+        std::move(input),
+        std::move(weight),
+        std::move(bias),
+        std::move(input_scale),
+        std::move(weight_scale),
+        std::move(output_scale),
+        fast_accum,
+        c10::nullopt);
   }
 
   torch::Tensor
-  forward(torch::Tensor input, torch::Tensor weight, c10::optional<torch::Tensor> bias) {
+  forward(
+      torch::Tensor input,
+      torch::Tensor weight,
+      c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum) {
     if (this->local_copy) {
       FLUX_CHECK_EQ(input.numel() * input.element_size(), this->chunk_size);
     }
 
     this->chunk_size = input.numel() * input.element_size();
     this->split_chunk_size = this->chunk_size / SPLIT;
-    return forward_impl(std::move(input), std::move(weight), std::move(bias), c10::nullopt);
+    return forward_impl(
+        std::move(input),
+        std::move(weight),
+        std::move(bias),
+        std::move(input_scale),
+        std::move(weight_scale),
+        std::move(output_scale),
+        fast_accum,
+        c10::nullopt);
   }
 
   torch::Tensor
@@ -476,7 +674,11 @@ class AGKernel : public torch::CustomClassHolder {
   reset_signals() {
     auto current_stream = c10::cuda::getCurrentCUDAStream();
     cudaStreamWaitEvent(current_stream, this->cp_event);
-    nvshmemx_barrier_all_on_stream(current_stream);
+#ifdef FLUX_SHM_USE_NVSHMEM
+    flux_barrier_all_on_stream(current_stream);
+#else
+    flux_barrier_all_on_stream(current_stream, this->sync_buffers, this->rank);
+#endif
     c10::cuda::stream_synchronize(current_stream);
 
     this->barrier_buffer.zero_();
@@ -499,7 +701,11 @@ class AGKernel : public torch::CustomClassHolder {
     for (int j = 0; j < SPLIT; ++j) {
       set_ready(this->rank, this->rank, j, current_stream);
     }
-    nvshmemx_barrier_all_on_stream(current_stream);
+#ifdef FLUX_SHM_USE_NVSHMEM
+    flux_barrier_all_on_stream(current_stream);
+#else
+    flux_barrier_all_on_stream(current_stream, this->sync_buffers, this->rank);
+#endif
   }
 
   torch::Tensor
@@ -507,8 +713,13 @@ class AGKernel : public torch::CustomClassHolder {
       torch::Tensor input,
       torch::Tensor weight,
       c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum,
       c10::intrusive_ptr<ProfilingContext> opt_ctx) {
-    auto meta = unify_type(this->get_gemm_meta(/*has_bias=*/bias.has_value()));
+#ifdef FLUX_SHM_USE_NVSHMEM
+    auto meta = unify_type(this->get_gemm_meta(bias.has_value(), fast_accum));
     auto rt_config = get_rt_config(input, weight, bias);
 
     ProfilingContext tmp_ctx("__tmp__");
@@ -537,7 +748,8 @@ class AGKernel : public torch::CustomClassHolder {
             this->copy_local(input);
             GpuTimer timer;
             timer.start(stream);
-            auto output [[maybe_unused]] = this->forward_impl(input, weight, bias, hparams);
+            auto output [[maybe_unused]] = this->forward_impl(
+                input, weight, bias, input_scale, weight_scale, output_scale, fast_accum, hparams);
             timer.stop();
             if (iter >= warmup) {
               total_elapsed += timer.elapsed_millis();
@@ -566,7 +778,19 @@ class AGKernel : public torch::CustomClassHolder {
 
     auto best_hparams = ctx->record_best(meta, rt_config);
     return this->forward_impl(
-        std::move(input), std::move(weight), std::move(bias), std::move(best_hparams));
+        std::move(input),
+        std::move(weight),
+        std::move(bias),
+        std::move(input_scale),
+        std::move(weight_scale),
+        std::move(output_scale),
+        fast_accum,
+        std::move(best_hparams));
+#else
+    // only support profiling when nvshmem is enabled
+    assert(false);
+    return torch::Tensor();
+#endif
   }
 
  private:
@@ -614,6 +838,120 @@ class AGKernel : public torch::CustomClassHolder {
       }
     }
   }
+
+  void
+  copy_ring_pull(torch::Tensor input, at::cuda::CUDAStream stream) {
+    // barrier_ptrs[rank, segment, split] means rank data is ready
+    at::cuda::CUDAStreamGuard guard(stream);
+    CUDA_CHECK(cudaStreamWaitEvent(stream, this->ready_event));
+    // always the  0 <- 1 <- 2 <- 3 <- 0 order
+    int from_rank = (rank + 1) % this->world_size;  // always copy to rank next
+    for (int i = 0; i < world_size - 1; i++) {
+      int recv_segment = (rank + i + 1) % world_size;  // copy from self
+      for (int j = 0; j < SPLIT; ++j) {
+        auto split_offset = j * split_chunk_size;
+        if (i != 0) {
+          // previous rank recv done
+          wait_ready(from_rank, recv_segment, j, stream);
+        }
+        CUDA_CHECK(cudaMemcpyAsync(
+            ptr_offset(this->input_ptrs[rank], recv_segment * chunk_size + split_offset),
+            ptr_offset(this->input_ptrs[from_rank], recv_segment * chunk_size + split_offset),
+            split_chunk_size,
+            cudaMemcpyDeviceToDevice,
+            stream));
+        set_ready(this->rank, recv_segment, j, stream);
+      }
+    }
+  }
+
+  void
+  copy_ring_push_1d(torch::Tensor input, at::cuda::CUDAStream stream) {
+    // always the  0 <- 1 <- 2 <- 3 <- 0 order
+    int to_rank = (rank - 1 + world_size) % world_size;  // always recv data from rank prev
+    for (int i = 0; i < world_size - 1; i++) {
+      int send_segment = (rank + i) % world_size;
+      for (int j = 0; j < SPLIT; ++j) {
+        auto split_offset = j * split_chunk_size;
+        if (i != 0) {  // previous rank recv done. i == 0 it is always ready
+          wait_ready(this->rank, send_segment, j, stream);
+        }
+        CUDA_CHECK(cudaMemcpyAsync(
+            ptr_offset(this->input_ptrs[to_rank], send_segment * chunk_size + split_offset),
+            ptr_offset(this->input_ptrs[rank], send_segment * chunk_size + split_offset),
+            this->split_chunk_size,
+            cudaMemcpyDeviceToDevice,
+            stream));
+        set_ready(to_rank, send_segment, j, stream);
+      }
+    }
+  }
+
+  void
+  copy_ring_push_2d_pcie(torch::Tensor input, at::cuda::CUDAStream stream) {
+    // [0, numa_world_size) stages:  0 <- 1 <- 2 <- 3 <- 4 <- 5 <- 6 <- 7 <- 0
+    // [numa_world_size, world_size) stages: 0 <- 1 <- 2 <-3 <- 0 && 4 <- 5 <- 6 <- 7 <- 4
+    int to_rank = (rank - 1 + world_size) % world_size;  // always recv data from rank prev
+    int numa_world_size = topo_utils::topo_numa_local_world_size();
+    FLUX_CHECK_DIV(this->local_world_size, numa_world_size);
+    int numa_nodes = this->local_world_size / numa_world_size;
+    FLUX_CHECK_EQ(numa_nodes, 2) << " world_size " << this->local_world_size
+                                 << " with numa_world_size " << numa_world_size;
+    int nnode = rank / numa_world_size;
+    for (int i = 0; i < world_size - 1; i++) {  // with inner and intra numa node
+      int send_segment = (rank + i) % world_size;
+      if (i >= numa_world_size && rank % numa_world_size == 0) {
+        send_segment = (send_segment + numa_world_size) % world_size;
+        to_rank = (rank - 1 + numa_world_size) % numa_world_size + nnode * numa_world_size;
+      }
+      for (int j = 0; j < SPLIT; ++j) {
+        auto split_offset = j * split_chunk_size;
+        if (i != 0 && !(i >= numa_world_size &&
+                        rank % numa_world_size == 0)) {  // for i == 0 it is always ready
+          // previous rank recv done
+          wait_ready(rank, send_segment, j, stream);
+        }
+        void *from_ptr = this->input_ptrs[rank];
+        void *to_ptr = this->input_ptrs[to_rank];
+        CUDA_CHECK(cudaMemcpyAsync(
+            ptr_offset(to_ptr, send_segment * chunk_size + split_offset),
+            ptr_offset(from_ptr, send_segment * chunk_size + split_offset),
+            split_chunk_size,
+            cudaMemcpyDeviceToDevice,
+            stream));
+        set_ready(to_rank, send_segment, j, stream);
+      }
+    }
+  }
+
+  void
+  ring_all_gather(at::cuda::CUDAStream stream) {
+    ring_all_gather_reorder<0, FLUX_AG_RING_ORDER>(stream);
+  }
+
+  template <int reordered, typename Transfer, typename... Transfers>
+  void
+  ring_all_gather_reorder(at::cuda::CUDAStream stream) {
+    if (Transfer::exec_rank == this->rank) {
+      ring_all_gather_run<Transfer::src_idx, Transfer::dst_idx, Transfer, Transfers...>(stream);
+    } else {
+      if constexpr (reordered + 1 <= sizeof...(Transfers)) {
+        ring_all_gather_reorder<reordered + 1, Transfers..., Transfer>(stream);
+      }
+    }
+  }
+
+  template <int src_rank, int dst_rank, typename Transfer, typename... Transfers>
+  void
+  ring_all_gather_run(at::cuda::CUDAStream stream) {
+    Transfer::run(
+        input_ptrs, barrier_ptrs, src_rank, dst_rank, chunk_size, split_chunk_size, stream);
+    ring_all_gather_run<src_rank, dst_rank, Transfers...>(stream);
+  }
+
+  template <int src_rank, int dst_rank>
+  void
+  ring_all_gather_run(at::cuda::CUDAStream stream) {}
 };
 
 void
@@ -622,7 +960,9 @@ static int _register_ag_kernel_ops [[maybe_unused]] = []() {
   ThsOpsInitRegistry::instance().register_one("all_gather_gemm_kernel", [](py::module &m) {
     py::enum_<AGRingMode>(m, "AGRingMode", py::arithmetic())
         .value("Auto", AGRingMode::Auto)
-        .value("All2All", AGRingMode::All2All);
+        .value("All2All", AGRingMode::All2All)
+        .value("Ring1D", AGRingMode::Ring1D)
+        .value("Ring2D", AGRingMode::Ring2D);
     py::class_<AGKernel>(m, "AGKernel")
         .def(
             py::init([](c10d::ProcessGroup tp_group,
@@ -667,19 +1007,31 @@ static int _register_ag_kernel_ops [[maybe_unused]] = []() {
             &AGKernel::forward_gemm,
             py::arg("input"),
             py::arg("weight"),
-            py::arg("bias") = py::none())
+            py::arg("bias") = py::none(),
+            py::arg("input_scale") = py::none(),
+            py::arg("weight_scale") = py::none(),
+            py::arg("output_scale") = py::none(),
+            py::arg("fast_accum") = false)
         .def(
             "gemm_only",
             &AGKernel::gemm_only,
             py::arg("input"),
             py::arg("weight"),
-            py::arg("bias") = py::none())
+            py::arg("bias") = py::none(),
+            py::arg("input_scale") = py::none(),
+            py::arg("weight_scale") = py::none(),
+            py::arg("output_scale") = py::none(),
+            py::arg("fast_accum") = false)
         .def(
             "forward",
             &AGKernel::forward,
             py::arg("input"),
             py::arg("weight"),
-            py::arg("bias") = py::none())
+            py::arg("bias") = py::none(),
+            py::arg("input_scale") = py::none(),
+            py::arg("weight_scale") = py::none(),
+            py::arg("output_scale") = py::none(),
+            py::arg("fast_accum") = false)
         .def("gather", &AGKernel::gather)
         .def("reset_signals", &AGKernel::reset_signals)
         .def("copy_local", &AGKernel::copy_local, py::arg("input"))
@@ -689,6 +1041,10 @@ static int _register_ag_kernel_ops [[maybe_unused]] = []() {
             py::arg("input"),
             py::arg("weight"),
             py::arg("bias") = py::none(),
+            py::arg("input_scale") = py::none(),
+            py::arg("weight_scale") = py::none(),
+            py::arg("output_scale") = py::none(),
+            py::arg("fast_accum") = false,
             py::arg("prof_ctx") = nullptr);
   });
   return 0;

@@ -19,8 +19,10 @@
 
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/threadblock/threadblock_swizzle_streamk.h"
+#ifdef FLUX_SHM_USE_NVSHMEM
 #include <nvshmem.h>
 #include <nvshmemx.h>
+#endif
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {
@@ -76,9 +78,10 @@ struct ThreadblockSwizzleStreamKRankOffsetAcrossNode : public ThreadblockSwizzle
   CUTLASS_DEVICE
   GemmCoord
   get_tile_offset(int tile_idx) const {
+#ifdef FLUX_SHM_USE_NVSHMEM
+    // acrossnode relys on nvshmem
     int world_size = nvshmem_n_pes();
     int rank = nvshmem_my_pe();
-
     auto coord = ThreadblockSwizzleStreamK::get_tile_offset(tile_idx);
     int tiled_m = ThreadblockSwizzleStreamK::tiled_shape().m();
     if (world_size <= 1)  // no parallel environment
@@ -102,6 +105,9 @@ struct ThreadblockSwizzleStreamKRankOffsetAcrossNode : public ThreadblockSwizzle
 
     coord.m() = new_m;
     return coord;
+#else
+    return ThreadblockSwizzleStreamK::get_tile_offset(tile_idx);
+#endif
   }
 };
 

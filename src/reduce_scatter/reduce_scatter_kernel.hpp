@@ -25,9 +25,13 @@
 #include <type_traits>
 #include <cuda_runtime_api.h>
 #include <cuda/std/atomic>
+#include <utility>
 #include "cutlass/detail/helper_macros.hpp"
+#ifdef FLUX_SHM_USE_NVSHMEM
 #include "host/nvshmem_api.h"
 #include "host/nvshmemx_api.h"
+#endif
+#include "tile_scheduler/threadblock_swizzle_segment_util.hpp"
 #include <cuda_fp16.h>
 #include <cooperative_groups.h>
 #if CUDA_VERSION >= 11000
@@ -50,15 +54,7 @@
 #include <nccl.h>
 #endif
 
-#define FLUX_DEBUG_RS
-
-#ifdef FLUX_DEBUG_RS
-#define DUMP_TS(rank, field, idx) write_clock_t0(flags(rank).field##_ptr(idx))
-#define DUMP_VALUE(rank, field, idx, value) write_t0(flags(rank).field##_ptr(idx), value)
-#else
-#define DUMP_TS(rank, field, idx)
-#define DUMP_VALUE(rank, field, idx, value)
-#endif
+// #define FLUX_DEBUG_RS
 
 #define NextRank(rank_) (((rank_) + 1) % kLocalWorldSize)
 #define NextLocalRank(rank_, node_) ((((rank_) + 1) % kNumaWorldSize + (node_) * kNumaWorldSize))
@@ -96,6 +92,7 @@ struct ReduceScatterParams {
   void *opaque;
   bool use_1d_ring;
   bool use_p2p_read;
+  void *args_workspace;
   void *scatter_ptr_aux[kMaxWorldSize];
   void *barrier_ptr[kMaxWorldSize];
   void *reduce_ptr[kMaxWorldSize];
@@ -115,6 +112,7 @@ operator<<(std::ostream &os, const ReduceScatterParams &param) {
   os << " sub_world_size: " << param.sub_world_size;
   os << " use_1d_ring: " << param.use_1d_ring;
   os << " use_p2p_read: " << param.use_p2p_read;
+  os << " args_workspace: " << param.args_workspace;
   return os;
 }
 
@@ -164,16 +162,10 @@ template <typename T, typename VecT = ToVecType<T>>
 class VecAdd {
  public:
   CUTLASS_DEVICE
-  void
-  operator()(VecT *dst, const VecT &src) {
+  VecT
+  operator()(const VecT &lhs, const VecT &rhs) {
     static_assert(kIsBf16<T> || kIsFp16<T>, "only FP16 and BF16 is supported");
-    if constexpr (kIsBf16<T>) {
-#if __CUDA_ARCH__ >= 800
-      *dst = __hadd2(src, *dst);
-#endif
-    } else {
-      *dst = __hadd2(src, *dst);
-    }
+    return __hadd2(rhs, lhs);
   }
 };
 
@@ -183,29 +175,34 @@ class VecAdd {
  *   typename T: actual type, such as uint4
  */
 template <typename HalfType, typename T>
-CUTLASS_DEVICE void
-add(T *__restrict__ dst, const T *__restrict__ src) {
+CUTLASS_DEVICE T
+add(const T *__restrict__ lhs, const T *__restrict__ rhs) {
   using VecT = ToVecType<HalfType>;
-  const VecT *sptr = (VecT *)(src);
-  VecT *dptr = (VecT *)(dst);
   static_assert(sizeof(T) >= sizeof(VecT));
   static_assert(sizeof(T) % sizeof(VecT) == 0);
   constexpr int kVecSize = sizeof(T) / sizeof(VecT);
   static_assert(kVecSize == 1 || kVecSize == 2 || kVecSize == 4);
+  union {
+    VecT values[kVecSize];
+    T value;
+  } lhs_packed, rhs_packed, res_packed;
+  lhs_packed.value = *rhs;
+  rhs_packed.value = *lhs;
   VecAdd<HalfType> op;
   if constexpr (kVecSize == 1) {
-    op(dptr + 0, sptr[0]);
+    res_packed.values[0] = op(rhs_packed.values[0], lhs_packed.values[0]);
   }
   if constexpr (kVecSize == 2) {
-    op(dptr + 0, sptr[0]);
-    op(dptr + 1, sptr[1]);
+    res_packed.values[0] = op(rhs_packed.values[0], lhs_packed.values[0]);
+    res_packed.values[1] = op(rhs_packed.values[1], lhs_packed.values[1]);
   }
   if constexpr (kVecSize == 4) {
-    op(dptr + 0, sptr[0]);
-    op(dptr + 1, sptr[1]);
-    op(dptr + 2, sptr[2]);
-    op(dptr + 3, sptr[3]);
+    res_packed.values[0] = op(rhs_packed.values[0], lhs_packed.values[0]);
+    res_packed.values[1] = op(rhs_packed.values[1], lhs_packed.values[1]);
+    res_packed.values[2] = op(rhs_packed.values[2], lhs_packed.values[2]);
+    res_packed.values[3] = op(rhs_packed.values[3], lhs_packed.values[3]);
   }
+  return res_packed.value;
 }
 
 CUTLASS_GLOBAL void
@@ -220,15 +217,22 @@ wait_async(void *ptr) {
 
 template <typename T>
 CUTLASS_DEVICE void
-add_continous_kernel(T *__restrict__ dst_, const T *__restrict__ src_, int nelems) {
+add_continous_kernel(T *dst_, const T *lhs_, const T *rhs_, int nelems) {
   using VecType = uint4;  // load as uint4
   nelems = nelems / sizeof(VecType) * sizeof(T);
   VecType *dst = (VecType *)dst_;
-  const VecType *src = (const VecType *)src_;
+  const VecType *lhs = (const VecType *)lhs_;
+  const VecType *rhs = (const VecType *)rhs_;
   CUTLASS_PRAGMA_UNROLL
   for (int i = threadIdx.x + blockIdx.x * blockDim.x; i < nelems; i += gridDim.x * blockDim.x) {
-    add<T, VecType>(dst + i, src + i);
+    dst[i] = add<T, VecType>(rhs + i, lhs + i);
   }
+}
+
+template <typename T>
+CUTLASS_DEVICE void
+add_continous_kernel(T *dst_, const T *lhs_, int nelems) {
+  add_continous_kernel(dst_, lhs_, dst_, nelems);
 }
 
 template <typename T>
@@ -500,12 +504,12 @@ struct ReduceScatterBase {
 
 // no gemmk support
 template <typename T, int kM, int kN, bool kFlattenTile>
-class ReduceScatterTp8 : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
+class ReduceScatterRing2dPull : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
   USE_REDUCE_SCATTER_BASE;
 
  public:
   CUTLASS_DEVICE
-  ReduceScatterTp8(const ReduceScatterParams &param) : Base(param) {}
+  ReduceScatterRing2dPull(const ReduceScatterParams &param) : Base(param) {}
 
   CUTLASS_DEVICE void
   run() {
@@ -536,34 +540,31 @@ class ReduceScatterTp8 : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
       for (auto sid : {NextNodeRank(segment), segment}) {
         int m_start = m_per_rank * sid, m_end = m_start + m_per_rank;
         int tiled_m_start = m_start / kM, tiled_m_end = (m_end - 1) / kM + 1;  // open set
-        int m_per_seg = tiled_m_end - tiled_m_start;
-        int ts_seg = NextNodeRank(topo.segments[s][lnode]);
-        for (int bid = blockIdx.x; bid < m_per_seg * tiled_n; bid += gridDim.x) {
-          int m = bid % m_per_seg, n = bid / m_per_seg;
-          int tile_idx = to_tile_idx(m + tiled_m_start, n);
-          int ts_idx =
-              to_tile_idx(m + (is_inter_node ? ts_seg * tiled_m_per_rank : tiled_m_start), n);
-          int m_reduce = m + sid * (tiled_m_per_rank + 1);
-          int reduce_idx = to_tile_idx(m_reduce, n);
+        int tile_m_per_seg = tiled_m_end - tiled_m_start;
+        for (int bid = blockIdx.x; bid < tile_m_per_seg * tiled_n; bid += gridDim.x) {
+          // int m = bid / tiled_n, n = bid % tiled_n;
+          int m = bid % tile_m_per_seg, n = bid / tile_m_per_seg;
           int m0 = m;
           m += tiled_m_start;
-          DUMP_TS(rank, wait_start, ts_idx);
+          int tile_idx = to_tile_idx(m, n);
+          int reduce_tile_idx = to_tile_idx(m0 + (tiled_m_per_rank + 1) * sid, n);
           if (do_wait() && !skip_tile) {
-            int *lock_ptr = is_prev_inter_node ? flags(rrank).epilogue_ptr(tile_idx)
-                                               : flags(rrank).reduce_ptr(reduce_idx);
-            DPRINT_T0(
-                "remote %d[%d] = %d\n",
-                rrank,
-                is_prev_inter_node ? tile_idx : reduce_idx,
-                *lock_ptr);
-            TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+            if (is_prev_inter_node) {
+              int *lock_ptr = flags(rrank).epilogue_ptr(tile_idx);
+              print_per_block("remote epilogue %d[%d] = %d vs 1\n", rrank, tile_idx, *lock_ptr);
+              TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+            } else {
+              int *lock_ptr = flags(rrank).reduce_ptr(reduce_tile_idx);
+              print_per_block(
+                  "remote reduce %d[%d] = %d vs 1\n", rrank, reduce_tile_idx, *lock_ptr);
+              TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+            }
             if (!is_inter_node) {  // wait for self gemm done
               int *lock_ptr = flags(rank).epilogue_ptr(tile_idx);
-              DPRINT_T0("local [%d] = %d vs 1\n", tile_idx, *lock_ptr);
+              print_per_block("local [%d] = %d vs 1\n", tile_idx, *lock_ptr);
               TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
             }
           }
-          DUMP_TS(rank, copy_start, ts_idx);
           if (do_copy() && !skip_tile) {
             auto rdata = data_tile(rrank, m, n, tcol, trow, thread_map_shape);
             auto coord_v = coord(m, n, tcol, trow, thread_map_shape);
@@ -571,8 +572,7 @@ class ReduceScatterTp8 : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
               auto ldata = buffer_tile(m0, n, tcol, trow, thread_map_shape);
               CUTLASS_PRAGMA_UNROLL
               for (int i = 0; i < size(ldata); i++) {
-                if (cute::get<1>(coord_v(i)) < params.n &&
-                    (cute::get<0>(coord_v(i)) >= m_start && cute::get<0>(coord_v(i)) < m_end)) {
+                if ((cute::get<0>(coord_v(i)) >= m_start && cute::get<0>(coord_v(i)) < m_end)) {
                   ldata(i) = rdata(i);
                 }
               }
@@ -580,21 +580,17 @@ class ReduceScatterTp8 : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
               auto ldata = data_tile(rank, m, n, tcol, trow, thread_map_shape);
               CUTLASS_PRAGMA_UNROLL
               for (int i = 0; i < size(ldata); i++) {
-                if (cute::get<1>(coord_v(i)) < params.n &&
-                    (cute::get<0>(coord_v(i)) >= m_start && cute::get<0>(coord_v(i)) < m_end)) {
-                  VecType local_storage = rdata(i);  // don't local = add(remote, local)
-                  add<T>(&ldata(i), &local_storage);
+                if ((cute::get<0>(coord_v(i)) >= m_start && cute::get<0>(coord_v(i)) < m_end)) {
+                  ldata(i) = add<T>(&ldata(i), &rdata(i));
                 }
               }
             }
           }
-          DUMP_TS(rank, copy_stop, ts_idx);
           if (!is_inter_node) {  // no need for inter_node
-            int *lock_ptr = flags(rank).reduce_ptr(reduce_idx);
+            int *lock_ptr = flags(rank).reduce_ptr(reduce_tile_idx);
             TileBarrier::arrive_inc(lock_ptr, threadIdx.x, 0, (int)1);
-            DPRINT_T0("arrived: barrier[%d]=%d\n", reduce_idx, *lock_ptr);
+            print_per_block("arrived: barrier[%d]=%d\n", reduce_tile_idx, *lock_ptr);
           }
-          DUMP_TS(rank, arrive_inc_stop, ts_idx);
         }
         if (is_inter_node) {
           break;
@@ -606,10 +602,10 @@ class ReduceScatterTp8 : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
     int m_end = m_per_rank + m_start;  // open set
     int tiled_m_start = m_start / kM;
     int tiled_m_end = (m_end - 1) / kM + 1;  // open set
-    int m_per_seg = tiled_m_end - tiled_m_start;
+    int tile_m_per_seg = tiled_m_end - tiled_m_start;
     // reduce local
-    for (int bid = blockIdx.x; bid < m_per_seg * tiled_n; bid += gridDim.x) {
-      int m = bid % m_per_seg, n = bid / m_per_seg;
+    for (int bid = blockIdx.x; bid < tile_m_per_seg * tiled_n; bid += gridDim.x) {
+      int m = bid % tile_m_per_seg, n = bid / tile_m_per_seg;
       int m0 = m;  // for buffer reduce, range (0, tiled_m_per_rank)
       m += tiled_m_start;
       if (do_copy()) {
@@ -618,33 +614,472 @@ class ReduceScatterTp8 : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
         auto coord_v = coord(m, n, tcol, trow, thread_map_shape);
         CUTLASS_PRAGMA_UNROLL
         for (int i = 0; i < size(ldata); i++) {
-          if (cute::get<1>(coord_v(i)) < params.n &&
-              (cute::get<0>(coord_v(i)) >= m_start && cute::get<0>(coord_v(i)) < m_end)) {
-            add<T>(&ldata(i), &rdata(i));
+          if ((cute::get<0>(coord_v(i)) >= m_start && cute::get<0>(coord_v(i)) < m_end)) {
+            ldata(i) = add<T>(&ldata(i), &rdata(i));
           }
         }
       }
     }
-    DPRINT_T0("[%d] rskernel_inter_numa done\n", blockIdx.x);
+    print_per_block("[%d] rskernel_inter_numa done\n", blockIdx.x);
   }
 
   CUTLASS_DEVICE
   static void
   invoke(const ReduceScatterParams &params, SharedStorage &) {
-    ReduceScatterTp8<T, kM, kN, kFlattenTile> op(params);
+    ReduceScatterRing2dPull<T, kM, kN, kFlattenTile> op(params);
+    op.run();
+  }
+};
+
+// no gemmk support
+template <typename T, int kM, int kN, bool kFlattenTile>
+class ReduceScatterRing2dPullPerWarp : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
+  USE_REDUCE_SCATTER_BASE;
+
+ public:
+  CUTLASS_DEVICE
+  ReduceScatterRing2dPullPerWarp(const ReduceScatterParams &param) : Base(param) {}
+
+  CUTLASS_DEVICE void
+  run() {
+    // 1024 / 32 = 32 >= (2 + 1) * 10 => 30 * 32 = 960
+    // 1024 / 32 = 32 >= (4 + 1) * 6 => 30 * 32 = 960
+    constexpr int kNumWorkersPerGroup = 64;
+    constexpr int kNumThreadsPerGroup = kNumWorkersPerGroup + warpSize;
+
+    int group = threadIdx.x / kNumThreadsPerGroup;  // group should in [0, 15). 1024 / 64 = 16
+    int num_groups_local = blockDim.x / kNumThreadsPerGroup;
+    int group_global = group + num_groups_local * blockIdx.x;
+    int num_groups_total = num_groups_local * gridDim.x;
+    int tid = threadIdx.x % kNumThreadsPerGroup;
+    bool is_worker = tid < kNumWorkersPerGroup;
+
+    const int rank = params.rank, lnode = rank / kNumaWorldSize;
+    int m_per_rank = params.m / params.world_size;
+    nanosleep(params.sleep_ns);  // first wave costs: 2.5e3 / 28 ~= 100us
+
+    // force divided by caller: no assert for kernel
+    constexpr int kThreadsRow = kNumWorkersPerGroup / kThreadsCol;  // 64 / 32 = 2
+    auto thread_shape = cute::make_shape(cute::C<kThreadsCol>{}, cute::C<kThreadsRow>{});
+    auto thread_map_shape = cute::make_shape(
+        cute::C<kVecLen>{},      // for vectorize
+        cute::C<kThreadsCol>{},  // threads per line
+        cute::C<kThreadsRow>{},  // num_threads / threads_per_line
+        cute::C<kTileSizeVec / kNumWorkersPerGroup>{});
+    auto [tcol, trow] = cute::idx2crd(tid, thread_shape);
+
+    const auto &topo = bytedance::flux::kTopologys[0];
+    for (int s = 0; s < kNumaWorldSize; s++) {
+      int rrank = topo.rank_from[s][rank];
+      int rnode = rrank / kNumaWorldSize;
+      bool is_inter_node = lnode != rnode;
+      bool is_prev_inter_node = ((topo.rank_from[s][rrank]) / kNumaWorldSize) != rnode;
+      int segment = topo.segments[s][rnode];
+      bool skip_tile = (!run_remote() && is_inter_node) || (!run_local() && !is_inter_node);
+
+      for (auto sid : {NextNodeRank(segment), segment}) {
+        int m_start = m_per_rank * sid, m_end = m_start + m_per_rank;
+        int tiled_m_start = m_start / kM, tiled_m_end = (m_end - 1) / kM + 1;  // open set
+        int tile_m_per_seg = tiled_m_end - tiled_m_start;
+        int bid = group_global;
+        if (is_worker) {
+          for (; bid < tile_m_per_seg * tiled_n; bid += num_groups_total) {
+            // int m = bid / tiled_n, n = bid % tiled_n;
+            int m = bid % tile_m_per_seg, n = bid / tile_m_per_seg;
+            int m0 = m;
+            m += tiled_m_start;
+            int tile_idx = to_tile_idx(m, n);
+            int reduce_tile_idx = to_tile_idx(m0 + (tiled_m_per_rank + 1) * sid, n);
+            if (do_wait() && !skip_tile) {
+              if (is_prev_inter_node) {
+                int *lock_ptr = flags(rrank).epilogue_ptr(tile_idx);
+                print_per_block("remote epilogue %d[%d] = %d vs 1\n", rrank, tile_idx, *lock_ptr);
+                TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+              } else {
+                int *lock_ptr = flags(rrank).reduce_ptr(reduce_tile_idx);
+                print_per_block(
+                    "remote reduce %d[%d] = %d vs 1\n", rrank, reduce_tile_idx, *lock_ptr);
+                TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+              }
+              if (!is_inter_node) {  // wait for self gemm done
+                int *lock_ptr = flags(rank).epilogue_ptr(tile_idx);
+                print_per_block("local [%d] = %d vs 1\n", tile_idx, *lock_ptr);
+                TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+              }
+            }
+
+            if (do_copy() && !skip_tile) {
+              auto rdata = data_tile(rrank, m, n, tcol, trow, thread_map_shape);
+              auto coord_v = coord(m, n, tcol, trow, thread_map_shape);
+              if (is_inter_node) {
+                auto ldata = buffer_tile(m0, n, tcol, trow, thread_map_shape);
+                CUTLASS_PRAGMA_UNROLL
+                for (int i = 0; i < size(ldata); i++) {
+                  if ((cute::get<0>(coord_v(i)) >= m_start && cute::get<0>(coord_v(i)) < m_end)) {
+                    ldata(i) = rdata(i);
+                  }
+                }
+              } else {
+                auto ldata = data_tile(rank, m, n, tcol, trow, thread_map_shape);
+                CUTLASS_PRAGMA_UNROLL
+                for (int i = 0; i < size(ldata); i++) {
+                  if ((cute::get<0>(coord_v(i)) >= m_start && cute::get<0>(coord_v(i)) < m_end)) {
+                    ldata(i) = add<T>(&ldata(i), &rdata(i));
+                  }
+                }
+              }
+            }
+            if (!is_inter_node) {  // no need for inter_node
+              int *lock_ptr = flags(rank).reduce_ptr(reduce_tile_idx);
+              TileBarrier::arrive_inc(lock_ptr, threadIdx.x, 0, (int)1);
+              print_per_block("arrived: barrier[%d]=%d\n", reduce_tile_idx, *lock_ptr);
+            }
+          }
+        } else {
+          for (; bid < tile_m_per_seg * tiled_n; bid += num_groups_total) {
+            // int m = bid / tiled_n, n = bid % tiled_n;
+            int m = bid % tile_m_per_seg, n = bid / tile_m_per_seg;
+            int m0 = m;
+            m += tiled_m_start;
+            int tile_idx = to_tile_idx(m, n);
+            int reduce_tile_idx = to_tile_idx(m0 + (tiled_m_per_rank + 1) * sid, n);
+            if (do_wait() && !skip_tile) {
+              if (is_prev_inter_node) {
+                int *lock_ptr = flags(rrank).epilogue_ptr(tile_idx);
+                print_per_block("remote epilogue %d[%d] = %d vs 1\n", rrank, tile_idx, *lock_ptr);
+                TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+              } else {
+                int *lock_ptr = flags(rrank).reduce_ptr(reduce_tile_idx);
+                print_per_block(
+                    "remote reduce %d[%d] = %d vs 1\n", rrank, reduce_tile_idx, *lock_ptr);
+                TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+              }
+              if (!is_inter_node) {  // wait for self gemm done
+                int *lock_ptr = flags(rank).epilogue_ptr(tile_idx);
+                print_per_block("local [%d] = %d vs 1\n", tile_idx, *lock_ptr);
+                TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+              }
+            }
+
+            if (!is_inter_node) {  // no need for inter_node
+              int *lock_ptr = flags(rank).reduce_ptr(reduce_tile_idx);
+              TileBarrier::arrive_inc(lock_ptr, threadIdx.x, 0, (int)1);
+              print_per_block("arrived: barrier[%d]=%d\n", reduce_tile_idx, *lock_ptr);
+            }
+          }
+        }
+        if (is_inter_node) {
+          break;
+        }
+      }
+    }
+
+    int m_start = m_per_rank * rank;
+    int m_end = m_per_rank + m_start;  // open set
+    int tiled_m_start = m_start / kM;
+    int tiled_m_end = (m_end - 1) / kM + 1;  // open set
+    int tile_m_per_seg = tiled_m_end - tiled_m_start;
+    // reduce local
+    for (int bid = blockIdx.x; bid < tile_m_per_seg * tiled_n; bid += gridDim.x) {
+      int m = bid % tile_m_per_seg, n = bid / tile_m_per_seg;
+      int m0 = m;  // for buffer reduce, range (0, tiled_m_per_rank)
+      m += tiled_m_start;
+      if (do_copy()) {
+        auto ldata = data_tile(rank, m, n, tcol, trow, thread_map_shape);
+        auto rdata = buffer_tile(m0, n, tcol, trow, thread_map_shape);
+        auto coord_v = coord(m, n, tcol, trow, thread_map_shape);
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < size(ldata); i++) {
+          if ((cute::get<0>(coord_v(i)) >= m_start && cute::get<0>(coord_v(i)) < m_end)) {
+            ldata(i) = add<T>(&ldata(i), &rdata(i));
+          }
+        }
+      }
+    }
+    print_per_block("[%d] rskernel_inter_numa done\n", blockIdx.x);
+  }
+
+  CUTLASS_DEVICE
+  static void
+  invoke(const ReduceScatterParams &params, SharedStorage &) {
+    ReduceScatterRing2dPullPerWarp<T, kM, kN, kFlattenTile> op(params);
+    op.run();
+  }
+};
+
+template <typename T, int kM, int kN, bool kFlattenTile>
+class ReduceScatterRing2dPullGemmk : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
+  USE_REDUCE_SCATTER_BASE;
+
+ public:
+  CUTLASS_DEVICE
+  ReduceScatterRing2dPullGemmk(const ReduceScatterParams &param) : Base(param) {}
+
+  CUTLASS_DEVICE void
+  run() {
+    const int rank = params.rank, lnode = rank / kNumaWorldSize;
+    int m_per_rank = params.m / params.world_size;
+    nanosleep(params.sleep_ns);  // first wave costs: 2.5e3 / 28 ~= 100us
+
+    int num_threads = blockDim.x;
+    // force divided by caller: no assert for kernel
+    int thread_rows = (num_threads + kThreadsCol - 1) / kThreadsCol;
+    auto thread_shape = cute::make_shape(cute::C<kThreadsCol>{}, thread_rows);
+    auto thread_map_shape = cute::make_shape(
+        cute::C<kVecLen>{},           // for vectorize
+        cute::C<kThreadsCol>{},       // threads per line
+        thread_rows,                  // num_threads / threads_per_line
+        kTileSizeVec / num_threads);  // num_elements / num_threads / vectorize = 8
+    auto [tcol, trow] = cute::idx2crd((int)threadIdx.x, thread_shape);
+    int offset_per_seg = (m_per_rank - tiled_m_per_rank * kM) * params.n;
+
+    const auto &topo = bytedance::flux::kTopologys[0];
+    for (int s = 0; s < kNumaWorldSize; s++) {
+      int rrank = topo.rank_from[s][rank];
+      int rnode = rrank / kNumaWorldSize;
+      bool is_inter_node = lnode != rnode;
+      bool is_prev_inter_node = ((topo.rank_from[s][rrank]) / kNumaWorldSize) != rnode;
+      int segment = topo.segments[s][rnode];
+      bool skip_tile = (!run_remote() && is_inter_node) || (!run_local() && !is_inter_node);
+      for (auto sid : {NextNodeRank(segment), segment}) {
+        int tiled_m_start = tiled_m_per_rank * sid;  // open set
+        for (int bid = blockIdx.x; bid < tiles_per_rank; bid += gridDim.x) {
+          int m = bid % tiled_m_per_rank, n = bid / tiled_m_per_rank;
+          int m0 = m;
+          m += tiled_m_start;
+          int tile_idx = to_tile_idx(m, n);
+
+          if (do_wait() && !skip_tile) {
+            int *lock_ptr = is_prev_inter_node ? flags(rrank).epilogue_ptr(tile_idx)
+                                               : flags(rrank).reduce_ptr(tile_idx);
+            print_per_block("remote %d[%d] = %d\n", rrank, tile_idx, *lock_ptr);
+            TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+            if (!is_inter_node) {  // wait for self gemm done
+              int *lock_ptr = flags(rank).epilogue_ptr(tile_idx);
+              print_per_block("local [%d] = %d vs 1\n", tile_idx, *lock_ptr);
+              TileBarrier::wait_eq(lock_ptr, threadIdx.x, 0, 1);
+            }
+          }
+          int offset = offset_per_seg * sid;
+          if (do_copy() && !skip_tile) {
+            auto rdata = data_tile(rrank, m, n, tcol, trow, thread_map_shape, offset);
+            auto coord_v = coord(m, n, tcol, trow, thread_map_shape);
+            int m_end = tiled_m_start * kM + m_per_rank;
+            if (is_inter_node) {
+              auto ldata = buffer_tile(m0, n, tcol, trow, thread_map_shape);
+              CUTLASS_PRAGMA_UNROLL
+              for (int i = 0; i < size(ldata); i++) {
+                if (cute::get<0>(coord_v(i)) >= m_end) {
+                  break;
+                }
+                ldata(i) = rdata(i);
+              }
+            } else {
+              auto ldata = data_tile(rank, m, n, tcol, trow, thread_map_shape, offset);
+              CUTLASS_PRAGMA_UNROLL
+              for (int i = 0; i < size(ldata); i++) {
+                if (cute::get<0>(coord_v(i)) >= m_end) {
+                  break;
+                }
+                ldata(i) = add<T>(&ldata(i), &rdata(i));
+              }
+            }
+          }
+          if (!is_inter_node) {  // no need for inter_node
+            int *lock_ptr = flags(rank).reduce_ptr(tile_idx);
+            TileBarrier::arrive_inc(lock_ptr, threadIdx.x, 0, (int)1);
+            print_per_block("arrived: barrier[%d]=%d\n", tile_idx, *lock_ptr);
+          }
+        }
+        if (is_inter_node) {
+          break;
+        }
+      }
+    }
+
+    int tiled_m_start = tiled_m_per_rank * rank;
+    int m_end = tiled_m_start * kM + m_per_rank;
+    int offset = offset_per_seg * rank;
+    // reduce local
+    for (int bid = blockIdx.x; bid < tiles_per_rank; bid += gridDim.x) {
+      int m = bid % tiled_m_per_rank, n = bid / tiled_m_per_rank;
+      int m0 = m;
+      m += tiled_m_start;
+      if (do_copy()) {
+        auto ldata = data_tile(rank, m, n, tcol, trow, thread_map_shape, offset);
+        auto rdata = buffer_tile(m0, n, tcol, trow, thread_map_shape);
+        auto coord_v = coord(m, n, tcol, trow, thread_map_shape);
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < size(ldata); i++) {
+          if (cute::get<1>(coord_v(i)) < params.n && (cute::get<0>(coord_v(i)) < m_end)) {
+            ldata(i) = add<T>(&ldata(i), &rdata(i));
+          }
+        }
+      }
+    }
+    print_per_block("[%d] rskernel_inter_numa_gemmk done\n", blockIdx.x);
+  }
+
+  CUTLASS_DEVICE
+  static void
+  invoke(const ReduceScatterParams &params, SharedStorage &) {
+    ReduceScatterRing2dPullGemmk<T, kM, kN, kFlattenTile> op(params);
+    op.run();
+  }
+};
+
+template <typename T, int kM, int kN, bool kFlattenTile>
+class ReduceScatterRing2dPushGemmk : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
+  USE_REDUCE_SCATTER_BASE;
+
+  // seems cutlass::Barrier is not enough. but with Barrier it's a little slow
+  using Barrier = cutlass::detail::GenericSystemBarrier<cutlass::detail::SyncthreadsSync>;
+
+ public:
+  CUTLASS_DEVICE
+  ReduceScatterRing2dPushGemmk(const ReduceScatterParams &param) : Base(param) {}
+
+  CUTLASS_DEVICE void
+  run() {
+    auto print_debug = [&](auto &...args) {
+#ifdef FLUX_DEBUG
+      if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf(args...);
+      }
+#endif
+    };
+
+    const int rank = params.rank, lnode = rank / kNumaWorldSize;
+    int m_per_rank = params.m / params.world_size;
+
+    int num_threads = blockDim.x;
+    // force divided by caller: no assert for kernel
+    int thread_rows = (num_threads + kThreadsCol - 1) / kThreadsCol;
+    auto thread_shape = cute::make_shape(cute::C<kThreadsCol>{}, thread_rows);
+    auto thread_map_shape = cute::make_shape(
+        cute::C<kVecLen>{},           // for vectorize
+        cute::C<kThreadsCol>{},       // threads per line
+        thread_rows,                  // num_threads / threads_per_line
+        kTileSizeVec / num_threads);  // num_elements / num_threads / vectorize = 8
+    auto [tcol, trow] = cute::idx2crd((int)threadIdx.x, thread_shape);
+    int offset_per_seg = (m_per_rank - tiled_m_per_rank * kM) * params.n;
+
+    const auto &topo = bytedance::flux::kTopologys[0];
+    for (int s = 0; s < kNumaWorldSize; s++) {
+      int to_rank = topo.rank_to[s][rank];
+      int to_node = to_rank / kNumaWorldSize;
+      bool is_inter_node = lnode != to_node;
+      bool is_ring_start = ((topo.rank_from[s][rank]) / kNumaWorldSize) != lnode;
+      int segment = topo.segments[s][lnode];
+      bool skip_tile = (!run_remote() && is_inter_node) || (!run_local() && !is_inter_node);
+      for (auto sid : {NextNodeRank(segment), segment}) {
+        int tiled_m_start = tiled_m_per_rank * sid;  // open set
+        for (int bid = blockIdx.x; bid < tiles_per_rank; bid += gridDim.x) {
+          int m = bid % tiled_m_per_rank, n = bid / tiled_m_per_rank;
+          int tile_idx = to_tile_idx(m + tiled_m_start, n);
+          int m0 = m;
+          int m_free = m0 + topo.unused_segments_push[to_rank] * tiled_m_per_rank;
+          int tile_idx_free = to_tile_idx(m_free, n);
+
+          m += tiled_m_start;
+
+          if (do_wait() && !skip_tile) {
+            if (!is_ring_start) {
+              int *flag_ptr = flags(rank).reduce_ptr(tile_idx);  // TODO(houqi.1993)
+              Barrier::wait_eq(flag_ptr, threadIdx.x, 0, 1);
+            }
+
+            int *flag_ptr = flags(rank).epilogue_ptr(tile_idx);
+            Barrier::wait_eq(flag_ptr, threadIdx.x, 0, 1);
+          }
+          int offset = offset_per_seg * sid;
+          if (do_copy() && !skip_tile) {
+            auto rdata = reduce_buffer_tile(
+                to_rank, is_inter_node ? m_free : m, n, tcol, trow, thread_map_shape);
+            auto ldata = data_tile(rank, m, n, tcol, trow, thread_map_shape, offset);
+            auto coord_v = coord(m, n, tcol, trow, thread_map_shape);
+            int m_end = tiled_m_start * kM + m_per_rank;
+            if (is_ring_start) {  // copy only
+              CUTLASS_PRAGMA_UNROLL
+              for (int i = 0; i < size(ldata); i++) {  // TODO(houqi.1993) check size
+                if (cute::get<1>(coord_v(i)) < params.n && (cute::get<0>(coord_v(i)) < m_end)) {
+                  rdata(i) = ldata(i);
+                }
+              }
+            } else {  // reduce and copy
+              auto local_reduce_buffer =
+                  reduce_buffer_tile(rank, m, n, tcol, trow, thread_map_shape);
+              CUTLASS_PRAGMA_UNROLL
+              for (int i = 0; i < size(ldata); i++) {
+                if (cute::get<1>(coord_v(i)) < params.n && (cute::get<0>(coord_v(i)) < m_end)) {
+                  rdata(i) = add<T>(&ldata(i), &local_reduce_buffer(i));
+                }
+              }
+            }
+          }
+          int *flag_ptr = flags(to_rank).reduce_ptr(is_inter_node ? tile_idx_free : tile_idx);
+          Barrier::arrive_inc(flag_ptr, threadIdx.x, 0, (int)1);
+        }
+        if (is_inter_node) {
+          break;
+        }
+      }
+    }
+
+    int tiled_m_start = tiled_m_per_rank * rank;
+    int m_end = tiled_m_start * kM + m_per_rank;
+    int offset = offset_per_seg * rank;
+    // reduce local
+    for (int bid = blockIdx.x; bid < tiles_per_rank; bid += gridDim.x) {
+      int m = bid % tiled_m_per_rank, n = bid / tiled_m_per_rank;
+      int m0 = m;
+      m += tiled_m_start;
+      int m_free = m0 + topo.unused_segments_push[rank] * tiled_m_per_rank;
+      if (do_wait()) {
+        int tile_idx = to_tile_idx(m, n);
+        int *flag_ptr = flags(rank).epilogue_ptr(tile_idx);
+        Barrier::wait_eq(flag_ptr, threadIdx.x, 0, 1);
+        flag_ptr = flags(rank).reduce_ptr(tile_idx);
+        Barrier::wait_eq(flag_ptr, threadIdx.x, 0, 1);
+
+        int tile_idx_free = to_tile_idx(m_free, n);
+        flag_ptr = flags(rank).reduce_ptr(tile_idx_free);
+        Barrier::wait_eq(flag_ptr, threadIdx.x, 0, 1);
+      }
+      if (do_copy()) {
+        auto ldata = data_tile(rank, m, n, tcol, trow, thread_map_shape, offset);
+        auto rdata = reduce_buffer_tile(rank, m, n, tcol, trow, thread_map_shape);
+        auto rdata_next_numa = reduce_buffer_tile(rank, m_free, n, tcol, trow, thread_map_shape);
+        auto coord_v = coord(m, n, tcol, trow, thread_map_shape);
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < size(ldata); i++) {
+          if (cute::get<1>(coord_v(i)) < params.n && (cute::get<0>(coord_v(i)) < m_end)) {
+            ldata(i) = add<T>(&ldata(i), &rdata(i));
+            ldata(i) = add<T>(&ldata(i), &rdata_next_numa(i));
+          }
+        }
+      }
+    }
+    print_per_block("[%d] reduce_scatter_tp8_push_gemmk done\n", rank);
+  }
+
+  CUTLASS_DEVICE
+  static void
+  invoke(const ReduceScatterParams &params, SharedStorage &) {
+    ReduceScatterRing2dPushGemmk<T, kM, kN, kFlattenTile> op(params);
     op.run();
   }
 };
 
 // no gemmk support. only support m % kM == 0 and (m / kM) % world_size == 0
-// nearly the same as ReduceScatterTp8 with both m=124/12288
+// nearly the same as ReduceScatterRing2dPull with both m=124/12288
 template <typename T, int kM, int kN, bool kFlattenTile>
-class ReduceScatterTp8WithQueue : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
+class ReduceScatterRing2dPullWithQueue : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
   USE_REDUCE_SCATTER_BASE;
 
  public:
   CUTLASS_DEVICE
-  ReduceScatterTp8WithQueue(const ReduceScatterParams &param) : Base(param) {}
+  ReduceScatterRing2dPullWithQueue(const ReduceScatterParams &param) : Base(param) {}
 
   CUTLASS_DEVICE void
   run() {
@@ -680,7 +1115,6 @@ class ReduceScatterTp8WithQueue : public ReduceScatterBase<T, kM, kN, kFlattenTi
         int segment_inter_node = is_inter_node ? NextNodeRank(topo.segments[s][lnode]) : segment;
         bool skip_tile = (!run_remote() && is_inter_node) || (!run_local() && !is_inter_node);
 
-        uint64_t wait_queue_start = global_timer();
         for (int i = blockIdx.x; i < tiles_per_rank; i += gridDim.x) {
           if (threadIdx.x == 0) {
             int *ptr = is_prev_inter_node
@@ -694,10 +1128,8 @@ class ReduceScatterTp8WithQueue : public ReduceScatterBase<T, kM, kN, kFlattenTi
           int tile_idx = svalue - 1;  // got tile_idx to copy
           int ts_tile_idx = tile_idx + (segment_inter_node - segment) * tiles_per_rank;
 
-          DUMP_VALUE(rank, wait_queue_start, ts_tile_idx, wait_queue_start);
-          DUMP_TS(rank, wait_start, ts_tile_idx);
           if (do_wait() && !skip_tile) {
-            DPRINT_T0(
+            print_per_block(
                 "wait_remote %d[%d] = %d vs %d\n",
                 rrank,
                 tile_idx,
@@ -706,7 +1138,7 @@ class ReduceScatterTp8WithQueue : public ReduceScatterBase<T, kM, kN, kFlattenTi
             cutlass::Barrier::wait_eq(
                 flags(rrank).epilogue_ptr(0), threadIdx.x, tile_idx, wait_value);
             if (!is_inter_node) {
-              DPRINT_T0(
+              print_per_block(
                   "wait_local %d[%d] = %d vs %d\n",
                   rank,
                   tile_idx,
@@ -719,7 +1151,6 @@ class ReduceScatterTp8WithQueue : public ReduceScatterBase<T, kM, kN, kFlattenTi
                   (int)1);  // wait for self gemm done
             }
           }
-          DUMP_TS(rank, copy_start, ts_tile_idx);
           if (do_copy() && !skip_tile) {
             int m, n;
             div_mod_tiled_n(m, n, tile_idx);
@@ -738,13 +1169,11 @@ class ReduceScatterTp8WithQueue : public ReduceScatterBase<T, kM, kN, kFlattenTi
               CUTLASS_PRAGMA_UNROLL
               for (int i = 0; i < size(ldata); i++) {
                 if (elem_less(coord_v(i), problem_shape)) {
-                  VecType local_storage = rdata(i);  // don't local = add(remote, local)
-                  add<T>(&ldata(i), &local_storage);
+                  ldata(i) = add<T>(&ldata(i), &rdata(i));
                 }
               }
             }
           }
-          DUMP_TS(rank, copy_stop, ts_tile_idx);
           // also
           if (threadIdx.x == 0) {
             int index = atomicAdd(work_queue_flags(rank).reduce_done_ptr(segment_inter_node), 1);
@@ -754,8 +1183,7 @@ class ReduceScatterTp8WithQueue : public ReduceScatterBase<T, kM, kN, kFlattenTi
           int *barrier_ptr = is_inter_node ? flags(rank).reduce_ptr(tile_idx)
                                            : flags(rank).epilogue_ptr(tile_idx);
           cutlass::Barrier::arrive_inc(barrier_ptr, threadIdx.x, 0, (int)1);
-          DPRINT_T0("arrived: barrier[%d]=%d\n", tile_idx, *barrier_ptr);
-          DUMP_TS(rank, arrive_inc_stop, ts_tile_idx);
+          print_per_block("arrived: barrier[%d]=%d\n", tile_idx, *barrier_ptr);
         }
         if (is_inter_node) {
           // wait for other intra-node done
@@ -780,7 +1208,7 @@ class ReduceScatterTp8WithQueue : public ReduceScatterBase<T, kM, kN, kFlattenTi
         CUTLASS_PRAGMA_UNROLL
         for (int i = 0; i < size(ldata); i++) {
           if (elem_less(coord_v(i), problem_shape)) {
-            add<T>(&ldata(i), &rdata(i));
+            ldata(i) = add<T>(&ldata(i), &rdata(i));
           }
         }
       }
@@ -789,7 +1217,7 @@ class ReduceScatterTp8WithQueue : public ReduceScatterBase<T, kM, kN, kFlattenTi
   CUTLASS_DEVICE
   static void
   invoke(const ReduceScatterParams &params, SharedStorage &) {
-    ReduceScatterTp8WithQueue<T, kM, kN, kFlattenTile> op(params);
+    ReduceScatterRing2dPullWithQueue<T, kM, kN, kFlattenTile> op(params);
     op.run();
   }
 };
@@ -826,13 +1254,14 @@ class ReduceScatterRing1dPullGemmk : public ReduceScatterBase<T, kM, kN, kFlatte
 
     for (int i = 0; i < params.world_size - 1; i++) {
       int rrank = (rank - i + params.world_size - 1) % params.world_size;
+      auto flags = PerTileFlagsWrapper(params.barrier_ptr[rrank], num_tiles);
       for (int bid = blockIdx.x; bid < tiles_per_rank; bid += gridDim.x) {
         int m = bid % tiled_m_per_rank, n = bid / tiled_m_per_rank;
         int m0 = m;
         m += tiled_m_start;
         int tile_idx = to_tile_idx(m, n);
         if (do_wait()) {
-          TileBarrier::wait_eq(params.barrier_ptr[rrank], threadIdx.x, tile_idx, 1);
+          TileBarrier::wait_eq(flags.epilogue_ptr(tile_idx), threadIdx.x, 0, 1);
         }
         if (do_copy()) {
           auto ldata = buffer_tile(m0, n, tcol, trow, thread_map_shape);
@@ -841,8 +1270,7 @@ class ReduceScatterRing1dPullGemmk : public ReduceScatterBase<T, kM, kN, kFlatte
           CUTLASS_PRAGMA_UNROLL
           for (int i = 0; i < size(ldata); i++) {
             if (cute::elem_less(coord_v(i), shape)) {
-              VecType local_storage = rdata(i);
-              add<T>(&ldata(i), &local_storage);
+              ldata(i) = add<T>(&ldata(i), &rdata(i));
             }
           }
         }
@@ -850,13 +1278,14 @@ class ReduceScatterRing1dPullGemmk : public ReduceScatterBase<T, kM, kN, kFlatte
     }
 
     // remote reduced done. added to local
+    auto local_flags = PerTileFlagsWrapper(params.barrier_ptr[rank], num_tiles);
     for (int bid = blockIdx.x; bid < tiles_per_rank; bid += gridDim.x) {
       int m = bid % tiled_m_per_rank, n = bid / tiled_m_per_rank;
       int m0 = m;
       m += tiled_m_start;
       int tile_idx = to_tile_idx(m, n);
       if (do_wait()) {
-        TileBarrier::wait_eq(params.barrier_ptr[rank], threadIdx.x, tile_idx, 1);
+        TileBarrier::wait_eq(local_flags.epilogue_ptr(tile_idx), threadIdx.x, 0, 1);
       }
       if (do_copy()) {
         auto ldata = data_tile(rank, m, n, tcol, trow, thread_map_shape, offset);
@@ -865,13 +1294,13 @@ class ReduceScatterRing1dPullGemmk : public ReduceScatterBase<T, kM, kN, kFlatte
         CUTLASS_PRAGMA_UNROLL
         for (int i = 0; i < size(ldata); i++) {
           if (cute::elem_less(coord_v(i), shape)) {
-            add<T>(&ldata(i), &rdata(i));
+            ldata(i) = add<T>(&ldata(i), &rdata(i));
           }
         }
       }
     }
 
-    DPRINT_T0("rskernel_inter_numa done\n");
+    print_per_block("rskernel_inter_numa done\n");
   }
   CUTLASS_DEVICE
   static void
@@ -885,27 +1314,67 @@ template <typename T, int kM, int kN, bool kFlattenTile>
 class ReduceScatterRing1dPushGemmk : public ReduceScatterBase<T, kM, kN, kFlattenTile> {
   USE_REDUCE_SCATTER_BASE;
 
+  using BarrierType = cutlass::detail::SystemBarrier;
+
  public:
   CUTLASS_DEVICE
   ReduceScatterRing1dPushGemmk(const ReduceScatterParams &param) : Base(param) {}
 
   CUTLASS_DEVICE void
   run() {
-    const int num_threads = blockDim.x;
+    constexpr int kWarpSize = 32;
+    constexpr int kNumWorkersPerGroup = kWarpSize * 4;
+    constexpr int kNumThreadsPerGroup = kNumWorkersPerGroup + kWarpSize;
+
+    // gid_local should in [0, 15). 1024 / 64 = 16
+    int gid_local = threadIdx.x / kNumThreadsPerGroup;
+    int num_groups_per_cta = blockDim.x / kNumThreadsPerGroup;
+    int gid = gid_local + num_groups_per_cta * blockIdx.x;
+    int num_groups = num_groups_per_cta * gridDim.x;
+    int tid = threadIdx.x % kNumThreadsPerGroup;
+    bool is_worker = tid < kNumWorkersPerGroup;
+    // do nothing
+    if (threadIdx.x >= num_groups_per_cta * kNumThreadsPerGroup)
+      return;
+
+    constexpr int num_threads = kNumWorkersPerGroup;
     // force divided by caller: no assert for kernel
-    int thread_rows = (num_threads + kThreadsCol - 1) / kThreadsCol;
-    auto thread_shape = cute::make_shape(cute::C<kThreadsCol>{}, thread_rows);
+    constexpr int thread_rows = (num_threads + kThreadsCol - 1) / kThreadsCol;
+    auto thread_shape = cute::make_shape(cute::C<kThreadsCol>{}, cute::C<thread_rows>{});
     auto thread_map_shape = cute::make_shape(
-        cute::C<kVecLen>{},           // for vectorize
-        cute::C<kThreadsCol>{},       // threads per line
-        thread_rows,                  // num_threads / threads_per_line
-        kTileSizeVec / num_threads);  // num_elements / num_threads / vectorize = 8
+        cute::C<kVecLen>{},                      // for vectorize
+        cute::C<kThreadsCol>{},                  // threads per line
+        cute::C<thread_rows>{},                  // num_threads / threads_per_line
+        cute::C<kTileSizeVec / num_threads>{});  // num_elements / num_threads / vectorize = 8
 
     nanosleep(params.sleep_ns);
-    auto [tcol, trow] = cute::idx2crd((int)threadIdx.x, thread_shape);
+    auto [tcol, trow] = cute::idx2crd((int)tid, thread_shape);
     const int rank = params.rank;
     const int m_per_rank = params.m / params.world_size;
     const int offset_per_seg = (m_per_rank - tiled_m_per_rank * kM) * params.n;
+
+    auto arrive_inc = [&](int *ptr) {
+      sub_barrier_sync(gid_local, kNumThreadsPerGroup);
+      if (tid == 0 || tid == kNumWorkersPerGroup) {
+        atomic_ref_sys<int> ref(*ptr);
+        ref.fetch_add(1, cuda::memory_order_release);
+      }
+    };
+    auto wait_eq = [&](int *ptr) {
+      if (tid == 0) {
+        atomic_ref_sys<int> ref(*ptr);
+        if (ref.load(cuda::memory_order_acquire) != 1) {
+          while (ref.load(cuda::memory_order_relaxed) != 1) {
+          }
+        }
+      }
+      sub_barrier_sync(gid_local + num_groups_per_cta, kNumWorkersPerGroup);
+    };
+
+    auto print_worker = [&](const auto &...args) { print_if(tid == 0, args...); };
+    auto print_waiter = [&](const auto &...args) {
+      print_if(tid == kNumWorkersPerGroup, args...);
+    };
 
     int rrank = (rank + params.world_size - 1) % params.world_size;
     for (int round = 0; round < params.world_size; round++) {
@@ -919,72 +1388,60 @@ class ReduceScatterRing1dPushGemmk : public ReduceScatterBase<T, kM, kN, kFlatte
       bool is_ring_start = round == 0;
       // last round: only reduce local, no push remote
       bool last_round = (round == (params.world_size - 1));
-      for (int bid = blockIdx.x; bid < tiles_per_rank; bid += gridDim.x) {
+      for (int bid = gid; bid < tiles_per_rank; bid += num_groups) {
         int m = bid % tiled_m_per_rank, n = bid / tiled_m_per_rank;
         m += tiled_m_start;
         int tile_idx = to_tile_idx(m, n);
-        if (do_wait()) {
+        if (is_worker) {  // doing copy here
           // wait for current gemm ready to push
           int *flag_ptr = flags(rank).epilogue_ptr(tile_idx);
-          DPRINT_T0("%d wait gemm %d to be 1\n", rank, tile_idx);
-          cutlass::Barrier::wait_eq(flag_ptr, threadIdx.x, 0, 1);
+          print_worker("%d:%d wait gemm %d to be 1\n", rank, gid, tile_idx);
+          wait_eq(flag_ptr);
           if (!is_ring_start) {  // also wait for reduce buffer ready to do reduce
             int *flag_ptr = flags(rank).reduce_ptr(tile_idx);
-            DPRINT_T0("%d wait reduce %d to be 1\n", rank, tile_idx);
-            TileBarrier::wait_eq(flag_ptr, threadIdx.x, 0, 1);
+            print_worker("%d:%d wait reduce %d to be 1\n", rank, gid, tile_idx);
+            wait_eq(flag_ptr);
           }
-        }
-        auto ldata = data_tile(rank, m, n, tcol, trow, thread_map_shape, offset);
-        auto rdata = reduce_buffer_tile(rank, m, n, tcol, trow, thread_map_shape);
 
-        int start = m * kM + trow;
-        int end = min(start + kM, m_end);
-        int copy_counts = (end - start + thread_rows - 1) / thread_rows;  // size(ldata)
+          auto ldata = data_tile(rank, m, n, tcol, trow, thread_map_shape, offset);
+          auto lrdata = reduce_buffer_tile(rank, m, n, tcol, trow, thread_map_shape);
+          auto rdata = reduce_buffer_tile(rrank, m, n, tcol, trow, thread_map_shape);
 
-        CUTLASS_PRAGMA_UNROLL
-        for (int i = 0; i < copy_counts; i++) {
-          add<T>(&ldata(i), &rdata(i));
-        }
-        if (!last_round) {
-          if (do_copy()) {
-            auto rdata = reduce_buffer_tile(rrank, m, n, tcol, trow, thread_map_shape);
+          int start = m * kM + trow;
+          int end = min(start + kM, m_end);
+          int copy_counts = (end - start + thread_rows - 1) / thread_rows;  // size(ldata)
+
+          if (last_round) {
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < copy_counts; i++) {
-              rdata(i) = ldata(i);
+              ldata(i) = add<T>(&ldata(i), &lrdata(i));
+            }
+          } else {
+            CUTLASS_PRAGMA_UNROLL
+            for (int i = 0; i < copy_counts; i++) {
+              rdata(i) = add<T>(&ldata(i), &lrdata(i));
             }
           }
+          sub_barrier_sync(gid_local, kNumThreadsPerGroup);
+        } else {  // doing wait here
+          int *flag_ptr = flags(rrank).reduce_ptr(tile_idx);
+          arrive_inc(flag_ptr);
+          print_waiter(
+              "%d:%d arrived at reduce %d[%d] to %d\n", rank, gid, rrank, tile_idx, *flag_ptr);
         }
-
-        int *flag_ptr = flags(rrank).reduce_ptr(tile_idx);
-        TileBarrier::arrive_inc(flag_ptr, threadIdx.x, 0, 1);
-        DPRINT_T0("%d arrived at reduce %d[%d] to %d\n", rank, rrank, tile_idx, *flag_ptr);
       }
     }
-    // DPRINT_T0("rskernel_inter_numa TP4 push done\n");
   }
-  CUTLASS_DEVICE
-  static void
+  CUTLASS_DEVICE static void
   invoke(const ReduceScatterParams &params, SharedStorage &) {
     ReduceScatterRing1dPushGemmk<T, kM, kN, kFlattenTile> op(params);
     op.run();
   }
 };
 
-template <typename... T>
-CUTLASS_DEVICE void
-print_thread0(const T &...args) {
-  if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 &&
-      blockIdx.y == 0 && blockIdx.z == 0) {
-#ifdef FLUX_DEBUG_RS
-    printf(args...);
-#endif
-  }
-}
-
 template <typename T>
 CUTLASS_GLOBAL void
 run_per_segment_kernel(ReduceScatterParams params) {
-  using Barrier = BarrierWithFallback;
   auto grid_group = cooperative_groups::this_grid();
   nanosleep(params.sleep_ns);  // first wave costs: 2.5e3 / 28 ~= 100us
 
@@ -1003,23 +1460,15 @@ run_per_segment_kernel(ReduceScatterParams params) {
   auto reduce_ptr = [&](int rank, int segment) -> T * {
     return (T *)params.reduce_ptr[rank] + segment * elems_per_rank;
   };
-  auto print_thread0 = [](auto... args) {
-    if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0 &&
-        blockIdx.y == 0 && blockIdx.z == 0) {
-#ifdef FLUX_DEBUG_RS
-      printf(args...);
-#endif
-    }
-  };
   auto wait_ready = [&](int *ptr) {
 #if defined(FLUX_DEBUG_RS)
     if (!params.do_wait)
       return;
 #endif
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-      int flag = atomic_load_acquire_dev(ptr);
+      int flag = atomic_load_acquire_sys(ptr);
       while (flag != 1) {
-        flag = atomic_load_dev(ptr);
+        flag = atomic_load_sys(ptr);
       }
     }
     grid_group.sync();
@@ -1027,30 +1476,30 @@ run_per_segment_kernel(ReduceScatterParams params) {
   auto set_ready = [&](int *ptr) {
     grid_group.sync();
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-      atomic_add_release_dev(ptr, 1);
+      atomic_add_release_sys(ptr, 1);
     }
   };
   // calculate
   for (int i = 0; i < params.world_size; i++) {
     int segment_send = (rank + i + 1) % params.world_size;
     // replace with printf
-    print_thread0("wait %d segment %d gemm done\n", rank, segment_send);
+    print_per_kernel("wait %d segment %d gemm done\n", rank, segment_send);
     T *src = data_ptr(rank, segment_send);
     wait_ready(flags(rank).gemm_done_ptr(segment_send));
     T *dst = reduce_ptr(rank_to, segment_send);
     if (i != 0) {
-      print_thread0("wait %d segment %d copy done\n", rank, segment_send);
+      print_per_kernel("wait %d segment %d copy done\n", rank, segment_send);
       wait_ready(flags(rank).copy_done_ptr(segment_send));
+    }
+    if (i == 0) {  // copy to remote only
+      copy_continous_kernel(dst, src, elems_per_rank);
+    } else if (i == params.world_size - 1) {  // local reduce
       add_continous_kernel<T>(src, reduce_ptr(rank, segment_send), elems_per_rank);
-    }
-    if (i == params.world_size - 1) {  // only reduce here
       break;
+    } else {  // reduce to remote
+      add_continous_kernel<T>(dst, src, reduce_ptr(rank, segment_send), elems_per_rank);
     }
-#if defined(FLUX_DEBUG_RS)
-    if (params.do_copy)
-#endif
-      copy_continous_kernel(dst, src, params.n * m_per_rank);
-    print_thread0("set %d segment %d copy done\n", rank_to, segment_send);
+    print_per_kernel("set %d segment %d copy done\n", rank_to, segment_send);
     set_ready(flags(rank_to).copy_done_ptr(segment_send));
   }
 }
@@ -1058,7 +1507,6 @@ run_per_segment_kernel(ReduceScatterParams params) {
 template <typename T>
 CUTLASS_GLOBAL void
 run_per_segment_kernel_tp8(ReduceScatterParams params) {
-  using Barrier = BarrierWithFallback;
   nanosleep(params.sleep_ns);  // first wave costs: 2.5e3 / 28 ~= 100us
   auto grid_group = cooperative_groups::this_grid();
   // false for 0 <- 1 <- 2 <- 3, true for 1 -> 2 -> 3
@@ -1089,9 +1537,9 @@ run_per_segment_kernel_tp8(ReduceScatterParams params) {
       return;
 #endif
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-      int flag = atomic_load_acquire_dev(ptr);
+      int flag = atomic_load_acquire_sys(ptr);
       while (flag != 1) {
-        flag = atomic_load_dev(ptr);
+        flag = atomic_load_sys(ptr);
       }
     }
     grid_group.sync();
@@ -1099,7 +1547,7 @@ run_per_segment_kernel_tp8(ReduceScatterParams params) {
   auto set_ready = [&](int *ptr) {
     grid_group.sync();
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-      atomic_add_release_dev(ptr, 1);
+      atomic_add_release_sys(ptr, 1);
     }
   };
   auto get_send_segment_inner = [&](int iter) -> int {
@@ -1112,24 +1560,25 @@ run_per_segment_kernel_tp8(ReduceScatterParams params) {
   for (int i = 0; i < kNumaWorldSize; i++) {
     int segment_send = segment_send_inter + get_send_segment_inner(i);
     // replace with printf
-    print_thread0("[%d] wait segment %d gemm done\n", i, segment_send);
+    print_per_kernel("[%d] wait segment %d gemm done\n", i, segment_send);
     wait_ready(flags(rank).gemm_done_ptr(segment_send));
     T *src = data_ptr(rank, segment_send);
     T *dst = reduce_ptr(rank_to, segment_send);
     if (i != 0) {
-      print_thread0("[%d] wait segment %d copy done\n", i, segment_send);
+      print_per_kernel("[%d] wait segment %d copy done\n", i, segment_send);
       wait_ready(flags(rank).copy_done_ptr(segment_send));
+    }
+    if (i == kNumaWorldSize - 1) {  // reduce local only
       add_continous_kernel<T>(src, reduce_ptr(rank, segment_send), elems_per_rank);
+    } else {
+      if (i == 0) {  // copy to remote
+        copy_continous_kernel(dst, src, elems_per_rank);
+      } else {  // reduce to remote
+        add_continous_kernel<T>(dst, src, reduce_ptr(rank, segment_send), elems_per_rank);
+      }
+      print_per_kernel("[%d] set %d segment %d copy done\n", i, rank_to, segment_send);
+      set_ready(flags(rank_to).copy_done_ptr(segment_send));
     }
-    if (i == kNumaWorldSize - 1) {
-      break;  // reduce only
-    }
-#if defined(FLUX_DEBUG_RS)
-    if (params.do_copy)
-#endif
-      copy_continous_kernel(dst, src, elems_per_rank);
-    print_thread0("[%d] set %d segment %d copy done\n", i, rank_to, segment_send);
-    set_ready(flags(rank_to).copy_done_ptr(segment_send));
   }
 
   // reduce current NUMA node
@@ -1151,32 +1600,30 @@ run_per_segment_kernel_tp8(ReduceScatterParams params) {
                              : reduce_ptr(rank_to, segment_recv);
 
     if (!send_cross_numa) {
-      print_thread0("[%d] wait segment %d gemm done\n", i, segment_send);
+      print_per_kernel("[%d] wait segment %d gemm done\n", i, segment_send);
       wait_ready(flags(rank).gemm_done_ptr(segment_send));
       if (send_iter != 0) {
-        print_thread0("[%d] wait segment %d copy done\n", i, segment_send);
+        print_per_kernel("[%d] wait segment %d copy done\n", i, segment_send);
         wait_ready(flags(rank).copy_done_ptr(segment_send));
         add_continous_kernel<T>(src, reduce_ptr(rank, segment_send), elems_per_rank);
       }
     }
-    if (i != 0) {
-      // wait for last stage the slowest
+    if (i != 0) {  // TODO(houqi.1993) this prevent this kernel from being general for all
+                   // world_size & numa_world_size. to be fixed later
+      // wait for last stage the slowest. otherwise NUMA and not cross NUMA interleaved
       wait_ready(
           flags(slowest_ranks[numa_id][i - 1]).copy_done_ptr(slowest_segments[numa_id][i - 1]));
     }
 
-#if defined(FLUX_DEBUG_RS)
-    if (params.do_copy)
-#endif
-      copy_continous_kernel(dst, src, elems_per_rank);
+    copy_continous_kernel(dst, src, elems_per_rank);
 
     if (send_cross_numa) {
       int rank_to_inter = (rank + kNumaWorldSize) % kLocalWorldSize;
-      print_thread0(
+      print_per_kernel(
           "[%d] set %d segment %d copy done cross numa\n", i, rank_to_inter, segment_recv);
       set_ready(flags(rank_to_inter).copy_done_ptr(segment_recv));
     } else {
-      print_thread0("[%d] set %d segment %d copy done\n", i, rank_to, segment_recv);
+      print_per_kernel("[%d] set %d segment %d copy done\n", i, rank_to, segment_recv);
       set_ready(flags(rank_to).copy_done_ptr(segment_recv));
     }
 
@@ -1185,13 +1632,13 @@ run_per_segment_kernel_tp8(ReduceScatterParams params) {
     }
   }
 
-  print_thread0("%d wait segment %d gemm done\n", rank, rank);
+  print_per_kernel("%d wait segment %d gemm done\n", rank, rank);
   wait_ready(flags(rank).gemm_done_ptr(rank));  // self gemm done
-  print_thread0("%d wait segment %d copy done\n", rank, rank);
+  print_per_kernel("%d wait segment %d copy done\n", rank, rank);
   wait_ready(flags(rank).copy_done_ptr(rank));  // intra NUMA last copy
   add_continous_kernel<T>(data_ptr(rank, rank), reduce_ptr(rank, rank), elems_per_rank);
   wait_ready(flags(rank).copy_done_ptr(rank_from));  // inter NUMA flag
-  print_thread0("%d wait segment %d copy done\n", rank, rank_from);
+  print_per_kernel("%d wait segment %d copy done\n", rank, rank_from);
   add_continous_kernel<T>(data_ptr(rank, rank), reduce_ptr(rank, rank_from), elems_per_rank);
 }
 
@@ -1234,9 +1681,9 @@ run_per_segment_kernel_multinode(ReduceScatterParams params) {
       return;
 #endif
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-      int flag = atomic_load_acquire_dev(ptr);
+      int flag = atomic_load_acquire_sys(ptr);
       while (flag != 1) {
-        flag = atomic_load_dev(ptr);
+        flag = atomic_load_sys(ptr);
       }
     }
     grid_group.sync();
@@ -1244,7 +1691,7 @@ run_per_segment_kernel_multinode(ReduceScatterParams params) {
   auto set_ready = [&](int *ptr) {
     grid_group.sync();
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-      atomic_add_release_dev(ptr, 1);
+      atomic_add_release_sys(ptr, 1);
     }
   };
   auto get_send_segment_inner_numa = [&](int iter) -> int {
@@ -1260,12 +1707,12 @@ run_per_segment_kernel_multinode(ReduceScatterParams params) {
       int segment_send = segment_send_inter + get_send_segment_inner_numa(i);
       segment_send += segment_send_inter_node;  // add node offset
       // replace with printf
-      print_thread0("[%d] wait segment %d gemm done\n", i, segment_send);
+      print_per_kernel("[%d] wait segment %d gemm done\n", i, segment_send);
       wait_ready(flags(rank).gemm_done_ptr(segment_send));
       T *src = data_ptr(rank, segment_send);
       T *dst = reduce_ptr(rank_to, segment_send);
       if (i != 0) {
-        print_thread0("[%d] wait segment %d copy done\n", i, segment_send);
+        print_per_kernel("[%d] wait segment %d copy done\n", i, segment_send);
         wait_ready(flags(rank).copy_done_ptr(segment_send));
         add_continous_kernel<T>(src, reduce_ptr(rank, segment_send), elems_per_rank);
       }
@@ -1276,7 +1723,7 @@ run_per_segment_kernel_multinode(ReduceScatterParams params) {
       if (params.do_copy)
 #endif
         copy_continous_kernel(dst, src, elems_per_rank);
-      print_thread0("[%d] set %d segment %d copy done\n", i, rank_to, segment_send);
+      print_per_kernel("[%d] set %d segment %d copy done\n", i, rank_to, segment_send);
       set_ready(flags(rank_to).copy_done_ptr(segment_send));
     }
 
@@ -1298,10 +1745,10 @@ run_per_segment_kernel_multinode(ReduceScatterParams params) {
                                : reduce_ptr(rank_to, segment_recv);
 
       if (!send_cross_numa) {
-        print_thread0("[%d] wait segment %d gemm done\n", i, segment_send);
+        print_per_kernel("[%d] wait segment %d gemm done\n", i, segment_send);
         wait_ready(flags(rank).gemm_done_ptr(segment_send));
         if (send_iter != 0) {
-          print_thread0("[%d] wait segment %d copy done\n", i, segment_send);
+          print_per_kernel("[%d] wait segment %d copy done\n", i, segment_send);
           wait_ready(flags(rank).copy_done_ptr(segment_send));
           add_continous_kernel<T>(src, reduce_ptr(rank, segment_send), elems_per_rank);
         }
@@ -1316,11 +1763,11 @@ run_per_segment_kernel_multinode(ReduceScatterParams params) {
 
       if (send_cross_numa) {
         int rank_to_inter = rank_to_next_numa;
-        print_thread0(
+        print_per_kernel(
             "[%d] set %d segment %d copy done cross numa\n", i, rank_to_inter, segment_recv);
         set_ready(flags(rank_to_inter).copy_done_ptr(segment_recv));
       } else {
-        print_thread0("[%d] set %d segment %d copy done\n", i, rank_to, segment_recv);
+        print_per_kernel("[%d] set %d segment %d copy done\n", i, rank_to, segment_recv);
         set_ready(flags(rank_to).copy_done_ptr(segment_recv));
       }
 
@@ -1330,15 +1777,15 @@ run_per_segment_kernel_multinode(ReduceScatterParams params) {
     }
 
     int rank_next_node = rank_local + segment_send_inter_node;
-    print_thread0("%d wait segment %d gemm done\n", rank, rank_next_node);
+    print_per_kernel("%d wait segment %d gemm done\n", rank, rank_next_node);
     wait_ready(flags(rank).gemm_done_ptr(rank_next_node));  // self gemm done
-    print_thread0("%d wait segment %d copy done\n", rank, rank_next_node);
+    print_per_kernel("%d wait segment %d copy done\n", rank, rank_next_node);
     wait_ready(flags(rank).copy_done_ptr(rank_next_node));  // intra NUMA last copy
     add_continous_kernel<T>(
         data_ptr(rank, rank_next_node), reduce_ptr(rank, rank_next_node), elems_per_rank);
     int rank_from_curr_iter = rank_from % local_world_size + segment_send_inter_node;
     wait_ready(flags(rank).copy_done_ptr(rank_from_curr_iter));  // inter NUMA flag
-    print_thread0("%d wait segment %d copy done\n", rank, rank_from_curr_iter);
+    print_per_kernel("%d wait segment %d copy done\n", rank, rank_from_curr_iter);
     add_continous_kernel<T>(
         data_ptr(rank, rank_next_node), reduce_ptr(rank, rank_from_curr_iter), elems_per_rank);
     // set remote node ready
@@ -1347,23 +1794,27 @@ run_per_segment_kernel_multinode(ReduceScatterParams params) {
       int *ptr = flags(rank).remote_copy_done_ptr(rank);  // symetric ptr
       grid_group.sync();
       if (threadIdx.x == 0 && blockIdx.x == 0) {
+#ifdef FLUX_SHM_USE_NVSHMEM
         nvshmem_int_atomic_set(ptr, 1, rank_next_node);
+#endif
       }
     }
   }
 #ifndef FLUX_REDUCE_SCATTERT_WITH_NCCL  // don't use this. too slow. don't know why
   for (int i = 1; i < params.nnodes; i++) {
     int segment = (rank + i * local_world_size) % params.world_size;
-    print_thread0("[%d] %d wait segment %d remote copy\n", i, rank, segment);
+    print_per_kernel("[%d] %d wait segment %d remote copy\n", i, rank, segment);
     wait_ready(flags(rank).remote_copy_done_ptr(segment));
-    print_thread0("[%d] %d wait segment %d remote copy done\n", i, rank, segment);
+    print_per_kernel("[%d] %d wait segment %d remote copy done\n", i, rank, segment);
     int reduce_unused_segment =
         (rank_from + kNumaNodes + i * local_world_size) % params.world_size;
+#ifdef FLUX_SHM_USE_NVSHMEM
     nvshmem_getmem(
         reduce_ptr(rank, reduce_unused_segment),
         data_ptr(rank, rank),
         elems_per_rank * sizeof(T),
         segment);
+#endif
     add_continous_kernel(
         data_ptr(rank, rank), reduce_ptr(rank, reduce_unused_segment), elems_per_rank);
   }
@@ -1408,6 +1859,57 @@ GetLaunchProp(void *func) {
   return {max_num_blocks, max_threads, max_shared_memory_size};
 }
 
+template <typename T>
+cutlass::Status
+run_per_segment_with_cudaMemcpyAsync(const ReduceScatterParams &params, cudaStream_t stream) {
+  if (params.world_size == 1) {
+    return cutlass::Status::kSuccess;
+  }
+  int rank_to = (params.rank + params.world_size - 1) % params.world_size;
+  // int rank_from = (params.rank + 1) % params.world_size;
+  int rank = params.rank;
+  int m_per_rank = params.m / params.world_size;
+  int num_segments = params.n_split * params.world_size;
+  auto flags = [&](int rank) {
+    return PerRankFlagsWrapper(params.barrier_ptr[rank], num_segments);
+  };
+  size_t nbytes = m_per_rank * params.n * sizeof(T);
+  auto data_ptr = [&](int rank, int segment) -> T * {
+    return (T *)params.scatter_ptr_aux[rank] + segment * m_per_rank * params.n;
+  };
+  auto reduce_ptr = [&](int rank, int segment) -> T * {
+    return (T *)params.reduce_ptr[rank] + segment * m_per_rank * params.n;
+  };
+  FLUX_CHECK(params.world_size <= 8);  // no NUMA trick
+  auto wait_ready = [=](CUdeviceptr ptr) {
+    CU_CHECK(cuda_stub().cuStreamWaitValue32_v2(stream, ptr, 1, CU_STREAM_WAIT_VALUE_EQ));
+  };
+  auto set_ready = [=](CUdeviceptr ptr) {
+    CU_CHECK(cuda_stub().cuStreamWriteValue32_v2(stream, ptr, 1, CU_STREAM_WRITE_VALUE_DEFAULT));
+  };
+
+  // calculate
+  for (int i = 0; i < params.world_size; i++) {
+    int segment_send = (rank + i + 1) % params.world_size;
+    wait_ready((CUdeviceptr)flags(rank).gemm_done_ptr(segment_send));
+    T *src = data_ptr(rank, segment_send);
+    T *dst = reduce_ptr(rank_to, segment_send);
+    if (i != 0) {
+      wait_ready((CUdeviceptr)flags(rank).copy_done_ptr(segment_send));
+      // reduce to current segment
+      add_continous<T><<<params.num_blocks, 1024, 0, stream>>>(
+          src, reduce_ptr(rank, segment_send), m_per_rank * params.n);
+      CUDA_CHECK(cudaGetLastError());
+    }
+    if (i == params.world_size - 1) {
+      break;
+    }
+    CUDA_CHECK(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyDeviceToDevice, stream));
+    set_ready((CUdeviceptr)flags(rank_to).copy_done_ptr(segment_send));
+  }
+  return cutlass::Status::kSuccess;
+}
+
 }  // namespace
 
 template <typename T>
@@ -1432,6 +1934,7 @@ struct ReduceScatterOpBase {
     void *opaque = nullptr;
     bool use_1d_ring = false;
     bool use_p2p_read = false;
+    void *args_workspace = nullptr;
   };
 };
 
@@ -1477,9 +1980,13 @@ class ReduceScatterOp : public ReduceScatterOpBase<T> {
         .opaque = args.opaque,
         .use_1d_ring = args.use_1d_ring,
         .use_p2p_read = args.use_p2p_read,
+        .args_workspace = args.args_workspace,
     };
     for (int i = 0; i < params_.world_size; i++) {
+#ifdef FLUX_SHM_USE_NVSHMEM
+      // PCIE relays on nvshmem
       params_.reduce_ptr[i] = nvshmem_ptr(args.reduce_buffer_ptr, i);
+#endif
       params_.scatter_ptr_aux[i] = args.output_scatter_ptrs[i];
       params_.barrier_ptr[i] = args.barrier_ptrs[i];
     }
@@ -1509,7 +2016,7 @@ class ReduceScatterOp : public ReduceScatterOpBase<T> {
     static LaunchProp prop_intra_numa = GetLaunchProp((void *)run_per_segment_kernel<T>);
     static LaunchProp prop_intra_node = GetLaunchProp((void *)run_per_segment_kernel_tp8<T>);
     static LaunchProp prop_inter_node = GetLaunchProp((void *)run_per_segment_kernel_multinode<T>);
-    void *func = params_.world_size <= kNumaWorldSize
+    void *func = params_.use_1d_ring
                      ? (void *)run_per_segment_kernel<T>
                      : (params_.nnodes == 1 ? (void *)run_per_segment_kernel_tp8<T>
                                             : (void *)run_per_segment_kernel_multinode<T>);
@@ -1588,56 +2095,6 @@ class ReduceScatterOp : public ReduceScatterOpBase<T> {
   }
 
   cutlass::Status
-  run_per_segment_with_cudaMemcpyAsync(cudaStream_t stream) {
-    if (params_.world_size == 1) {
-      return cutlass::Status::kSuccess;
-    }
-    int rank_to = (params_.rank + params_.world_size - 1) % params_.world_size;
-    // int rank_from = (params_.rank + 1) % params_.world_size;
-    int rank = params_.rank;
-    int m_per_rank = params_.m / params_.world_size;
-    int num_segments = params_.n_split * params_.world_size;
-    auto flags = [&](int rank) {
-      return PerRankFlagsWrapper(params_.barrier_ptr[rank], num_segments);
-    };
-    size_t nbytes = m_per_rank * params_.n * sizeof(T);
-    auto data_ptr = [&](int rank, int segment) -> T * {
-      return (T *)params_.scatter_ptr_aux[rank] + segment * m_per_rank * params_.n;
-    };
-    auto reduce_ptr = [&](int rank, int segment) -> T * {
-      return (T *)params_.reduce_ptr[rank] + segment * m_per_rank * params_.n;
-    };
-    FLUX_CHECK(params_.world_size <= 8);  // no NUMA trick
-    auto wait_ready = [=](CUdeviceptr ptr) {
-      CU_CHECK(cuda_stub().cuStreamWaitValue32_v2(stream, ptr, 1, CU_STREAM_WAIT_VALUE_EQ));
-    };
-    auto set_ready = [=](CUdeviceptr ptr) {
-      CU_CHECK(cuda_stub().cuStreamWriteValue32_v2(stream, ptr, 1, CU_STREAM_WRITE_VALUE_DEFAULT));
-    };
-
-    // calculate
-    for (int i = 0; i < params_.world_size; i++) {
-      int segment_send = (rank + i + 1) % params_.world_size;
-      wait_ready((CUdeviceptr)flags(rank).gemm_done_ptr(segment_send));
-      T *src = data_ptr(rank, segment_send);
-      T *dst = reduce_ptr(rank_to, segment_send);
-      if (i != 0) {
-        wait_ready((CUdeviceptr)flags(rank).copy_done_ptr(segment_send));
-        // reduce to current segment
-        add_continous<T><<<params_.num_blocks, 1024, 0, stream>>>(
-            src, reduce_ptr(rank, segment_send), m_per_rank * params_.n);
-        CUDA_CHECK(cudaGetLastError());
-      }
-      if (i == params_.world_size - 1) {
-        break;
-      }
-      CUDA_CHECK(cudaMemcpyAsync(dst, src, nbytes, cudaMemcpyDeviceToDevice, stream));
-      set_ready((CUdeviceptr)flags(rank_to).copy_done_ptr(segment_send));
-    }
-    return cutlass::Status::kSuccess;
-  }
-
-  cutlass::Status
   run(cudaStream_t stream) {
     if (params_.world_size == 1) {
       return cutlass::Status::kSuccess;
@@ -1666,6 +2123,20 @@ class ReduceScatterOp : public ReduceScatterOpBase<T> {
             cutlass::Kernel2<rskernel>
                 <<<params_.num_blocks, num_threads, shmsize, stream>>>(params_);
           }
+        } else {
+          if (params_.use_p2p_read) {
+            using rskernel = ReduceScatterRing2dPullGemmk<T, kM, kN, kFlattenTile>;
+            static std::pair<int, int> attr = get_func_attr((void *)cutlass::Kernel2<rskernel>);
+            auto [num_threads, shmsize] = attr;
+            cutlass::Kernel2<rskernel>
+                <<<params_.num_blocks, num_threads, shmsize, stream>>>(params_);
+          } else {
+            using rskernel = ReduceScatterRing2dPushGemmk<T, kM, kN, kFlattenTile>;
+            static std::pair<int, int> attr = get_func_attr((void *)cutlass::Kernel2<rskernel>);
+            auto [num_threads, shmsize] = attr;
+            cutlass::Kernel2<rskernel>
+                <<<params_.num_blocks, num_threads, shmsize, stream>>>(params_);
+          }
         }
         CUDA_CHECK(cudaGetLastError());
         return cutlass::Status::kSuccess;
@@ -1673,26 +2144,26 @@ class ReduceScatterOp : public ReduceScatterOpBase<T> {
         if (params_.world_size == 8) {
           if (params_.use_barrier_queue) {
             FLUX_CHECK(params_.m % (kM * params_.world_size) == 0);
-            using rskernel = ReduceScatterTp8WithQueue<T, kM, kN, kFlattenTile>;
+            using rskernel = ReduceScatterRing2dPullWithQueue<T, kM, kN, kFlattenTile>;
             static std::pair<int, int> attr = get_func_attr((void *)cutlass::Kernel2<rskernel>);
             auto [num_threads, shmsize] = attr;
             cutlass::Kernel2<rskernel>
                 <<<params_.num_blocks, num_threads, shmsize, stream>>>(params_);
-            CUDA_CHECK(cudaGetLastError());
           } else {
-            using rskernel = ReduceScatterTp8<T, kM, kN, kFlattenTile>;
+            using rskernel = ReduceScatterRing2dPull<T, kM, kN, kFlattenTile>;
             static std::pair<int, int> attr = get_func_attr((void *)cutlass::Kernel2<rskernel>);
             auto [num_threads, shmsize] = attr;
             cutlass::Kernel2<rskernel>
                 <<<params_.num_blocks, num_threads, shmsize, stream>>>(params_);
-            CUDA_CHECK(cudaGetLastError());
           }
+          CUDA_CHECK(cudaGetLastError());
+          return cutlass::Status::kSuccess;
         }
       }
     } else {
       if (params_.use_cudaMemcpyAsync) {
         fprintf(stderr, "run with use_cudaMemcpyAsync\n");
-        return run_per_segment_with_cudaMemcpyAsync(stream);
+        return run_per_segment_with_cudaMemcpyAsync<T>(params_, stream);
       } else {
         return run_per_segment_with_cuda_core(stream);
       }
@@ -1742,8 +2213,6 @@ class ReduceScatterOp : public ReduceScatterOpBase<T> {
 
 }  // namespace bytedance::flux
 
-#undef DUMP_VALUE
-#undef DUMP_TS
 #undef NextRank
 #undef NextLocalRank
 #undef PrevLocalRank

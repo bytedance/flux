@@ -1,4 +1,4 @@
-//===- nvshmem_utils.cc ------------------------------------------- C++ ---===//
+//===- flux_shm.cc ---------------------------------------------- C++ ---===//
 //
 // Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,18 +14,24 @@
 // limitations under the License.
 //
 //===----------------------------------------------------------------------===//
-
-#include "flux/ths_op/nvshmem_utils.h"
 #include <vector>
 #include <ATen/ops/from_blob.h>
 #include <c10/core/ScalarType.h>
 #include <c10/cuda/CUDAFunctions.h>
-#include <nvshmemx.h>
 #include <torch/cuda.h>
 #include "flux/cuda/cuda_common.h"
+#include "flux/cuda/helper_kernels.h"
 #include "flux/flux.h"
+#include "flux/ths_op/flux_shm.h"
 
-namespace bytedance::flux {
+#ifdef FLUX_SHM_USE_NVSHMEM
+#include <nvshmemx.h>
+#endif
+
+namespace bytedance {
+namespace flux {
+
+#ifdef FLUX_SHM_USE_NVSHMEM
 namespace {
 std::array<const char *, 5> kNvshmemInitStatus = {
     "NVSHMEM_STATUS_NOT_INITIALIZED",
@@ -39,7 +45,6 @@ check_nvshmem_init() {
       << "nvshmem not initialized: status " << kNvshmemInitStatus[nvshmemx_init_status()];
 }
 }  // namespace
-
 torch::Tensor
 nvshmem_create_tensor(const std::vector<int64_t> &shape, c10::ScalarType dtype) {
   check_nvshmem_init();
@@ -85,8 +90,10 @@ nvshmem_create_tensor_list(const std::vector<int64_t> &shape, c10::ScalarType dt
   return tensors;
 }
 
+#endif
+
 std::vector<torch::Tensor>
-create_ipc_tensors(
+cudaipc_create_tensor_list(
     c10d::ProcessGroup &pg, const std::vector<int64_t> &shape, c10::ScalarType dtype) {
   auto option_gpu =
       at::TensorOptions().dtype(dtype).device(at::kCUDA).device_index(c10::cuda::current_device());
@@ -141,4 +148,71 @@ create_ipc_tensors(
   return tensors;
 }
 
-}  // namespace bytedance::flux
+void
+init_flux_shm(c10d::ProcessGroup &c10_pg) {
+#ifdef FLUX_SHM_USE_NVSHMEM
+  nvshmemx_init_attr_t init_attr;
+  init_attr.mpi_comm = (void *)&c10_pg;  // bad! pretend I'm the MPIComm
+  nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &init_attr);
+  int mype = nvshmem_my_pe();
+  CHECK(c10_pg.getRank() == mype) << "NVShmem init: rank does not match PE!" << c10_pg.getRank()
+                                  << " vs " << mype;
+#endif
+}
+
+torch::Tensor
+flux_create_tensor(
+    const std::vector<int64_t> &shape,
+    c10::ScalarType dtype,
+    c10::optional<c10d::ProcessGroup> pg) {
+#ifdef FLUX_SHM_USE_NVSHMEM
+  return nvshmem_create_tensor(shape, dtype);
+#else
+  assert(false && "This line should never be reached");
+  return torch::Tensor();
+#endif
+}
+std::vector<torch::Tensor>
+flux_create_tensor_list(
+    const std::vector<int64_t> &shape,
+    c10::ScalarType dtype,
+    c10::optional<c10d::ProcessGroup> pg) {
+#ifdef FLUX_SHM_USE_NVSHMEM
+  return nvshmem_create_tensor_list(shape, dtype);
+#else
+  assert(pg.has_value());
+  return cudaipc_create_tensor_list(pg.value(), shape, dtype);
+#endif
+}
+
+void
+flux_barrier_all_on_stream(
+    cudaStream_t stream,
+    c10::optional<std::vector<torch::Tensor>> sync_buffers,
+    c10::optional<int> rank) {
+#ifdef FLUX_SHM_USE_NVSHMEM
+  nvshmemx_barrier_all_on_stream(stream);
+#else
+  assert(sync_buffers.has_value());
+  assert(rank.has_value());
+  std::vector<int32_t *> sync_buffer_ptrs;
+  auto sync_buffers_val = sync_buffers.value();
+  assert(sync_buffers_val[rank.value()].defined());
+  int world_size = sync_buffers_val.size();
+  for (int i = 0; i < sync_buffers_val.size(); i++) {
+    sync_buffer_ptrs.push_back(reinterpret_cast<int32_t *>(sync_buffers_val[i].data_ptr()));
+  }
+  cudaipc_barrier_all_on_stream_impl(stream, sync_buffer_ptrs.data(), rank.value(), world_size);
+#endif
+}
+
+void
+pyflux_barrier_all_on_stream(
+    intptr_t stream,
+    c10::optional<std::vector<torch::Tensor>> sync_buffers,
+    c10::optional<int> rank) {
+  flux_barrier_all_on_stream((cudaStream_t)stream, sync_buffers, rank);
+}
+
+}  // namespace flux
+}  // namespace bytedance

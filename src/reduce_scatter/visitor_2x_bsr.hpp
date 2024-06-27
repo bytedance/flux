@@ -165,8 +165,6 @@ struct OutputTileThreadLayoutBSR : DefaultThreadMapTensorOp<
     if constexpr (FuseReduction) {
       target_m_coord = m_coord;
     } else {
-      // const int rank = nvshmem_my_pe();
-      // const int world_size = nvshmem_n_pes();
       const int local_world_size = world_size / nnodes;
       const int local_rank = rank % local_world_size;
       const int coord_per_rank_local = (M / BM / local_world_size);

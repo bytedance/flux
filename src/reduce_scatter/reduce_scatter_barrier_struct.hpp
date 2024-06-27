@@ -18,6 +18,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <cstddef>
 #include <type_traits>
 #if defined(__NVCC__) || (defined(__clang__) && defined(__CUDA__))
 #define FLUX_HOST_DEVICE __forceinline__ __device__ __host__
@@ -37,21 +38,29 @@ namespace bytedance::flux {
 
 struct __attribute__((packed)) PerTileFlags {
   // per tile structs
-  int epilogue;
-  int padding_epilogue[8];  // don't delete. for m < kM
-  int reduce;
-  int padding_reduce[8];  // don't delete. for m < kM
-  int epilogue_queue;
+  int epilogue;                    // marked to 1 once epilogue done
+  int padding_epilogue[8];         // don't delete. for m < kM
+  int reduce;                      // marked to 1 once tiled copy done from/to peer in sub world
+  int padding_reduce[8];           // don't delete. for m < kM
+  int reduce_sub_node;             // marked to 1 once tile copy done from next sub world
+  int padding_reduce_sub_node[8];  // don't delete. for m < kM
+  int epilogue_queue;              // only valid for use_barrier = true
   int reduce_queue;
-  uint64_t epilogue_start;
-  uint64_t epilogue_stop;
-  uint64_t wait_queue_start;
-  uint64_t wait_start;
-  uint64_t copy_start;
-  uint64_t copy_stop;
-  uint64_t arrive_inc_stop;
-  // non per-tile structs. maybe per-sm or per-segment. use with caution
   int extra;
+  struct __attribute__((packed)) ShapeOnly {
+    int epilogue;                    // marked to 1 once epilogue done
+    int padding_epilogue[8];         // don't delete. for m < kM
+    int reduce;                      // marked to 1 once tiled copy done from/to peer in sub world
+    int padding_reduce[8];           // don't delete. for m < kM
+    int reduce_sub_node;             // marked to 1 once tile copy done from next sub world
+    int padding_reduce_sub_node[8];  // don't delete. for m < kM
+    int epilogue_queue;              // only valid for use_barrier = true
+    int reduce_queue;
+    // non per-tile structs. maybe per-sm or per-segment. use with caution
+    int extra;
+  };
+
+  char padding[128 - sizeof(ShapeOnly)];  // 30 * 4 + 7 * 8 = 176; cacheline: 256 - 176 = 80
 };
 
 struct __attribute__((packed)) PerRankFlags {
@@ -60,11 +69,14 @@ struct __attribute__((packed)) PerRankFlags {
   int copy_done;
   int counter;
   int remote_copy_done;
-  uint64_t gemm_done_ts;
-  uint64_t buffer_ready_ts;
-  uint64_t copy_done_ts;
-  uint64_t counter_ts;
-  uint64_t remote_copy_done_ts;
+  struct __attribute__((packed)) ShapeOnly {
+    int gemm_done;
+    int buffer_ready;
+    int copy_done;
+    int counter;
+    int remote_copy_done;
+  };
+  char padding[128 - sizeof(ShapeOnly)];  // 5 * 4 = 20; cacheline: 256 - 20 = 236
 };
 
 struct __attribute__((packed)) BarrierWorkQeueuFlags {
@@ -93,15 +105,9 @@ struct __attribute__((packed)) BarrierWorkQeueuFlags {
 #define PerTileFlagsDefines(ADD_MEMBER_FN) \
   ADD_MEMBER_FN(epilogue)                  \
   ADD_MEMBER_FN(reduce)                    \
+  ADD_MEMBER_FN(reduce_sub_node)           \
   ADD_MEMBER_FN(epilogue_queue)            \
   ADD_MEMBER_FN(reduce_queue)              \
-  ADD_MEMBER_FN(epilogue_start)            \
-  ADD_MEMBER_FN(epilogue_stop)             \
-  ADD_MEMBER_FN(wait_queue_start)          \
-  ADD_MEMBER_FN(wait_start)                \
-  ADD_MEMBER_FN(copy_start)                \
-  ADD_MEMBER_FN(copy_stop)                 \
-  ADD_MEMBER_FN(arrive_inc_stop)           \
   ADD_MEMBER_FN(extra)                     \
   END_OF_STRCTURE
 
@@ -131,7 +137,7 @@ class PerTileFlagsAoSWrapper {
 };
 #undef PerTileFlagsDefines
 
-using PerTileFlagsWrapper = PerTileFlagsSoAWrapper;
+using PerTileFlagsWrapper = PerTileFlagsAoSWrapper;
 
 //// Per-Rank-Flags ////
 
@@ -141,11 +147,6 @@ using PerTileFlagsWrapper = PerTileFlagsSoAWrapper;
   ADD_MEMBER_FN(copy_done)                 \
   ADD_MEMBER_FN(counter)                   \
   ADD_MEMBER_FN(remote_copy_done)          \
-  ADD_MEMBER_FN(gemm_done_ts)              \
-  ADD_MEMBER_FN(buffer_ready_ts)           \
-  ADD_MEMBER_FN(copy_done_ts)              \
-  ADD_MEMBER_FN(counter_ts)                \
-  ADD_MEMBER_FN(remote_copy_done_ts)       \
   END_OF_STRCTURE
 
 class PerRankFlagsSoAWrapper {
@@ -175,7 +176,7 @@ class PerRankFlagsAoSWrapper {
 
 #undef PerRankFlagsDefines
 
-using PerRankFlagsWrapper = PerRankFlagsAoSWrapper;
+using PerRankFlagsWrapper = PerRankFlagsSoAWrapper;
 //// WorkQueue ///
 #define BarrierWorkQeueuFlagsDefines(ADD_MEMBER_FN) \
   ADD_MEMBER_FN(epilogue_done)                      \

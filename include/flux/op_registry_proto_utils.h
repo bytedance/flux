@@ -1,4 +1,4 @@
-//===- gemm_v2_ag_kernel.cu --------------------------------------- C++ ---===//
+//===- op_registry_proto_utils.h --------------------------------- C++ ---===//
 //
 // Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,16 +14,10 @@
 // limitations under the License.
 //
 //===----------------------------------------------------------------------===//
-
-#include "all_gather/gemm_v2_ag_kernel.hpp"
-#include "flux/flux.h"
-#include "flux/gemm_hparams.h"
-
+#pragma once
+#include "flux/op_registry.h"
+#include <string>
 namespace bytedance::flux {
-
-static auto _registry_all_gather_gemm_op_dispatcher [[maybe_unused]] = []() {
-  // TODO: add dispatcher logic here
-  return 0;
-}();
-
-}  // namespace bytedance::flux
+__attribute__((visibility("default"))) void load_tune_config_from_file(
+    TuningConfigRegistry &registry, const std::string &file_name);
+}

@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <string>
 #include <stdlib.h>
+// #define FLUX_DEBUG 0
+
 namespace bytedance::flux {
 
 class NullBuffer : public std::streambuf {

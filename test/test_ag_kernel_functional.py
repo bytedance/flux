@@ -23,7 +23,6 @@ import torch
 import numpy as np
 import torch.distributed
 import flux
-from flux import pynvshmem
 from utils import TP_GROUP, init_seed, RANK, WORLD_SIZE, NNODES, LOCAL_RANK, LOCAL_WORLD_SIZE
 
 
@@ -154,7 +153,7 @@ if __name__ == "__main__":
     init_seed()
     args = parse_args()
 
-    pynvshmem.init_with_c10d_pg(TP_GROUP)
+    flux.init_flux_shm(TP_GROUP)
     torch.cuda.synchronize()
 
     assert args.M % TP_GROUP.size() == 0

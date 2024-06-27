@@ -16,16 +16,20 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
+#include <type_traits>
 #include "cute/container/tuple.hpp"
 #include "cute/layout.hpp"
 #include "cute/numeric/integral_constant.hpp"
 #include "cutlass/gemm/gemm_enumerated_types.h"
-
+#include "cutlass/layout/matrix.h"
+#include "cutlass/conv/convolution.h"
+#include "cutlass/util/packed_stride.hpp"
 #include "flux/flux.h"
 #include "flux/cuda/gemm_impls/gemm_v2_impl.hpp"
 #include "flux/gemm_hparams.h"
 #include "flux/gemm_operator_base.h"
 #include "flux/args/comm_none.h"
+#include "cutlass/gemm/device/gemm_universal_with_absmax.h"
 
 namespace bytedance::flux {
 template <class GemmMetaT, class GemmHParamsT>
@@ -48,6 +52,65 @@ class GemmV2CommNone
   }
 
   auto
+  to_fp8_gemm_args_impl(GemmFP8Arguments const &args) const {
+    using Gemm = identity_t<decltype(this->gemm_device())>;
+    using GemmArguments = typename Gemm::Arguments;
+
+    using EVT = identity_t<decltype(this->default_kernel_params().evt())>;
+
+    using ElementA = decltype(to_cutlass_element(dt_conf.a()));
+    using ElementB = decltype(to_cutlass_element(dt_conf.b()));
+    using ElementC = decltype(to_cutlass_element(dt_conf.c()));
+    using ElementD = decltype(to_cutlass_element(dt_conf.d()));
+
+    auto ptr_A = static_cast<ElementA const *>(args.A);
+    auto ptr_B = static_cast<ElementB const *>(args.B);
+    auto ptr_C = static_cast<ElementC *>(const_cast<void *>(args.C));
+    auto ptr_D = static_cast<ElementD *>(args.D);
+    auto ptr_Aux = static_cast<ElementD *>(args.Aux);
+    auto ptr_Vector = static_cast<ElementC *>(args.Vector);
+
+    int stride_b = this->get_stride_b(args.n, args.k);
+    int stride_c = this->get_stride_c(args.m, args.n);
+    int stride_d = stride_c;
+
+    typename EVT::Params epilogue_params{
+        {ElementD(args.alpha), ElementD(args.beta)},
+        args.scaleA,
+        args.scaleB,
+        args.scaleC,
+        args.scaleD,
+        args.scaleAux,
+        args.abs_max_Aux,
+        args.abs_max_D};
+
+    typename Gemm::Arguments gemm_args{
+        cutlass::gemm::GemmUniversalMode::kGemm,
+        {args.m, args.n, args.k},
+        /* batch_count = */ 1,
+        epilogue_params,
+        ptr_A,
+        ptr_B,
+        ptr_C,
+        ptr_D,
+        ptr_Aux,
+        ptr_Vector,
+        args.m * args.k,
+        args.n * args.k,
+        args.m * args.n,
+        args.m * args.n,
+        (int)args.m,  // Batch stride vector
+        args.k,
+        stride_b,
+        stride_c,
+        stride_d,
+        (int64_t)0  // Leading dimension of vector. This must be 0
+    };
+
+    return gemm_args;
+  }
+
+  auto
   to_gemm_args_impl(GemmOnlyArguments const &args) const {
     using Gemm = identity_t<decltype(this->gemm_device())>;
     using GemmArguments = typename Gemm::Arguments;
@@ -62,7 +125,6 @@ class GemmV2CommNone
     auto ptr_C = static_cast<ElementC *>(const_cast<void *>(args.bias));
     auto ptr_D = static_cast<ElementD *>(args.output);
 
-    // auto stride_A = cutlass::make_cute_packed_stride()
     auto stride_C = cutlass::make_cute_packed_stride(
         typename Base::StrideC{}, cute::make_shape(args.m, args.n, cute::Int<1>{}));
     auto stride_D = stride_C;
@@ -99,26 +161,65 @@ class GemmV2CommNone
 
  public:
   auto
-  to_gemm_args(std::any const &args) const {
-    return to_gemm_args_impl(std::any_cast<GemmOnlyArguments>(args));
+  to_gemm_args(std::any const &args, void *args_workspace) const {
+    if constexpr (this->is_sm89 && this->is_fp8_gemm) {
+      return to_fp8_gemm_args_impl(std::any_cast<GemmFP8Arguments>(args));
+    } else {
+      return to_gemm_args_impl(std::any_cast<GemmOnlyArguments>(args));
+    }
   }
 };
 
 struct GemmV2CommNone_Space : OpSpaceBase<GemmV2CommNone_Space> {
-  static constexpr auto AllGemmMeta = make_space_gemm_meta(
+  static constexpr auto AllGemmMeta_FP16 = make_space_gemm_meta(
       cute::make_tuple(
           _FP16{},
           _BF16{},
           make_gemm_dtype_config(_FP16{}, _FP16{}, _Void{}, _FP16{}),
           make_gemm_dtype_config(_BF16{}, _BF16{}, _Void{}, _BF16{})),
-      cute::make_tuple(_Sm80{}),
+      cute::make_tuple(_Sm80{}, _Sm89{}),
       cute::make_tuple(_CommNone{}),
       cute::make_tuple(_RCR{}, _RRR{}),
       cute::make_tuple(_GemmV2{}));
 
-  static constexpr auto AllGemmHParams = make_space_gemm_hparams();
+  static constexpr auto AllGemmHParams_FP16 = make_space_gemm_hparams();
 
-  // static constexpr auto AllGemmHParams = make_space_gemm_hparams();
+  static constexpr auto AllGemmMeta_FP8 = make_space_gemm_meta(
+      cute::make_tuple(
+          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _Void{}, _BF16{}),
+          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _BF16{}, _BF16{}),
+          make_gemm_dtype_config(_E5M2{}, _E5M2{}, _Void{}, _BF16{}),
+          make_gemm_dtype_config(_E5M2{}, _E5M2{}, _BF16{}, _BF16{})),
+      cute::make_tuple(_Sm89{}),
+      cute::make_tuple(_CommNone{}),
+      cute::make_tuple(_RCR{}),  // Only register RCR layout for FP8 GEMM
+      cute::make_tuple(_GemmV2{}),
+      cute::make_tuple(make_gemm_v2_meta(_True{}), make_gemm_v2_meta(_False{})));
+
+  static constexpr auto AllGemmHParams_FP8 = make_space_gemm_hparams(
+      cute::make_tuple(Auto{}),
+      cute::make_tuple(Auto{}),
+      cute::make_tuple(Auto{}),
+      cute::make_tuple(Auto{}),
+      cute::make_tuple(Auto{}),
+      cute::make_tuple(Auto{}));
+
+  static constexpr auto AllGemmMeta = tuple_cat(AllGemmMeta_FP16, AllGemmMeta_FP8);
+
+  template <int SplitIdx, int NSplits, int ArchFilter = 0>
+  static constexpr auto
+  enumerate_split_meta_hparams_pairs() {
+    auto meta_split = split_slice_meta<SplitIdx, NSplits, ArchFilter>();
+    return tuple_unpack_cat(tuple_transform(meta_split, [](auto meta) {
+      if constexpr (tuple_has_elem(AllGemmMeta_FP16, meta)) {
+        return tuple_enumerate(
+            make_space_meta_hparams_pair(cute::make_tuple(meta), AllGemmHParams_FP16));
+      } else {
+        return tuple_enumerate(
+            make_space_meta_hparams_pair(cute::make_tuple(meta), AllGemmHParams_FP8));
+      }
+    }));
+  }
 };
 
 }  // namespace bytedance::flux

@@ -267,12 +267,18 @@ using namespace cute;
 template <class... Ts>
 constexpr auto
 auto_impl_spec(GemmMeta<Ts...> meta) {
-  if constexpr (meta.impl() == _GemmV2{}) {
+  if constexpr (meta.impl() == _GemmV2{} or meta.impl() == _GemmGroupedV2{}) {
     auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
-    return make_gemm_v2_hparams(Shape<_64, _64, _32>{}, Shape<_16, _8, _16>{});
-  } else if constexpr (meta.impl() == _GemmV3{}) {
+    if constexpr (meta.arch() == _Sm89{} && dt_conf.is_input_fp8()) {
+      return make_gemm_v2_hparams(Shape<_64, _32, _64>{}, Shape<_16, _8, _32>{});
+    } else {
+      return make_gemm_v2_hparams(Shape<_64, _64, _32>{}, Shape<_16, _8, _16>{});
+    }
+  } else if constexpr (meta.impl() == _GemmV3{} or meta.impl() == _GemmGroupedV3{}) {
     if constexpr (meta.arch() == _Sm80{}) {
       return make_gemm_v3_hparams(Shape<_1, _1, _1>{});
+    } else if constexpr (meta.arch() == _Sm90{}) {
+      return make_gemm_v3_hparams(Shape<_2, _1, _1>{});
     }
   } else {
     static_assert(cutlass::detail::dependent_false<decltype(meta.impl())>, "unsupported impl");
@@ -288,12 +294,27 @@ auto_comm_spec(GemmMeta<Ts...> meta) {
 template <class... Ts, class ImplHParams>
 constexpr auto
 auto_tile_shape(GemmMeta<Ts...> meta, ImplHParams impl_hparams) {
-  if constexpr (meta.impl() == _GemmV2{}) {
+  if constexpr (meta.impl() == _GemmV2{} or meta.impl() == _GemmGroupedV2{}) {
     auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
-    return Shape<_128, _128, _32>{};
-  } else if constexpr (meta.impl() == _GemmV3{}) {
+    if constexpr (meta.arch() == _Sm89{} && dt_conf.is_input_fp8()) {
+      return Shape<_128, _64, _64>{};
+    } else {
+      return Shape<_128, _128, _32>{};
+    }
+  } else if constexpr (meta.impl() == _GemmV3{} or meta.impl() == _GemmGroupedV3{}) {
     if constexpr (meta.arch() == _Sm80{}) {
       return Shape<_256, _128, _32>{};
+    } else {
+      auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
+      using MDim = _128;
+      using NDim = cute::conditional_t<
+          (to_gemm_v3_meta(meta.impl_spec()).fast_accum()) or
+              (to_gemm_v3_hparams(ImplHParams{}).kernel_schedule() == _PingPong{}),
+          _128,
+          _256>;
+      using KDim =
+          cute::Int<128 / cute::max(sizeof_dtype(dt_conf.a()), sizeof_dtype(dt_conf.b()))>;
+      return Shape<MDim, NDim, KDim>{};
     }
   } else {
     static_assert(cutlass::detail::dependent_false<decltype(meta.impl())>, "unsupported impl");
@@ -303,7 +324,7 @@ auto_tile_shape(GemmMeta<Ts...> meta, ImplHParams impl_hparams) {
 template <class... Ts>
 constexpr auto
 auto_gemm_kind(GemmMeta<Ts...> meta) {
-  if constexpr (meta.impl() == _GemmV2{}) {
+  if constexpr (meta.impl() == _GemmV2{} or meta.impl() == _GemmGroupedV2{}) {
     return _GemmStreamK{};
   } else {
     return _GemmDefault{};
@@ -313,13 +334,29 @@ auto_gemm_kind(GemmMeta<Ts...> meta) {
 template <class TileShape, class... Ts>
 constexpr auto
 auto_mainloop_stage(GemmMeta<Ts...> meta, TileShape const &) {
-  { return cute::_4{}; }
+  if constexpr (
+      (meta.impl() == _GemmV3{} or meta.impl() == _GemmGroupedV3{}) and meta.arch() == _Sm90{}) {
+    return cute::_0{};  // Auto Stage Count
+  } else if constexpr (meta.arch() == _Sm89{}) {
+    auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
+    if constexpr (dt_conf.is_input_fp8()) {
+      return cute::_3{};
+    } else {
+      return cute::_4{};
+    }
+  } else {
+    return cute::_4{};
+  }
 }
 
 template <class... Ts>
 constexpr auto
 auto_raster_order(GemmMeta<Ts...> meta) {
-  return _RasterHeuristic{};
+  if constexpr (meta.arch() == _Sm89{}) {
+    return _RasterAlongN{};
+  } else {
+    return _RasterHeuristic{};
+  }
 }
 
 }  // namespace detail
@@ -363,7 +400,7 @@ filter_arch(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
   return false;
 #endif
 #if (__CUDACC_VER_MAJOR__ < 12)
-  if (meta.arch() == _Sm90{})
+  if (meta.arch() == _Sm90{} || meta.arch() == _Sm89{})
     return false;
 #endif
 #endif
@@ -383,7 +420,12 @@ filter_smem(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
   if (meta.arch() == _Sm80{} and expect_min_smem > 163 * 1024) {
     return false;
   }
-
+  if (meta.arch() == _Sm89{} and expect_min_smem > 99 * 1024) {
+    return false;
+  }
+  if (meta.arch() == _Sm90{} and expect_min_smem > 227 * 1024) {
+    return false;
+  }
   return true;
 }
 
@@ -391,7 +433,7 @@ template <class... Ts, class... Us>
 constexpr bool
 filter_kernel_schedule(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
   auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
-  if constexpr (meta.impl() == _GemmV3{}) {
+  if constexpr (meta.impl() == _GemmV3{} or meta.impl() == _GemmGroupedV3{}) {
     auto v3_hparams = to_gemm_v3_hparams(hparams.impl_spec());
     if (not dt_conf.is_input_fp8()) {
       return v3_hparams.kernel_schedule() == _Cooperative{};

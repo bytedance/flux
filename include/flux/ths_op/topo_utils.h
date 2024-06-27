@@ -1,4 +1,4 @@
-//===- topo_utls.h ------------------------------------------------ C++ ---===//
+//===- topo_utls.h ------------------------------------------------------ C++ ---===//
 //
 // Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,7 +15,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// NOTE: don't use this in flux_cuda
 #pragma once
 
 #include <nccl.h>
@@ -31,8 +30,7 @@ bool is_topo_initialized();
  * @param group: this should be a local group. if not, split it to a local group from outside
  */
 void initialize_topo(c10d::ProcessGroup &group);
-
-bool is_topo_properly_placed();
+void initialize_topo(const std::vector<int> &device_ids);
 
 // has any NV-link supported GPU exists
 bool has_nvlink();

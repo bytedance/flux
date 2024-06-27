@@ -37,7 +37,6 @@ endif()
 add_subdirectory(comm_none)
 add_subdirectory(all_gather)
 add_subdirectory(reduce_scatter)
-
 message(STATUS "op_targets: ${FLUX_CUDA_OP_TARGETS}")
 
 # this must be after all op subdirectory added

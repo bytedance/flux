@@ -33,4 +33,6 @@ void uniform_initialize(
     double max = 1.0,
     void *stream = nullptr);
 
+void cudaipc_barrier_all_on_stream_impl(
+    cudaStream_t stream, int32_t **sync_buffer_ptr, int rank, int world_size);
 }  // namespace bytedance::flux

@@ -19,8 +19,10 @@
 
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/threadblock/threadblock_swizzle_streamk.h"
+#ifdef FLUX_SHM_USE_NVSHMEM
 #include <nvshmem.h>
 #include <nvshmemx.h>
+#endif
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {

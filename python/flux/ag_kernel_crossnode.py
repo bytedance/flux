@@ -76,6 +76,8 @@ def _auto_ring_mode() -> cpp_mod.AgRingMode:
     force_nvlink = int(os.getenv("FLUX_FORCE_NVLINK", "-1"))
     if force_nvlink == 1:  # nvlink mode
         return cpp_mod.AgRingMode.All2All
+    elif force_nvlink == 0:  # pci-e mode
+        return cpp_mod.AgRingMode.Ring2D
 
     return cpp_mod.AgRingMode.Auto
 
@@ -100,6 +102,7 @@ class AGKernelXNode:
             0: nvlink mode: all-to-all
             1: 1d ring. for PCI-e communication optimization
             2: 2d ring. for PCI-e communication optimization. better performance than 1d ring
+            3: custom ring. for defining arbitrary ring at compile time
         """
         self.tp_group = tp_group
         self.world_size = self.tp_group.size()

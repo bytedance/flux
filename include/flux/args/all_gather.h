@@ -35,18 +35,30 @@ struct AGKernelArguments {
   void *barrier_buffer;
 };
 
-struct AllGatherGemmArguments {
+struct AGFP8KernelArguments {
   int m;
   int n;
   int k;
   int rank;
   int world_size;
+  int nnodes;
   float alpha;
   float beta;
-  void const *input;
-  void const *weight;
-  void const *bias;
-  void *output;
+  void *A;        // input
+  void *agA;      // all gathered A, aka input_buffer
+  void const *B;  // weight
+  void const *C;
+  void *Aux = nullptr;
+  void *D;  // output
+  void *barrier_buffer;
+  void *Vector;  // bias
+  float *abs_max_Aux = nullptr;
+  float *abs_max_D = nullptr;
+  float const *scaleA;
+  float const *scaleB;
+  float const *scaleC;
+  float const *scaleD = nullptr;
+  float const *scaleAux = nullptr;
 };
 
 }  // namespace bytedance::flux

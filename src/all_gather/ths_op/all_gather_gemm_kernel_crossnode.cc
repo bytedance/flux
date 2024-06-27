@@ -15,6 +15,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "all_gather_ring_order.h"
+
 #include "flux/cuda/cuda_common.h"
 #include "flux/cuda/cuda_stub.h"
 #include "flux/flux.h"
@@ -42,7 +44,6 @@
 #include <cstdlib>
 #include <cuda_runtime_api.h>
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
-
 #include <nvshmemx.h>
 #include "nccl.h"
 #include "flux/ths_op/topo_utils.h"
@@ -214,14 +215,13 @@ class AGKernelCrossNode : public torch::CustomClassHolder {
     // machines with NVLink P2P connected
     _ensure_topo_initialized();
     this->ring_mode = get_ring_mode(ring_mode_);
-    bool use_nvshmem_malloc =
-        topo_utils::is_topo_properly_placed() ? topo_utils::has_nvlink() : false;
+    bool use_nvshmem_malloc = topo_utils::has_nvlink();
     // input buffer
     if (use_nvshmem_malloc) {
       this->input_buffers = nvshmem_create_tensor_list({this->full_m, this->k_dim}, input_dtype);
     } else {
       this->input_buffers =
-          create_ipc_tensors(intra_node_group, {this->full_m, this->k_dim}, input_dtype);
+          cudaipc_create_tensor_list(intra_node_group, {this->full_m, this->k_dim}, input_dtype);
     }
     FLUX_CHECK(this->input_buffers.size() == this->local_world_size)
         << " input_buffers.size() != local_world_size " << this->input_buffers.size() << " vs "
@@ -241,7 +241,7 @@ class AGKernelCrossNode : public torch::CustomClassHolder {
       this->barrier_buffers =
           nvshmem_create_tensor_list({MAX_NUM_SIGNAL * this->nnodes}, c10::ScalarType::Int);
     } else {
-      this->barrier_buffers = create_ipc_tensors(
+      this->barrier_buffers = cudaipc_create_tensor_list(
           intra_node_group, {MAX_NUM_SIGNAL * this->nnodes}, c10::ScalarType::Int);
     }
     FLUX_CHECK(this->barrier_buffers.size() == this->local_world_size)
@@ -345,6 +345,14 @@ class AGKernelCrossNode : public torch::CustomClassHolder {
 
     if (ring_mode == AGRingMode::All2All) {
       copy_all2all(input);
+    } else if (ring_mode == AGRingMode::Ring2D) {
+      FLUX_CHECK(this->local_world_size == 8);
+      copy_2d_ring(input);
+    } else if (ring_mode == AGRingMode::Ring1D) {
+      copy_ring_1d_push();
+    } else if (ring_mode == AGRingMode::RingCustom) {
+      CUDA_CHECK(cudaStreamWaitEvent(cp_streams[0], this->ready_event));
+      ring_all_gather(cp_streams[0]);
     } else {
       FLUX_CHECK(false) << "Unknown ring mode " << (int)ring_mode;
     }
@@ -352,6 +360,11 @@ class AGKernelCrossNode : public torch::CustomClassHolder {
 
     /// GEMM
     if (run_gemm()) {
+      // to make sure, launch gemm after ncclSendRecv. but it takes too long.
+      if (ring_mode == AGRingMode::Ring1D ||
+          ring_mode == AGRingMode::Ring2D) {  // PCI-e wait for nccl comm done
+        CUDA_CHECK(cudaStreamWaitEvent(current_stream, this->nccl_event));
+      }
       cutlass_op->run(this->gemm_args, this->workspace, current_stream);
     } else {
       CUDA_CHECK(cudaStreamWaitEvent(current_stream, this->ready_event));
@@ -549,6 +562,26 @@ class AGKernelCrossNode : public torch::CustomClassHolder {
         CU_STREAM_WRITE_VALUE_DEFAULT));
   }
 
+  void
+  copy_2d_ring(torch::Tensor input) {
+    /// All2All algorithm
+    /// Each node perform intra node communication: pull data from other intra node ranks
+    auto cp_stream = cp_streams[0];
+    auto nccl_stream = nccl_streams[0];
+    CUDA_CHECK(cudaStreamWaitEvent(cp_stream, this->ready_event));
+    CUDA_CHECK(cudaStreamWaitEvent(nccl_stream, this->ready_event));
+    copy_local_ring(0, cp_stream);
+
+    /// Multi-node communications
+    // (nnodes - 1) phases
+    for (int phase_id = 1; phase_id < this->nnodes; ++phase_id) {
+      // Intra-node communicaiton
+      CUDA_CHECK(cudaStreamWaitEvent(cp_stream, this->nccl_event));
+      copy_local_ring(phase_id, cp_stream);
+    }
+    CUDA_CHECK(cudaEventRecord(this->cp_event, cp_stream));
+  }
+
  public:
   torch::Tensor
   gemm_only_impl(
@@ -635,6 +668,171 @@ class AGKernelCrossNode : public torch::CustomClassHolder {
       }
     }
   }
+
+  void
+  copy_local_ring(int phase_id, at::cuda::CUDAStream stream) {
+    int segment_offset = local_world_size * phase_id;
+    // segment_offset % local_world_size == 0
+    // [0, local_world_size) stages:  0 <- 1 <- 2 <- 3 <- 4 <- 5 <- 6 <- 7 <- 0
+    // [local_world_size, world_size) stages: 0 <- 1 <- 2 <-3 <- 0 && 4 <- 5 <- 6 <- 7 <- 4
+    int to_rank =
+        (local_rank - 1 + local_world_size) % local_world_size;  // always recv data from rank prev
+    bool has_cross_numa_send = rank % intra_numa_world_size == 0;
+    bool has_cross_numa_recv = (rank + 1) % intra_numa_world_size == 0;
+    bool has_cross_numa = has_cross_numa_recv && has_cross_numa_send;
+    int numa_node = local_rank / intra_numa_world_size;
+    for (int i = 0; i < local_world_size - 1; i++) {  // with inner and intra numa node
+      int send_segment = (local_rank + i) % local_world_size;
+      if (i >= intra_numa_world_size && local_rank % intra_numa_world_size == 0) {
+        send_segment = (send_segment + intra_numa_world_size) % local_world_size;
+        to_rank = (local_rank - 1 + intra_numa_world_size) % intra_numa_world_size +
+                  numa_node * intra_numa_world_size;
+      }
+      bool run_nccl_comm =
+          (phase_id < this->nnodes - 1) &&
+          ((has_cross_numa && i == intra_numa_world_size) || (!has_cross_numa && i == 0));
+      // run_nccl_comm = (phase_id < this->nnodes - 1) && (i == 0);
+      run_nccl_comm = (phase_id < this->nnodes - 1) && (i == intra_numa_world_size);
+      if (run_nccl_comm) {
+        auto nccl_stream = nccl_streams[0];
+        CUDA_CHECK(cudaEventRecord(this->cp_event, stream));
+        CUDA_CHECK(cudaStreamWaitEvent(nccl_stream, this->cp_event));
+        wait_cross_numa_done(phase_id, nccl_stream);
+        // wait for cross numa stages copy done
+        copy_to_next_node(phase_id + 1);
+      }
+      send_segment = (segment_offset + send_segment + this->node_id * this->local_world_size) %
+                     this->world_size;  // segment_offset % local_world_size == 0
+
+      for (int j = 0; j < SPLIT; ++j) {
+        auto split_offset = j * this->split_chunk_size;
+        auto split_signal = j * this->split_signal_size;
+        auto data_offset = send_segment * chunk_size + split_offset;
+        auto signal_offset = send_segment * signal_size + split_signal;
+        void *send_ptr = ptr_offset(this->input_ptrs[local_rank], data_offset);
+        void *recv_ptr = ptr_offset(this->input_ptrs[to_rank], data_offset);
+        void *signal_ptr = ptr_offset(barrier_ptrs[to_rank], signal_offset);
+        void *local_signal_ptr = ptr_offset(barrier_ptrs[local_rank], signal_offset);
+        // make sure i == 0
+        if (i != 0 && !(i >= intra_numa_world_size && local_rank % intra_numa_world_size == 0)) {
+          // previous local_rank recv done
+          if (wait_value()) {
+            CU_CHECK(CUStreamWaitValue(
+                stream, (CUdeviceptr)(local_signal_ptr), 1, CU_STREAM_WAIT_VALUE_EQ));
+          }
+        }
+        CUDA_CHECK(cudaMemcpyAsync(
+            recv_ptr, send_ptr, this->split_chunk_size, cudaMemcpyDeviceToDevice, stream));
+        if (write_value()) {
+          CU_CHECK(CUStreamWriteValue(
+              stream, (CUdeviceptr)(signal_ptr), 1, CU_STREAM_WRITE_VALUE_DEFAULT));
+        }
+      }
+    }
+  }
+
+  void
+  copy_ring_1d_push() {  // use 1d ring
+    auto cp_stream = this->cp_streams[0];
+    auto nccl_stream = this->nccl_streams[0];
+    CUDA_CHECK(cudaStreamWaitEvent(cp_stream, this->ready_event));
+    CUDA_CHECK(cudaStreamWaitEvent(nccl_stream, this->ready_event));
+    // always the  0 <- 1 <- 2 <- 3 <- xxx order
+    int from_rank = (this->rank + 1) % this->world_size;  // always copy from rank next
+    int to_rank =
+        (this->rank - 1 + this->world_size) % this->world_size;  // always copy to rank prev
+    int local_to_rank = to_rank % this->local_world_size;
+    for (int i = 0; i < this->world_size - 1; i++) {
+      int send_segment = (this->rank + i) % this->world_size;
+      int recv_segment = (this->rank + i + 1) % this->world_size;
+      for (int j = 0; j < SPLIT; ++j) {
+        auto data_offset = send_segment * this->chunk_size + j * this->split_chunk_size;
+        auto recv_data_offset = recv_segment * this->chunk_size + j * this->split_chunk_size;
+        auto signal_offset = send_segment * this->signal_size + j * this->split_signal_size;
+        void *send_ptr = ptr_offset(this->input_ptrs[this->local_rank], data_offset);
+        void *signal_ptr = ptr_offset(barrier_ptrs[local_to_rank], signal_offset);
+        void *local_signal_ptr = ptr_offset(barrier_ptrs[this->local_rank], signal_offset);
+        if (i != 0 && wait_value()) {  // previous rank recv done. i == 0 it is always ready
+          CU_CHECK(CUStreamWaitValue(
+              cp_stream, (CUdeviceptr)(local_signal_ptr), 1, CU_STREAM_WAIT_VALUE_EQ));
+        }
+        bool inter_node_recv = (this->rank + 1) % local_world_size == 0;
+        bool inter_node_send = this->rank % local_world_size == 0;  // 2->1->0->world_size-1->xxx
+        if (inter_node_recv) {
+          void *recv_ptr = ptr_offset(this->input_ptrs[this->local_rank], recv_data_offset);
+          // NOTE: recv stream also send. use no cp_stream for recv
+          CUDA_CHECK(cudaEventRecord(nccl_event, cp_stream));
+          CUDA_CHECK(cudaStreamWaitEvent(nccl_stream, nccl_event));
+          if (run_nccl()) {
+            NCCL_CHECK(ncclGroupStart());
+            NCCL_CHECK(ncclRecv(
+                recv_ptr, this->split_chunk_size, ncclInt8, from_rank, nccl_comm, nccl_stream));
+            NCCL_CHECK(ncclGroupEnd());
+          }
+          if (write_value()) {
+            auto recv_signal_offset =
+                recv_segment * this->signal_size + j * this->split_signal_size;
+            void *recv_signal_ptr = ptr_offset(barrier_ptrs[this->local_rank], recv_signal_offset);
+            CU_CHECK(CUStreamWriteValue(
+                nccl_stream, (CUdeviceptr)(recv_signal_ptr), 1, CU_STREAM_WRITE_VALUE_DEFAULT));
+          }
+          CUDA_CHECK(cudaEventRecord(nccl_event, nccl_stream));
+        }
+        if (inter_node_send && run_nccl()) {
+          // copy data and set peer signal
+          NCCL_CHECK(ncclGroupStart());
+          NCCL_CHECK(ncclSend(
+              send_ptr, this->split_chunk_size, ncclInt8, to_rank, nccl_comm, nccl_stream));
+          NCCL_CHECK(ncclGroupEnd());
+          CUDA_CHECK(cudaEventRecord(nccl_event, nccl_stream));
+        } else if (!inter_node_send) {
+          void *recv_ptr = ptr_offset(this->input_ptrs[local_to_rank], data_offset);
+          if (run_memcpy()) {
+            CUDA_CHECK(cudaMemcpyAsync(
+                recv_ptr, send_ptr, this->split_chunk_size, cudaMemcpyDeviceToDevice, cp_stream));
+          }
+          if (write_value()) {
+            CU_CHECK(CUStreamWriteValue(
+                cp_stream, (CUdeviceptr)(signal_ptr), 1, CU_STREAM_WRITE_VALUE_DEFAULT));
+          }
+        }
+        if (inter_node_recv) {
+          // do we really need this wait? or next iter wait local_signal_ptr is enough
+          CUDA_CHECK(cudaStreamWaitEvent(cp_stream, nccl_event));
+        }
+        CUDA_CHECK(cudaStreamWaitEvent(cp_stream, nccl_event));
+      }
+    }
+  }
+
+  void
+  ring_all_gather(at::cuda::CUDAStream stream) {
+    ring_all_gather_reorder<0, FLUX_AG_RING_ORDER>(stream);
+  }
+
+  template <int reordered, typename Transfer, typename... Transfers>
+  void
+  ring_all_gather_reorder(at::cuda::CUDAStream stream) {
+    if (Transfer::exec_rank == this->rank) {
+      ring_all_gather_run<Transfer::src_idx, Transfer::dst_idx, Transfer, Transfers...>(stream);
+    } else {
+      if constexpr (reordered + 1 <= sizeof...(Transfers)) {
+        ring_all_gather_reorder<reordered + 1, Transfers..., Transfer>(stream);
+      }
+    }
+  }
+
+  template <int src_rank, int dst_rank, typename Transfer, typename... Transfers>
+  void
+  ring_all_gather_run(at::cuda::CUDAStream stream) {
+    Transfer::run(
+        input_ptrs, barrier_ptrs, src_rank, dst_rank, chunk_size, split_chunk_size, stream);
+    ring_all_gather_run<src_rank, dst_rank, Transfers...>(stream);
+  }
+
+  template <int src_rank, int dst_rank>
+  void
+  ring_all_gather_run(at::cuda::CUDAStream stream) {}
 
   RuntimeConfig
   get_rt_config(torch::Tensor input, torch::Tensor weight) {

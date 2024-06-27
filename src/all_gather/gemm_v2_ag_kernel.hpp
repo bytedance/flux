@@ -17,6 +17,10 @@
 
 #pragma once
 
+#include <any>
+#include "cute/container/tuple.hpp"
+#include "cute/util/type_traits.hpp"
+#include "cutlass/arch/arch.h"
 #include "flux/flux.h"
 #include "flux/gemm_meta.h"
 #include "flux/gemm_hparams.h"
@@ -40,6 +44,7 @@ class GemmV2AGKernel
   static constexpr auto comm_spec = hparams.comm_spec();
 
   static_assert(meta.comm_op() == _AGKernel{}, "requires _AGKernel{}");
+  static constexpr bool raster_alongN = hparams.raster_order() == _RasterAlongN{};
 
   auto
   tb_swizzle() const {
@@ -59,6 +64,12 @@ class GemmV2AGKernel
   auto
   gemm_kernel() const {
     auto params = this->kernel_params();
+
+    using Operator = cute::conditional_t<
+        to_gemm_v2_meta(meta.impl_spec()).fast_accum(),
+        cutlass::arch::OpMultiplyAddFastAccum,
+        cutlass::arch::OpMultiplyAdd>;
+
     using ElementCompute = typename Base::ElementD;
     using Impl = cutlass::gemm::kernel::Sm80GemmWithVisitor<
         typename Base::ElementA,
@@ -146,12 +157,13 @@ class GemmV2AGKernel
 
  public:
   auto
-  to_gemm_args(std::any const &args) const {
+  to_gemm_args(std::any const &args, void *args_workspace) const {
     return to_gemm_args_impl(std::any_cast<AGKernelArguments>(args));
   }
 };
 
 using namespace cute;
+using namespace bytedance::flux;
 struct GemmV2AGKernel_Space : OpSpaceBase<GemmV2AGKernel_Space> {
   static constexpr auto AllGemmMeta = make_space_gemm_meta(
       cute::make_tuple(

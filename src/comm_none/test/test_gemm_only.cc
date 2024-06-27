@@ -100,7 +100,11 @@ main(int argc, char *argv[]) {
 
   try {
     using namespace bytedance::flux;
-    if (dtype == "FP16" or dtype == "fp16") {
+    if (dtype == "FP8" or dtype == "fp8") {
+      assert((int)get_arch() > (int)_Sm80{}());
+      bytedance::flux::run_gemm_only<decltype(make_gemm_dtype_config(
+          _E4M3{}, _E4M3{}, _BF16{}, _BF16{}))>(m, n, k);
+    } else if (dtype == "FP16" or dtype == "fp16") {
       bytedance::flux::run_gemm_only<decltype(make_gemm_dtype_config(
           _FP16{}, _FP16{}, _Void{}, _FP16{}))>(m, n, k);
     } else if (dtype == "BF16" or dtype == "bf16") {

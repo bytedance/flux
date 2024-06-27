@@ -17,7 +17,21 @@
 
 import torch
 import sys
-from contextlib import nullcontext
+from contextlib import nullcontext, contextmanager
+
+
+def _get_torch_fp8_dtypes():
+    _torch_fp8_dtypes = []
+    try:
+        # from v2.1.0
+        _torch_fp8_dtypes.append(torch.float8_e4m3fn)
+        _torch_fp8_dtypes.append(torch.float8_e5m2)
+        # from v2.2.0
+        _torch_fp8_dtypes.append(torch.float8_e4m3fnuz)
+        _torch_fp8_dtypes.append(torch.float8_e5m2fnuz)
+    except Exception:
+        pass
+    return _torch_fp8_dtypes
 
 
 def get_arch():
@@ -27,11 +41,40 @@ def get_arch():
     return major * 10 + minor
 
 
-def estimate_gemm_sol_time_ms(M: int, N: int, K: int):
+def estimate_gemm_sol_time_ms(M: int, N: int, K: int, dtype=torch.bfloat16):
+    """refer to this: https://arnon.dk/matching-sm-architectures-arch-and-gencode-for-various-nvidia-cards/"""
+
+    def _get_flops():
+        device_name = torch.cuda.get_device_name(
+            torch.cuda.current_device()
+        )  # arch is not a good idea. using device name is better.
+        is_fp16 = dtype in [torch.bfloat16, torch.float16]
+        is_fp8 = is_fp8_dtype(dtype)
+        assert is_fp16 or is_fp8
+        # https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-nvidia-us-2188504-web.pdf
+        # "NVIDIA A100 80GB PCIe" or "NVIDIA A100-SXM4-80GB" or "A100-SXM4-40GB"
+        if device_name.find("A100") >= 0 or device_name.find("A800") >= 0:
+            assert is_fp16
+            return 312
+        if device_name == "NVIDIA L20":  # No doc from NVIDIA
+            return 119 if is_fp16 else 239
+        # https://www.nvidia.com/en-us/data-center/l4/
+        if device_name == "NVIDIA L4":
+            return 121 if is_fp16 else 242
+        # https://images.nvidia.com/content/Solutions/data-center/vgpu-L40-datasheet.pdf
+        if device_name == "NVIDIA L40":
+            return 181 if is_fp16 else 362
+        # https://www.nvidia.com/en-us/data-center/l40s/
+        if device_name == "NVIDIA L40S":
+            return 366 if is_fp16 else 733
+        # https://www.nvidia.com/en-us/data-center/h100/
+        if device_name == "NVIDIA H100" or device_name == "NVIDIA H800":
+            return 989 if is_fp16 else 1979
+
+        raise Exception(f"not supported device {device_name}")
+
     flops = M * N * K * 2
-    arch = get_arch()
-    max_tflops = {80: 312, 89: 119, 90: 989}
-    return flops / max_tflops[arch] / 1e9
+    return flops / _get_flops() / 1e9
 
 
 def torch_allclose(x, y, rtol, atol):
@@ -74,13 +117,23 @@ def get_torch_prof_ctx(do_prof: bool):
 
 
 def is_fp8_dtype(dtype: torch.dtype) -> bool:
-    return dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+    return dtype in _get_torch_fp8_dtypes()
+
+
+@contextmanager
+def with_torch_deterministic(mode: bool, warn_only: bool = True):
+    old_mode = torch.are_deterministic_algorithms_enabled()
+    torch.use_deterministic_algorithms(mode, warn_only=warn_only)
+    yield
+    torch.use_deterministic_algorithms(old_mode, warn_only=warn_only)
 
 
 __all__ = [
+    "is_fp8_dtype",
     "get_arch",
     "estimate_gemm_sol_time_ms",
     "torch_allclose",
     "get_torch_prof_ctx",
     "is_fp8_dtype",
+    "with_torch_deterministic",
 ]

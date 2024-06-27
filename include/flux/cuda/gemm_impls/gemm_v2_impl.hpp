@@ -43,6 +43,7 @@
 #include "cutlass/arch/arch.h"
 #include "cutlass/layout/matrix.h"
 #include "cutlass/detail/helper_macros.hpp"
+#include "cutlass/conv/convolution.h"
 #include "cutlass/util/packed_stride.hpp"
 #include "cutlass/gemm/kernel/tile_scheduler.hpp"
 #include "cutlass/gemm/threadblock/threadblock_swizzle.h"
@@ -146,6 +147,7 @@ struct GemmV2Impl
   static constexpr int EVTEpilogueStages = 1;
 
   static constexpr bool is_fp8_gemm = is_fp8_dtype(dt_conf.a()) && is_fp8_dtype(dt_conf.b());
+  static constexpr bool is_sm89 = (meta.arch() == _Sm89{});
 
   template <class... Ts>
   auto
@@ -210,53 +212,125 @@ struct GemmV2Impl
 
   auto
   default_kernel_params() const {
-    using TBSwizzle = cutlass::gemm::threadblock::ThreadblockSwizzleStreamK;
+    if constexpr (cute::is_same_v<ArchTag, cutlass::arch::Sm89> && this->is_fp8_gemm) {
+      using SM89TBSwizzle = cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<8>;
 
-    using AlignmentC_Type = cute::Int<128 / cute::sizeof_bits_v<ElementCNoVoid>>;
+      // using SM89AlignmentC = cute::min(8, 128 / cutlass::sizeof_bits_v<ElementCNoVoid>);
+      using SM89AlignmentC_Type = cute::Int<8>;
 
-    using namespace cutlass::epilogue::threadblock;
-    auto kparams = gemm_v2_impl::KernelParams<TBSwizzle, AlignmentC_Type, void>();
-    using OutputTileThreadMap = decltype(this->output_tile_thread_map(kparams));
-    using EVT_D = decltype(this->evt_d(kparams));
-    using StoreD = VisitorAuxStore<
-        OutputTileThreadMap,
-        ElementD,
-        cutlass::FloatRoundStyle::round_to_nearest,
-        cute::Stride<int64_t, cute::_1, int64_t>>;
-    using EVT = Sm80EVT<StoreD, EVT_D>;
-    return gemm_v2_impl::KernelParams<TBSwizzle, AlignmentC_Type, EVT>();
+      using SM89Epilogue = cutlass::epilogue::thread::LinearCombinationGenericWithScalingAndAbsMax<
+          cutlass::epilogue::thread::Identity,  // maybe not need this, so use Identity
+          ElementCNoVoid,
+          ElementCNoVoid,
+          SM89AlignmentC_Type{},
+          ElementAccumulator,
+          ElementAccumulator>;
+
+      return gemm_v2_impl::KernelParams<SM89TBSwizzle, SM89AlignmentC_Type, SM89Epilogue>();
+    } else {
+      using TBSwizzle = cutlass::gemm::threadblock::ThreadblockSwizzleStreamK;
+
+      using AlignmentC_Type = cute::Int<128 / cute::sizeof_bits_v<ElementCNoVoid>>;
+
+      using namespace cutlass::epilogue::threadblock;
+      auto kparams = gemm_v2_impl::KernelParams<TBSwizzle, AlignmentC_Type, void>();
+      using OutputTileThreadMap = decltype(this->output_tile_thread_map(kparams));
+      using EVT_D = decltype(this->evt_d(kparams));
+      using StoreD = VisitorAuxStore<
+          OutputTileThreadMap,
+          ElementD,
+          cutlass::FloatRoundStyle::round_to_nearest,
+          cute::Stride<int64_t, cute::_1, int64_t>>;
+      using EVT = Sm80EVT<StoreD, EVT_D>;
+      return gemm_v2_impl::KernelParams<TBSwizzle, AlignmentC_Type, EVT>();
+    }
   }
 
   template <class... Ts>
   auto
   default_gemm_kernel(gemm_v2_impl::KernelParams<Ts...> params) const {
-    using ElementCompute = ElementD;
+    /*
+    Ada FP8 GEMM.
 
-    using Impl = cutlass::gemm::kernel::DefaultGemmWithVisitor<
-        ElementA,
-        GmemLayoutA,
-        cutlass::ComplexTransform::kNone,
-        AlignmentA,
-        ElementB,
-        GmemLayoutB,
-        cutlass::ComplexTransform::kNone,
-        AlignmentB,
-        ElementCNoVoid,
-        GmemLayoutC,
-        params.alignment_c(),
-        ElementAccumulator,
-        ElementCompute,
-        OpClass,
-        ArchTag,
-        ThreadblockShape,
-        WarpShape,
-        InstructionShape,
-        decltype(params.evt()),
-        decltype(params.tb_swizzle()),
-        hparams.mainloop_stage(),
-        cutlass::arch::OpMultiplyAdd,
-        EVTEpilogueStages>;
-    return make_declval<typename Impl::GemmKernel>();
+    In addition to using FP8 Tensor Core instructions, the Ada FP8 GEMM uses a distinct epilogue
+    that enables additional scaling of operands/outputs, storing a pre-activation-function output
+    tensor (called the "auxiliary" output), and computing the absolute maximum value of the
+    outputs.
+
+    Pseudocode for this epilogue is as follows:
+
+    Aux = ((alpha * scale_a * scale_b) * accumulator) + ((beta * scale_c) * source) + bias
+    D = activation(Aux)
+
+    if Aux is fp8 type:
+        abs_max_output = max( abs(aux) | (for every aux in Aux))
+        Aux = scale_aux * Aux
+    endif
+
+    if D is fp8 type:
+        abs_max_output = max( abs(d) | (for every d in D))
+        D = scale_d * D
+    endif
+
+    Parameter Aux is optionally stored to global memory
+    */
+
+    using Operator = cute::conditional_t<
+        to_gemm_v2_meta(meta.impl_spec()).fast_accum(),
+        cutlass::arch::OpMultiplyAddFastAccum,
+        cutlass::arch::OpMultiplyAdd>;
+    if constexpr (cute::is_same_v<ArchTag, cutlass::arch::Sm89> && this->is_fp8_gemm) {
+      using SM89Impl = cutlass::gemm::kernel::DefaultGemmWithAbsMax<
+          ElementA,
+          GmemLayoutA,
+          cutlass::ComplexTransform::kNone,
+          AlignmentA,
+          ElementB,
+          GmemLayoutB,
+          cutlass::ComplexTransform::kNone,
+          AlignmentB,
+          ElementCNoVoid,
+          GmemLayoutC,
+          ElementAccumulator,
+          OpClass,
+          ArchTag,
+          ThreadblockShape,
+          WarpShape,
+          InstructionShape,
+          decltype(params.evt()),
+          decltype(params.tb_swizzle()),
+          hparams.mainloop_stage(),
+          Operator>;
+      return make_declval<typename SM89Impl::GemmKernel>();
+    } else {
+      using ElementCompute = ElementD;
+
+      using Impl = cutlass::gemm::kernel::DefaultGemmWithVisitor<
+          ElementA,
+          GmemLayoutA,
+          cutlass::ComplexTransform::kNone,
+          AlignmentA,
+          ElementB,
+          GmemLayoutB,
+          cutlass::ComplexTransform::kNone,
+          AlignmentB,
+          ElementCNoVoid,
+          GmemLayoutC,
+          params.alignment_c(),
+          ElementAccumulator,
+          ElementCompute,
+          OpClass,
+          ArchTag,
+          ThreadblockShape,
+          WarpShape,
+          InstructionShape,
+          decltype(params.evt()),
+          decltype(params.tb_swizzle()),
+          hparams.mainloop_stage(),
+          cutlass::arch::OpMultiplyAdd,
+          EVTEpilogueStages>;
+      return make_declval<typename Impl::GemmKernel>();
+    }
   }
 
   auto
@@ -283,7 +357,7 @@ struct GemmV2Impl
 
   auto
   to_gemm_args(std::any const &args, void *args_workspace) const {
-    return static_cast<DerivedImpl const *>(this)->to_gemm_args(args);
+    return static_cast<DerivedImpl const *>(this)->to_gemm_args(args, args_workspace);
   }
 
  protected:

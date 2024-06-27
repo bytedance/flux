@@ -1,20 +1,4 @@
-################################################################################
-#
-# Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-################################################################################
-
+from enum import Enum
 import torch
 import torch.distributed as dist
 from typing import Optional, List
@@ -25,6 +9,12 @@ def uniform_initialize(tensor: torch.Tensor, seed: int, min: float, max: float) 
 
 class TuningRecord:
     pass
+
+class AgRingMode(Enum):
+    All2All = ...
+    Ring1D = ...
+    Ring2D = ...
+    Auto = ...
 
 def load_tuning_record(record: TuningRecord) -> None: ...
 
@@ -44,12 +34,24 @@ class DistEnvTPWithEP:
         tp_group: dist.ProcessGroup, nnodes: int, ep_group: Optional[dist.ProcessGroup] = None
     ) -> None: ...
 
+class MoeArguments:
+    def __init__(
+        max_ntokens: int,
+        hidden: int,
+        ffn_hidden: int,
+        nexperts: int,
+        topk: int,
+        input_dtype=torch.dtype,
+        output_dtype: Optional[torch.dtype] = None,
+    ) -> None: ...
+
 class GemmOnly:
     def __init__(
         self,
         input_dtype: torch.dtype,
         output_dtype: Optional[torch.dtype] = None,
         transpose_weight: bool = False,
+        use_fp8_gemm: bool = False,
     ): ...
     def forward(
         self,
@@ -57,6 +59,9 @@ class GemmOnly:
         weight: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
         output_buf: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
         fast_accum: bool = False,
     ) -> torch.Tensor: ...
     def profiling(
@@ -65,6 +70,9 @@ class GemmOnly:
         weight: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
         output_buf: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
         fast_accum: bool = False,
         prof_ctx: Optional[ProfilingContext] = None,
     ) -> torch.Tensor: ...
@@ -82,10 +90,24 @@ class GemmRS:
         fuse_reduction=False,
     ): ...
     def forward(
-        self, input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
     ) -> torch.Tensor: ...
     def forward_gemm(
-        self, input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
     ) -> None: ...
     def forward_barrier(
         self, input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None
@@ -99,6 +121,10 @@ class GemmRS:
         input: torch.Tensor,
         weight: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
         prof_ctx: Optional[ProfilingContext] = None,
     ) -> torch.Tensor: ...
 
@@ -146,14 +172,28 @@ class AGKernel:
         output_dtype: Optional[torch.dtype] = None,
         transpose_weight: bool = True,
         local_copy: bool = True,
-        ring_mode: int = -1,
+        ring_mode: AgRingMode = AgRingMode.Auto,
     ): ...
     def forward_allgather(self, input: torch.Tensor) -> None: ...
     def forward_gemm(
-        self, input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
     ) -> torch.Tensor: ...
     def forward(
-        self, input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
     ) -> torch.Tensor: ...
     def gather(self) -> torch.Tensor: ...
     def reset_signals(self) -> None: ...
@@ -163,6 +203,10 @@ class AGKernel:
         input: torch.Tensor,
         weight: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
         prof_ctx: Optional[ProfilingContext] = None,
     ) -> torch.Tensor: ...
 
@@ -178,11 +222,103 @@ class AGKernelCrossNode:
         input_dtype: torch.dtype,
         transpose_weight: bool = True,
         local_copy: bool = False,
-        ring_mode: int = -1,  # 0 for nvlink, 2 for 2d ring. 1 for 1d ring. -1 for auto selection: 0 for NVLINK machine and 2 for PCI-e machine
+        ring_mode: AgRingMode = AgRingMode.Auto,
     ): ...
     def reset_signals(self) -> None: ...
     def copy_local(self, input: torch.Tensor) -> None: ...
     def forward(self, input: torch.Tensor, weight: torch.Tensor) -> torch.Tensor: ...
     def gemm_only(
         self, input: torch.Tensor, full_input: torch.Tensor, weight: torch.Tensor
+    ) -> torch.Tensor: ...
+
+class All2AllOp:
+    def __init__(self, rank: int, world_size: int, recv_buffer: torch.Tensor): ...
+    def forward(self, send_buffer: List[torch.Tensor]) -> None: ...
+
+class GemmGrouped:
+    def __init__(self, weight: torch.Tensor, num_experts: int): ...
+    def forward(self, input: torch.Tensor, split_cpu: torch.Tensor) -> torch.Tensor: ...
+
+class GemmGroupedV3:
+    def __init__(self, weight: torch.Tensor, num_experts: int): ...
+    def forward(self, input: torch.Tensor, split_cpu: torch.Tensor) -> torch.Tensor: ...
+
+class GemmGroupedV3AGScatter:
+    def __init__(self, tp_env: DistEnvTP, moe_args: MoeArguments): ...
+    def forward(
+        self,
+        inputs_shard: torch.Tensor,
+        weights: torch.Tensor,
+        splits_gpu: torch.Tensor,
+        scatter_index: torch.Tensor,
+        output_scale: Optional[torch.Tensor] = None,
+        outputs_buf: Optional[torch.Tensor] = None,
+        allgather_output: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
+        sm_mrgin: int = 0,
+    ) -> torch.Tensor: ...
+    def forward_multiple_weights(
+        self,
+        inputs_shard: torch.Tensor,
+        weights: List[torch.Tensor],
+        splits_gpu: torch.Tensor,
+        scatter_index: torch.Tensor,
+        output_scale: Optional[List[torch.Tensor]] = None,
+        outputs_buf: Optional[List[torch.Tensor]] = None,
+        allgather_output: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
+        sm_mrgin: int = 0,
+    ) -> List[torch.Tensor]: ...
+    def clear_buffers(self) -> None: ...
+    def profiling(
+        self,
+        inputs_shard: torch.Tensor,
+        weights: List[torch.Tensor],
+        splits_gpu: torch.Tensor,
+        scatter_index: torch.Tensor,
+        output_scale: Optional[List[torch.Tensor]] = None,
+        outputs_buf: Optional[List[torch.Tensor]] = None,
+        allgather_output: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
+        sm_mrgin: int = 0,
+        prof_ctx: Optional[ProfilingContext] = None,
+    ) -> List[torch.Tensor]: ...
+
+class GemmGroupedV3GatherRS:
+    def __init__(
+        self,
+        num_experts: int,
+        max_m: int,
+        n_dim: int,
+        topk: int,
+        rank: int,
+        world_size: int,
+        tp_world_size: int,
+        ep_world_size: int,
+    ): ...
+    def forward_gather_rs(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        split_cpu: torch.Tensor,
+        scatter_idx: torch.Tensor,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fastacc: bool = True,
+        sm_mrgin: int = 0,
+        with_stream_sync: bool = False,
+    ) -> torch.Tensor: ...
+    def forward_gather_rs_multiple(
+        self,
+        input: List[torch.Tensor],
+        weight: List[torch.Tensor],
+        split_cpu: torch.Tensor,
+        scatter_idx: torch.Tensor,
+        input_scale: Optional[List[torch.Tensor]] = None,
+        weight_scale: Optional[List[torch.Tensor]] = None,
+        output_scale: Optional[List[torch.Tensor]] = None,
+        fastacc: bool = True,
+        sm_mrgin: int = 0,
+        with_stream_sync: bool = False,
     ) -> torch.Tensor: ...

@@ -141,7 +141,7 @@ struct VisitorAuxStoreScatter {
     }
     params.has_barrier_ptr = args.barrier_ptr_aux != nullptr;
     params.use_barrier_queue = args.use_barrier_queue;  // only works for PCI-e mode
-    params.use_gemmk = args.use_gemmk && false;         // only works for PCI-e mode
+    params.use_gemmk = args.use_gemmk && kPcieMode;     // only works for PCI-e mode
     params.n_split = args.n_split;                      // not used now.
     params.per_tile_flags = args.per_tile_flags;        // not used for PCI-e mode
     return params;
@@ -257,7 +257,21 @@ struct VisitorAuxStoreScatter {
       auto dst_v = filter(tC_gAux(_, _, _, step_idx));
       auto shape = cute::make_shape(m_end, size<1>(problem_shape), size<2>(problem_shape));
 
-      {
+      if constexpr (kPcieMode) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < size(src_v); ++i) {
+          bool guard = elem_less(coord_v(i), shape);
+          if constexpr (FuseReduction) {
+            static_assert(
+                std::is_same_v<Element, half_t>, "global_red support bfloat16 only on sm90+");
+            cutlass::arch::global_red<VecType, sizeof(VecType), half_t>(
+                src_v(i), (void *)&dst_v(i), guard);
+          } else {
+            cutlass::arch::global_store<VecType, sizeof(VecType)>(
+                src_v(i), (void *)&dst_v(i), guard);
+          }
+        }
+      } else {
         auto dst_flat = flatten(tC_cAux.layout().shape());
         int dst_step = size(take<3, 6>(dst_flat));
 
@@ -292,6 +306,56 @@ struct VisitorAuxStoreScatter {
     end_epilogue() {
       using Barrier = cutlass::Barrier;
       char *barrier_ptr = (char *)params.barrier_ptr_aux[params.rank];
+      if constexpr (kPcieMode) {
+        using namespace bytedance::flux;
+        constexpr int kM = ThreadblockShape::kM;
+        constexpr int kN = ThreadblockShape::kN;
+        int tiled_m = (size<0>(problem_shape) + kM - 1) / kM;
+        int tiled_n = (size<1>(problem_shape) + kN - 1) / kN;
+        int num_tiles = tiled_m * tiled_n;
+        if (params.per_tile_flags) {
+          auto flag = PerTileFlagsWrapper(barrier_ptr, num_tiles);
+          if (params.use_barrier_queue && thread_idx == 0) {
+            auto work_queue_flag =
+                BarrierWorkQeueuFlagsWrapper(flag.extra_ptr(0), params.world_size);
+            int tiled_m_per_rank = tiled_m / params.world_size;
+            int m_segment = (tile_idx / tiled_n) / tiled_m_per_rank;
+            // lock area start
+            int head_value = atomicAdd(work_queue_flag.epilogue_done_ptr(m_segment), 1);
+            atomic_store_dev(flag.epilogue_queue_ptr(head_value), tile_idx + 1);
+          }
+          Barrier::arrive_inc((void *)flag.epilogue_ptr(tile_idx), thread_idx, 0, 1);
+        } else {
+          __syncthreads();
+          auto wrapper = PerRankFlagsWrapper(barrier_ptr, params.world_size * params.n_split);
+          if (thread_idx == 0) {
+            int m = size<0>(problem_shape);
+            int tiled_n = (size<1>(problem_shape) + kN - 1) / kN;
+            int segment_idx = tile_idx / tiled_n;
+            int m_per_rank = m / params.world_size;
+            if (params.use_gemmk) {
+              int segments_per_rank = (m_per_rank + kM - 1) / kM;  // gemmk only
+              int counter = atomicAdd(wrapper.counter_ptr(segment_idx), 1);
+              if (counter == tiled_n * segments_per_rank - 1) {
+                atomic_add_release_dev(wrapper.gemm_done_ptr(segment_idx), 1);
+              }
+            } else {
+              int m_start = segment_idx * kM, m_end = std::min((segment_idx + 1) * kM, m) - 1;
+              int segment_start = m_start / m_per_rank, segment_end = m_end / m_per_rank;
+              for (int i = segment_start; i <= segment_end; i++) {
+                // tiled per rank
+                int tiled_m_start = i * m_per_rank / kM;
+                int tiled_m_end = ((i + 1) * m_per_rank - 1) / kM;
+                int m_seg_size = tiled_m_end - tiled_m_start + 1;
+                int counter = atomicAdd(wrapper.counter_ptr(i), 1);
+                if (counter == tiled_n * m_seg_size - 1) {
+                  atomic_add_release_dev(wrapper.gemm_done_ptr(i), 1);
+                }
+              }
+            }
+          }
+        }
+      }
     }
   };
 
@@ -309,7 +373,7 @@ struct VisitorAuxStoreScatter {
     int tiled_m = (M + kM - 1) / kM;
     int tiled_n = (N + kN - 1) / kN;
     int tiled_m_per_rank = tiled_m / params.world_size;
-    int dst_rank = (threadblock_tile_offset.m() / tiled_m_per_rank);
+    int dst_rank = kPcieMode ? params.rank : (threadblock_tile_offset.m() / tiled_m_per_rank);
 
     const int M_lines_per_rank = M / params.world_size;
     Element **smem_ptr = const_cast<Element **>(storage_ptr->smem_rs_ptrs.data());
@@ -335,7 +399,7 @@ struct VisitorAuxStoreScatter {
     const int m_offset_start = dst_offset.m() * kM;
     const int tid = threadIdx.x;
 
-    {
+    if constexpr (!kPcieMode) {
       if constexpr (FuseReduction) {
         if (threadIdx.x < kM) {
           int cur_row = m_offset_start + tid;
@@ -371,6 +435,15 @@ struct VisitorAuxStoreScatter {
             >;
         return recast<VecType>(group_modes<3, 6>(
             make_tensor(ptr, ThreadMapShapeFlatten{})(_, thread_idx, _, _, _, _, _)));
+      } else if constexpr (kPcieMode) {
+        Tensor mAux = make_tensor(
+            make_gmem_ptr(params.scatter_ptr_aux[dst_rank] + offset),
+            problem_shape,
+            params.dAux);  // (M,N,L)
+        // VECTOR, FRAGMENT_COLUMN, FRAGMENT_ROW, ITERATION_ROW, ITERATION_GROUP,
+        // ITERATION_CLUSTER
+        return recast<VecType>(
+            group_modes<3, 6>(ThreadMap::partition(mAux, thread_idx, dst_offset)));
       } else {
         Tensor mAux = make_tensor(
             make_gmem_ptr(params.scatter_ptr_aux[params.rank]), problem_shape, params.dAux);
@@ -389,7 +462,7 @@ struct VisitorAuxStoreScatter {
         (_0{}));
 
     uint32_t ptr_offset_start, row_offset_start, col_offset_start;
-    if (params.use_gemmk) {
+    if constexpr (kPcieMode) {
       ptr_offset_start = row_offset_start = col_offset_start = 0;
     } else {
       ptr_offset_start = reinterpret_cast<char *>(&tC_gAux(0)) -

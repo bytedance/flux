@@ -112,6 +112,8 @@ extern NVML nvml_stub_;
 
 NVML_STUB1(nvmlDeviceGetCount, unsigned int *);
 NVML_STUB3(nvmlDeviceGetCudaComputeCapability, nvmlDevice_t, int *, int *);
+NVML_STUB3(
+    nvmlDeviceGetNvLinkRemoteDeviceType, nvmlDevice_t, unsigned int, nvmlIntNvLinkDeviceType_t *);
 NVML_STUB3(nvmlDeviceGetFieldValues, nvmlDevice_t, int, nvmlFieldValue_t *);
 NVML_STUB2(nvmlDeviceGetHandleByIndex, unsigned int, nvmlDevice_t *);
 NVML_STUB2(nvmlDeviceGetHandleByPciBusId, const char *, nvmlDevice_t *);

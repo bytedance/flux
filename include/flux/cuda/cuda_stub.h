@@ -34,7 +34,8 @@ namespace bytedance::flux {
   _(cuStreamWriteValue32_v2) \
   _(cuStreamWaitValue64_v2)  \
   _(cuStreamWriteValue64_v2) \
-  _(cuStreamBatchMemOp_v2)
+  _(cuStreamBatchMemOp_v2)   \
+  _(cuCtxGetDevice)
 
 extern "C" {
 typedef struct CUDA {

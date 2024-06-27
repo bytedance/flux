@@ -26,7 +26,7 @@ import datetime
 import torch.distributed
 from contextlib import nullcontext
 import flux
-from flux import pynvshmem
+
 
 RANK = int(os.environ.get("RANK", 0))
 LOCAL_RANK = int(os.environ.get("LOCAL_RANK", 0))
@@ -271,8 +271,10 @@ DTYPE_MAP = {"bfloat16": torch.bfloat16, "float16": torch.float16}
 if __name__ == "__main__":
     torch.cuda.set_device(LOCAL_RANK)
     args = parse_args()
-    pynvshmem.init_with_c10d_pg(TP_GROUP)
+    print("before flux_shm initialization")
+    flux.init_flux_shm(TP_GROUP)
     torch.cuda.synchronize()
+    print("after flux_shm initialization")
 
     dtype = DTYPE_MAP[args.dtype]
     assert args.M % TP_GROUP.size() == 0

@@ -1,4 +1,4 @@
-//===- functions.cpp ---------------------------------------------- C++ ---===//
+//===- module.cpp ------------------------------------------------- C++ ---===//
 //
 // Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,7 +14,6 @@
 // limitations under the License.
 //
 //===----------------------------------------------------------------------===//
-
 #include <array>
 #include <c10/cuda/CUDAStream.h>
 #include <cstddef>

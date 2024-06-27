@@ -117,10 +117,10 @@ class CheckFail {
   ::bytedance::flux::detail::CheckFail() \
       << __FILE__ << ":" << __LINE__ << " Check failed: " #condition ". "
 
-#define FLUX_CHECK_BINOP(lhs, rhs, op)                                  \
-  if (auto x = (lhs), y = (decltype(x))(rhs); FLUX_UNLIKELY(!(x op y))) \
-  ::bytedance::flux::detail::CheckFail()                                \
-      << __FILE__ << ":" << __LINE__ << " Check failed: " << x << #lhs " " #op " " << y << #rhs
+#define FLUX_CHECK_BINOP(lhs, rhs, op)                                                            \
+  if (auto x = (lhs), y = (decltype(x))(rhs); FLUX_UNLIKELY(!(x op y)))                           \
+  ::bytedance::flux::detail::CheckFail() << __FILE__ << ":" << __LINE__ << " Check failed: " << x \
+                                         << "(" #lhs ") " #op " " << y << "(" #rhs ")"
 
 #define FLUX_CHECK_EQ(lhs, rhs) FLUX_CHECK_BINOP((lhs), (rhs), ==)
 #define FLUX_CHECK_NE(lhs, rhs) FLUX_CHECK_BINOP((lhs), (rhs), !=)
@@ -128,7 +128,10 @@ class CheckFail {
 #define FLUX_CHECK_GT(lhs, rhs) FLUX_CHECK_BINOP((lhs), (rhs), >)
 #define FLUX_CHECK_LE(lhs, rhs) FLUX_CHECK_BINOP((lhs), (rhs), <=)
 #define FLUX_CHECK_GE(lhs, rhs) FLUX_CHECK_BINOP((lhs), (rhs), >=)
-#define FLUX_CHECK_DIV(x, y) FLUX_CHECK((x) % (y) == 0) << #x << " % " << #y << " != 0"
+#define FLUX_CHECK_DIV(lhs, rhs)                                                                  \
+  if (auto x = (lhs), y = (decltype(x))(rhs); FLUX_UNLIKELY(x % y != 0))                          \
+  ::bytedance::flux::detail::CheckFail() << __FILE__ << ":" << __LINE__ << " Check failed: " << x \
+                                         << "(" #lhs ") % " << y << "(" #rhs ") != 0"
 
 // Convert T&,T&&, const T&... to basic T
 template <typename T>
@@ -449,18 +452,23 @@ tuple_has_elem(cute::tuple<Ts...> const &tup, Elem const &e) {
 // Enum classes
 /////////////////////////////////////////////////////
 enum class DataTypeEnum : int8_t { Void, FP16, BF16, FP32, E4M3, E5M2 };
-enum class ArchEnum : int { Sm80 = 80, Sm90 = 90 };
+enum class ArchEnum : int { Sm80 = 80, Sm89 = 89, Sm90 = 90 };
 enum class CommOpEnum : int8_t {
   CommNone,       // gemm only, wo/ communication
   AllGather,      // tp allgather + gemm, comm not fused into gemm kernel
   ReduceScatter,  // gemm + tp reduce-scatter
+  Gather,         // MoE tp, gemm + gather
+  GatherStore,    // MoE tp, gemm + gather + store rs intermediates
+  GatherRS,       // MoE tp, gemm + gather + rs
   AGKernel,       // tp allgather + gemm, comm fused into gemm kernel
+  All2AllStore,   // MoE ep, gemm + store all2all intermediates
+  AGScatter,      // MoE tp, ag + scatter + gemm
 };
 enum class GemmLayoutEnum : int8_t { RRR, RCR, RCC };
-enum class ImplEnum : int8_t { GemmV2, GemmV3 };
+enum class ImplEnum : int8_t { GemmV2, GemmV3, GemmGroupedV2, GemmGroupedV3 };
 
 enum class GemmKindEnum : int8_t { GemmDefault, GemmStreamK };
-enum class CommKindEnum : int8_t { IntraNode, AcrossNode };
+enum class CommKindEnum : int8_t { IntraNode, AcrossNode, IntraNodePcie };
 
 enum class GemmStreamkModeEnum : int8_t { SK, DP };
 enum class GemmRasterOrderEnum : int8_t { Heuristic, AlongM, AlongN };
@@ -472,11 +480,17 @@ enum class GemmKernelScheduleEnum : int8_t { Cooperative, PingPong };
 /////////////////////////////////////////////////////
 using _CommNone = cute::C<CommOpEnum::CommNone>;
 using _AllGather = cute::C<CommOpEnum::AllGather>;
-using _AGKernel = cute::C<CommOpEnum::AGKernel>;
 using _ReduceScatter = cute::C<CommOpEnum::ReduceScatter>;
+using _Gather = cute::C<CommOpEnum::Gather>;
+using _GatherStore = cute::C<CommOpEnum::GatherStore>;
+using _GatherRS = cute::C<CommOpEnum::GatherRS>;
+using _AGKernel = cute::C<CommOpEnum::AGKernel>;
+using _All2AllStore = cute::C<CommOpEnum::All2AllStore>;
+using _AGScatter = cute::C<CommOpEnum::AGScatter>;
 
 using _IntraNode = cute::C<CommKindEnum::IntraNode>;
 using _AcrossNode = cute::C<CommKindEnum::AcrossNode>;
+using _IntraNodePcie = cute::C<CommKindEnum::IntraNodePcie>;
 
 using _GemmDefault = cute::C<GemmKindEnum::GemmDefault>;
 using _GemmStreamK = cute::C<GemmKindEnum::GemmStreamK>;
@@ -493,10 +507,13 @@ using _RCR = cute::C<GemmLayoutEnum::RCR>;
 using _RCC = cute::C<GemmLayoutEnum::RCC>;
 
 using _Sm80 = cute::C<ArchEnum::Sm80>;
+using _Sm89 = cute::C<ArchEnum::Sm89>;
 using _Sm90 = cute::C<ArchEnum::Sm90>;
 
 using _GemmV2 = cute::C<ImplEnum::GemmV2>;
 using _GemmV3 = cute::C<ImplEnum::GemmV3>;
+using _GemmGroupedV2 = cute::C<ImplEnum::GemmGroupedV2>;
+using _GemmGroupedV3 = cute::C<ImplEnum::GemmGroupedV3>;
 
 using _True = cute::C<true>;
 using _False = cute::C<false>;
@@ -558,6 +575,12 @@ inline constexpr bool is_of_type_v =
 
 template <class T>
 inline constexpr bool is_flux_enum_v = detail::is_flux_enum_type<T>::value;
+
+template <class Impl, __CUTE_REQUIRES(is_of_type_v<Impl, ImplEnum>)>
+constexpr bool
+is_grouped_gemm_impl(Impl const &impl) {
+  return impl == _GemmGroupedV3{} or impl == _GemmGroupedV2{};
+}
 
 template <class DType, __CUTE_REQUIRES(is_of_type_v<DType, DataTypeEnum>)>
 constexpr bool
@@ -657,6 +680,11 @@ enum_to_string(CommOpEnum comm_op) {
     case CommOpEnum::AllGather: return "AllGather";
     case CommOpEnum::AGKernel: return "AGKernel";
     case CommOpEnum::ReduceScatter: return "ReduceScatter";
+    case CommOpEnum::Gather: return "Gather";
+    case CommOpEnum::GatherStore: return "GatherStore";
+    case CommOpEnum::GatherRS: return "GatherRS";
+    case CommOpEnum::All2AllStore: return "All2AllStore";
+    case CommOpEnum::AGScatter: return "AGScatter";
     default: return "UNK";
   }
 }
@@ -666,6 +694,7 @@ enum_to_string(CommKindEnum comm_t) {
   switch (comm_t) {
     case CommKindEnum::IntraNode: return "IntraNode";
     case CommKindEnum::AcrossNode: return "AcrossNode";
+    case CommKindEnum::IntraNodePcie: return "IntraNodePcie";
     default: return "UNK";
   }
 }
@@ -706,6 +735,7 @@ inline char const *
 enum_to_string(ArchEnum arch) {
   switch (arch) {
     case ArchEnum::Sm80: return "Sm80";
+    case ArchEnum::Sm89: return "Sm89";
     case ArchEnum::Sm90: return "Sm90";
     default: return "UNK";
   }
@@ -716,6 +746,8 @@ enum_to_string(ImplEnum version) {
   switch (version) {
     case ImplEnum::GemmV2: return "GemmV2";
     case ImplEnum::GemmV3: return "GemmV3";
+    case ImplEnum::GemmGroupedV2: return "GemmGroupedV2";
+    case ImplEnum::GemmGroupedV3: return "GemmGroupedV3";
     default: return "UNK";
   }
 }

@@ -14,38 +14,6 @@
 // limitations under the License.
 //
 //===----------------------------------------------------------------------===//
-// Some code from gemm_universal_streamk.h in NVIDIA cutlass project
-// Original license as follows
-/***************************************************************************************************
- * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- **************************************************************************************************/
 
 #pragma once
 
@@ -132,6 +100,7 @@ class Sm80AGGemmWithEpilogueVisitorStreamk {
   //
 
   //   using Arguments = typename Base::Arguments;
+  //---------------- copy from gemm_universal_streamk.h------------------------------
   /// Argument structure
   struct Arguments {
     //
@@ -350,8 +319,8 @@ class Sm80AGGemmWithEpilogueVisitorStreamk {
     int raster_order;
 
     /// offload
-    int n_data_chunks_sub1;
     int m_per_chunks;
+    int n_data_chunks_sub1;
 
    protected:
     //
@@ -428,7 +397,6 @@ class Sm80AGGemmWithEpilogueVisitorStreamk {
       // Number of SMs to make available for StreamK decomposition
       int avail_sms = (args.avail_sms == -1) ? device_sms : fast_min(args.avail_sms, device_sms);
 
-      // constexpr int TILE_SIZE_M = ThreadblockShape::kM;
       int n_data_chunks = args.world_size * SPLIT;
       m_per_chunks = args.problem_size.m() / n_data_chunks;
       n_data_chunks_sub1 = n_data_chunks - 1;
@@ -1005,7 +973,6 @@ class Sm80AGGemmWithEpilogueVisitorStreamk {
             SystemBarrier::wait_eq(params.ptr_barrier, thread_idx, chunkid, 1);
           }
         }
-
       } else {
         // SK blocks consume their tiles in backwards order
         tile_idx--;
