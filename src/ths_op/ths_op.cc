@@ -37,17 +37,6 @@
 #include <sstream>
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
 #include "flux/runtime_config.h"
-#include "nvshmem_pybind_func_impls.cc.inc"
-
-inline void
-init_with_c10d_pg(const c10d::ProcessGroup &c10_pg) {
-  nvshmemx_init_attr_t init_attr;
-  init_attr.mpi_comm = (void *)&c10_pg;  // bad! pretend I'm the MPIComm
-  nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &init_attr);
-  int mype = nvshmem_my_pe();
-  CHECK(c10_pg.getRank() == mype) << "NVShmem init: rank does not match PE!" << c10_pg.getRank()
-                                  << " vs " << mype;
-}
 
 namespace bytedance::flux::ths_op {
 
@@ -72,21 +61,20 @@ from_torch_dtype(at::ScalarType torch_dtype) {
   }
   return DataTypeEnum{};
 }
+
+bool
+is_fp8_torch_dtype(at::ScalarType torch_dtype) {
+  return (torch_dtype == at::ScalarType::Float8_e4m3fn) ||
+         (torch_dtype == at::ScalarType::Float8_e5m2);
+}
+
 size_t
 torch_dtype_size(at::ScalarType torch_dtype) {
   switch (torch_dtype) {
-    case at::ScalarType::Half: {
-      return 2;
-    }; break;
-    case at::ScalarType::BFloat16: {
-      return 2;
-    }; break;
-    case at::ScalarType::Float8_e4m3fn: {
-      return 1;
-    }; break;
-    case at::ScalarType::Float8_e5m2: {
-      return 1;
-    }; break;
+    case at::ScalarType::Half:
+    case at::ScalarType::BFloat16: return 2;
+    case at::ScalarType::Float8_e4m3fn:
+    case at::ScalarType::Float8_e5m2: return 1;
     default:
       throw std::runtime_error(
           std::string("unsupported torch_dtype:") + at::toString(torch_dtype));
@@ -229,42 +217,42 @@ ProfilingContext::record_best(UnifiedGemmMeta const &meta, RuntimeConfig const &
   return best_hparams;
 }
 
-inline torch::Tensor
-create_tensor(const std::vector<int64_t> &shape, c10::ScalarType dtype) {
-  check_nvshmem_init();
-  auto option_gpu =
-      at::TensorOptions().dtype(dtype).device(at::kCUDA).device_index(c10::cuda::current_device());
-  auto size = torch::elementSize(dtype) *
-              std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
-  return at::from_blob(
-      nvshmem_malloc(size), shape, [](void *ptr) { nvshmem_free(ptr); }, option_gpu);
-}
+// inline torch::Tensor
+// create_tensor(const std::vector<int64_t> &shape, c10::ScalarType dtype) {
+//   check_nvshmem_init();
+//   auto option_gpu =
+//       at::TensorOptions().dtype(dtype).device(at::kCUDA).device_index(c10::cuda::current_device());
+//   auto size = torch::elementSize(dtype) *
+//               std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
+//   return at::from_blob(
+//       nvshmem_malloc(size), shape, [](void *ptr) { nvshmem_free(ptr); }, option_gpu);
+// }
 
 /**
  * @return vector<torch::Tensor> of size local_world_size (NOTE: not world_size)
  */
-std::vector<torch::Tensor>
-create_tensor_list(const std::vector<int64_t> &shape, c10::ScalarType dtype) {
-  check_nvshmem_init();
-  auto option_gpu =
-      at::TensorOptions().dtype(dtype).device(at::kCUDA).device_index(c10::cuda::current_device());
-  auto size = torch::elementSize(dtype) *
-              std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
-  void *ptr = nvshmem_malloc(size);
-  std::vector<torch::Tensor> tensors;
-  for (int i = 0; i < nvshmem_n_pes(); i++) {
-    if (i == nvshmem_my_pe()) {  // release only local
-      tensors.push_back(
-          at::from_blob(ptr, shape, [](void *ptr) { nvshmem_free(ptr); }, option_gpu));
-    } else {
-      auto *rptr = nvshmem_ptr(ptr, i);
-      if (rptr) {
-        tensors.push_back(at::from_blob(nvshmem_ptr(ptr, i), shape, option_gpu));
-      }
-    }
-  }
-  return tensors;
-}
+// std::vector<torch::Tensor>
+// create_tensor_list(const std::vector<int64_t> &shape, c10::ScalarType dtype) {
+//   check_nvshmem_init();
+//   auto option_gpu =
+//       at::TensorOptions().dtype(dtype).device(at::kCUDA).device_index(c10::cuda::current_device());
+//   auto size = torch::elementSize(dtype) *
+//               std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
+//   void *ptr = nvshmem_malloc(size);
+//   std::vector<torch::Tensor> tensors;
+//   for (int i = 0; i < nvshmem_n_pes(); i++) {
+//     if (i == nvshmem_my_pe()) {  // release only local
+//       tensors.push_back(
+//           at::from_blob(ptr, shape, [](void *ptr) { nvshmem_free(ptr); }, option_gpu));
+//     } else {
+//       auto *rptr = nvshmem_ptr(ptr, i);
+//       if (rptr) {
+//         tensors.push_back(at::from_blob(nvshmem_ptr(ptr, i), shape, option_gpu));
+//       }
+//     }
+//   }
+//   return tensors;
+// }
 
 ThsOpsInitRegistry &
 ThsOpsInitRegistry::instance() {
@@ -326,6 +314,22 @@ DistEnvTPWithEP::toString() const {
   return std::move(ss).str();
 }
 
+MoeArguments::MoeArguments(
+    int32_t max_ntokens,
+    int32_t hidden,
+    int32_t ffn_hidden,
+    int32_t nexperts,
+    int32_t topk,
+    c10::ScalarType input_dtype,
+    c10::ScalarType output_dtype)
+    : max_ntokens(max_ntokens),
+      hidden(hidden),
+      ffn_hidden(ffn_hidden),
+      nexperts(nexperts),
+      topk(topk),
+      input_dtype(input_dtype),
+      output_dtype(output_dtype) {}
+
 void
 init_profiling_context(py::module &m) {
   py::class_<ProfilingContext, c10::intrusive_ptr<ProfilingContext>>(m, "ProfilingContext")
@@ -370,6 +374,33 @@ init_dist_env_tp_with_ep(py::module &m) {
 }
 
 void
+init_moe_arguments(py::module &m) {
+  py::class_<MoeArguments, c10::intrusive_ptr<MoeArguments>>(m, "MoeArguments")
+      .def(
+          py::init([](int32_t max_ntokens,
+                      int32_t hidden,
+                      int32_t ffn_hidden,
+                      int32_t nexperts,
+                      int32_t topk,
+                      py::object py_input_dtype,
+                      py::object py_output_dtype) {
+            auto input_dtype = torch::python::detail::py_object_to_dtype(py_input_dtype);
+            auto output_dtype = py_output_dtype.is(py::none())
+                                    ? input_dtype
+                                    : torch::python::detail::py_object_to_dtype(py_output_dtype);
+            return new MoeArguments(
+                max_ntokens, hidden, ffn_hidden, nexperts, topk, input_dtype, output_dtype);
+          }),
+          py::arg("max_ntokens"),
+          py::arg("hidden"),
+          py::arg("ffn_hidden"),
+          py::arg("nexperts"),
+          py::arg("topk"),
+          py::arg("input_dtype"),
+          py::arg("output_dtype") = py::none());
+}
+
+void
 lazy_init_buffer_tensor(torch::Tensor *tensor, int64_t buffer_size) {
   if (buffer_size <= 0 || tensor == nullptr) {
     return;
@@ -385,28 +416,21 @@ lazy_init_buffer_tensor(torch::Tensor *tensor, int64_t buffer_size) {
 }
 
 PYBIND11_MODULE(FLUX_TORCH_EXTENSION_NAME, m) {
-  auto pynvshmem_m = m.def_submodule("_pynvshmem");
-  pynvshmem_m.def("init_with_c10d_pg", &init_with_c10d_pg);
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#include "nvshmem_pybind_defs.cc.inc"
-#pragma GCC diagnostic pop
-  pynvshmem_m.def("create_tensor", [](const std::vector<int64_t> shape, py::object dtype) {
-    auto cast_dtype = torch::python::detail::py_object_to_dtype(dtype);
-    return create_tensor(shape, cast_dtype);
-  });
-  pynvshmem_m.def("create_tensor_list", [](const std::vector<int64_t> shape, py::object dtype) {
-    auto cast_dtype = torch::python::detail::py_object_to_dtype(dtype);
-    return create_tensor_list(shape, cast_dtype);
-  });
-
   m.def("bitwise_check", &bitwise_check);
   m.def("uniform_initialize", &uniform_initialize);
   m.def("load_tuning_record", &load_tuning_record);
+  m.def("init_flux_shm", &init_flux_shm);
+  m.def(
+      "flux_barrier_all_on_stream",
+      &pyflux_barrier_all_on_stream,
+      py::arg("stream"),
+      py::arg("sync_buffers") = py::none(),
+      py::arg("rank") = py::none());
   init_tuning_record(m);
   init_profiling_context(m);
   init_dist_env_tp(m);
   init_dist_env_tp_with_ep(m);
+  init_moe_arguments(m);
 
   // Initialize ops in registry
   ThsOpsInitRegistry::instance().initialize_all(m);

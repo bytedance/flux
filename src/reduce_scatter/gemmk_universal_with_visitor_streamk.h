@@ -1,21 +1,3 @@
-//===- gemmk_universal_with_visitor_streamk.h --------------------- C++ ---===//
-//
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//    http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-//
-//===----------------------------------------------------------------------===//
-// Some code from NVIDIA cutlass project
-// Original license as follows
 /***************************************************************************************************
  * Copyright (c) 2017 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
@@ -152,8 +134,6 @@ class GemmkWithEpilogueVisitorStreamk {
     int rank;
     int world_size;
     int nnodes;
-    bool use_gemmk;
-    bool per_tile_flags;
     typename bytedance::flux::ReduceScatterOpBase<ElementC>::Arguments rs_args;
 
     Arguments() : Base::Arguments() {}
@@ -356,7 +336,7 @@ class GemmkWithEpilogueVisitorStreamk {
           partials_workspace(nullptr),
           world_size(args.world_size),
           nnodes(args.nnodes),
-          use_gemmk(args.use_gemmk),
+          use_gemmk(args.rs_args.use_gemmk),
           stride_a(args.lda ? args.lda : args.stride_a.at(0)) {
       // Number of SMs to make available for StreamK decomposition
       int avail_sms = (args.avail_sms == -1) ? device_sms : fast_min(args.avail_sms, device_sms);
@@ -377,9 +357,10 @@ class GemmkWithEpilogueVisitorStreamk {
           args.rank,
           args.world_size,
           args.nnodes,
-          args.use_gemmk,
-          args.per_tile_flags,
-          args.rs_args.use_1d_ring);
+          args.rs_args.use_gemmk,
+          args.rs_args.per_tile_flags,
+          args.rs_args.use_1d_ring,
+          args.rs_args.args_workspace);
 #if defined(FLUX_DEBUG)
       if constexpr (gemm_n::HasPrint<ThreadblockSwizzle>) {
         static int counter = 0;

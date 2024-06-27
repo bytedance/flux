@@ -32,4 +32,63 @@ struct GemmOnlyArguments {
   void *output;
 };
 
+// FP8 GEMM
+// Aux = ((alpha * scale_a * scale_b) * accumulator) + ((beta * scale_c) * source) + bias
+// D = activation(Aux)
+// if Aux is fp8:
+//   abs_max_output = max( abs(aux) | (for every aux in Aux) )
+//   Aux = scale_aux * Aux
+// if D is fp8 type:
+//   abs_max_output = max( abs(d) | (for every d in D) )
+//   D = scale_d * D
+struct GemmFP8Arguments {
+  int m;
+  int n;
+  int k;
+  float alpha;
+  float beta;
+  void const *A;  // m * k
+  void const *B;  // k * n
+  void const *C;  // m * n
+  void *Aux;      // m * n
+  void *D;        // output: m * n
+  void *Vector;   // bias: 1 * n
+  float *abs_max_Aux;
+  float *abs_max_D;
+  // scaling tensors
+  float const *scaleA;
+  float const *scaleB;
+  float const *scaleC;
+  float const *scaleD;    // require if D is fp8
+  float const *scaleAux;  // require if Aux is fp8
+};
+
+struct GemmGroupedOpArguments {
+  void *problem_sizes_device;
+  int problem_count;
+  float alpha;
+  float beta;
+  void **ptr_A;
+  void **ptr_B;
+  void **ptr_C;
+  void **ptr_D;
+  int64_t *lda;
+  int64_t *ldb;
+  int64_t *ldc;
+  int64_t *ldd;
+  void *problem_sizes_host;
+};
+
+struct GemmGroupedV3Arguments {
+  int problem_count;
+  float alpha;
+  float beta;
+  cute::tuple<int, int, int> *problem_sizes;
+  void const **ptr_A;
+  void const **ptr_B;
+  void const **ptr_C;
+  void **ptr_D;
+  float **ptr_alpha = nullptr;
+};
+
 }  // namespace bytedance::flux

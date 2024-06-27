@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.17)
 
 set(OP_REGS "")
 flux_add_gemm_op_reg("comm_none/gemm_v2_comm_none.hpp" "GemmV2CommNone" 8 "OP_REGS")
+flux_add_gemm_op_reg("comm_none/gemm_v3_comm_none.hpp" "GemmV3CommNone" 8 "OP_REGS")
 
 
 file(GLOB DISPATCHERS dispatcher/*.cu)

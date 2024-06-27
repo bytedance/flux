@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.17)
 
 set(OP_REGS "")
 flux_add_gemm_op_reg("reduce_scatter/gemm_v2_reduce_scatter.hpp" "GemmV2ReduceScatter" 16 "OP_REGS")
+flux_add_gemm_op_reg("reduce_scatter/gemm_v3_reduce_scatter.hpp" "GemmV3ReduceScatter" 16 "OP_REGS")
 
 file(GLOB DISPATCHERS dispatcher/*.cu)
 file(GLOB TUNING_CONFIGS tuning_config/*.cu)

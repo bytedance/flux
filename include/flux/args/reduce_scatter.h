@@ -18,6 +18,21 @@
 #pragma once
 namespace bytedance::flux {
 
+struct ReduceScatterArguments {
+  int reduce_scatter_num_blocks = 12;
+  void *rs_stream = nullptr;
+  void *event = nullptr;
+  bool use_barrier_queue = false;
+  bool use_gemmk = true;             // use gemmk mechanism
+  bool per_tile_flags = true;        // set flag per tile
+  bool use_cudaMemcpyAsync = false;  // use cudaMemcpyAsync for memcpy or not
+  int n_split = 1;                   // if also split n
+  int sub_world_size = 1;
+  void *opaque = nullptr;  // used to pass ncclComm_t for PCI-e cross node
+  bool use_1d_ring = true;
+  bool use_p2p_read = true;
+};
+
 struct GemmReduceScatterArguments {
   int m;
   int n;
@@ -34,19 +49,37 @@ struct GemmReduceScatterArguments {
   void *local_reduce_buffer;
   void **barrier_ptrs = nullptr;
   int avail_sms = -1;
-  struct ReduceScatterArguments {
-    int reduce_scatter_num_blocks = 12;
-    void *rs_stream = nullptr;
-    void *event = nullptr;
-    bool use_barrier_queue = false;
-    bool use_gemmk = true;             // use gemmk mechanism
-    bool per_tile_flags = true;        // set flag per tile
-    bool use_cudaMemcpyAsync = false;  // use cudaMemcpyAsync for memcpy or not
-    int n_split = 1;                   // if also split n
-    int sub_world_size = 1;
-    void *opaque = nullptr;  // used to pass ncclComm_t for PCI-e cross node
-    bool use_1d_ring = true;
-    bool use_p2p_read = true;
-  } reduce_scatter_args;
+  ReduceScatterArguments reduce_scatter_args;
 };
+
+struct GemmReduceScatterFp8Arguments {
+  int m;
+  int n;
+  int k;
+  int rank;
+  int world_size;
+  int nnodes;
+  float alpha;
+  float beta;
+  void const *input;
+  void const *weight;
+  void const *bias;
+  void **output_scatter_ptrs;
+  void *local_reduce_buffer;
+  void **barrier_ptrs = nullptr;
+  int avail_sms = -1;
+  ReduceScatterArguments reduce_scatter_args;
+
+  void *Aux;     // m * n
+  void *Vector;  // bias: 1 * n
+  float *abs_max_Aux;
+  float *abs_max_D;
+  // scaling tensors
+  float const *scaleA;
+  float const *scaleB;
+  float const *scaleC;
+  float const *scaleD;    // require if D is fp8
+  float const *scaleAux;  // require if Aux is fp8
+};
+
 }  // namespace bytedance::flux

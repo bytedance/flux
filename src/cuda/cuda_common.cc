@@ -28,16 +28,6 @@ ensure_nvml_init() {
   }();
 }
 
-bool
-has_nvlink_support(int devid) {
-  ensure_nvml_init();
-  nvmlDevice_t device;
-  NVML_CHECK(nvml_stub().nvmlDeviceGetHandleByIndex(devid, &device));
-  nvmlEnableState_t enabled;
-  NVML_CHECK(nvml_stub().nvmlDeviceGetNvLinkState(device, 0, &enabled));
-  return enabled == NVML_FEATURE_ENABLED;
-}
-
 // why not std::string? flux/th_op is compiled with -D_GLIBCXX_USE_CXX11_ABI=0 but flux/cuda is not
 const char *
 get_gpu_device_name(int devid) {

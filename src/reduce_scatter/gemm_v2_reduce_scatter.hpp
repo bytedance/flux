@@ -32,14 +32,13 @@
 #include "cutlass/gemm/device/gemm_universal_base.h"
 
 #include "reduce_scatter/gemmk_visitor_load.hpp"
-#include "reduce_scatter/gemmk_universal_with_visitor.hpp"
+#include "flux/utils.h"
+// #include "reduce_scatter/gemmk_universal_with_visitor.hpp"
 #include "reduce_scatter/visitor_2x_bsr.hpp"
 #include "reduce_scatter/epilogue_evt.hpp"
 #include "reduce_scatter/epilogue_evt_nvshmem.hpp"
 #include "reduce_scatter/tile_scheduler/threadblock_swizzle.hpp"
 #include "reduce_scatter/tile_scheduler/threadblock_swizzle_acrossnode.hpp"
-#include "reduce_scatter/tile_scheduler/threadblock_swizzle_gemmk.hpp"
-#include "reduce_scatter/reduce_scatter_kernel.hpp"
 
 constexpr bool kFlattenTile = false;
 
@@ -66,7 +65,7 @@ class GemmReduceScatter : public GemmUniversalBase<GemmKernel_> {
       CudaHostAdapter *cuda_adapter = nullptr) {
     args_ = args;
     CUTLASS_CHECK_RTN(Base::initialize(args, workspace, stream, cuda_adapter));
-    return rs_op.initialize(args.rs_args);
+    // return rs_op.initialize(args.rs_args);
   }
 
   /// Lightweight update given a subset of arguments.
@@ -76,7 +75,7 @@ class GemmReduceScatter : public GemmUniversalBase<GemmKernel_> {
     if (status != cutlass::Status::kSuccess) {
       return status;
     }
-    return rs_op.update(args.rs_args);
+    // return rs_op.update(args.rs_args);
   }
 
   /// Runs the kernel using initialized state.
@@ -89,6 +88,7 @@ class GemmReduceScatter : public GemmUniversalBase<GemmKernel_> {
     CUDA_CHECK(cudaEventRecord(event, stream));
     CUDA_CHECK(cudaStreamWaitEvent(rs_stream, event));
 
+    static int gemm_only = bytedance::flux::get_int_from_env("FLUX_GEMM_RS_GEMM_ONLY", 0);
     static int cuda_launch_blocking = bytedance::flux::get_int_from_env("CUDA_LAUNCH_BLOCKING", 0);
     if (cuda_launch_blocking) {
       static int counter = 0;
@@ -97,9 +97,11 @@ class GemmReduceScatter : public GemmUniversalBase<GemmKernel_> {
                      "issues. only for debug\n";
       }
       CUTLASS_CHECK(Base::run(stream, cuda_adapter));
-      CUTLASS_CHECK_RTN(rs_op.run(rs_stream));
+      // if (!gemm_only)
+      // CUTLASS_CHECK_RTN(rs_op.run(rs_stream));
     } else {
-      CUTLASS_CHECK_RTN(rs_op.run(rs_stream));
+      // if (!gemm_only)
+      // CUTLASS_CHECK_RTN(rs_op.run(rs_stream));
       CUTLASS_CHECK(Base::run(stream, cuda_adapter));
     }
 
@@ -134,8 +136,8 @@ class GemmReduceScatter : public GemmUniversalBase<GemmKernel_> {
 
  private:
   using T = typename GemmKernel::ElementC;
-  bytedance::flux::ReduceScatterOp<T, ThreadblockShape::kM, ThreadblockShape::kN, kFlattenTile>
-      rs_op;
+  // bytedance::flux::ReduceScatterOp<T, ThreadblockShape::kM, ThreadblockShape::kN, kFlattenTile>
+  //     rs_op;
   Arguments args_;
 };
 }  // namespace cutlass::gemm::device
@@ -173,6 +175,9 @@ class GemmV2ReduceScatter
   static constexpr bool has_bias = Base::has_bias;
   static_assert(meta.comm_op() == _ReduceScatter{}, "requires _ReduceScatter{}");
   static constexpr auto rs_meta = to_reduce_scatter_meta(meta.comm_spec());
+  static constexpr auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
+  static constexpr bool is_fp8_gemm = is_fp8_dtype(dt_conf.a()) && is_fp8_dtype(dt_conf.b());
+  static constexpr bool is_sm89 = (meta.arch() == _Sm89{});
 
   auto
   tb_swizzle() const {
@@ -190,7 +195,7 @@ class GemmV2ReduceScatter
     using namespace cutlass::epilogue::threadblock;
     using T = typename Base::ElementD;
     constexpr bool fuse_reduction = rs_meta.fuse_reduction();
-    constexpr bool no_nvlink = false;
+    constexpr bool no_nvlink = rs_meta.comm_kind() == _IntraNodePcie{};
     if constexpr (rs_meta.comm_kind() == _IntraNode{} || no_nvlink) {
       constexpr bool support_fuse_reduction =
           ((int)meta.arch()() < (int)(ArchEnum::Sm90) && std::is_same_v<T, cutlass::half_t>) ||
@@ -233,23 +238,38 @@ class GemmV2ReduceScatter
   kernel_params() const {
     using TBSwizzle = decltype(this->tb_swizzle());
     // using AlignmentC_Type = cute::Int<128 / cute::sizeof_bits_v<typename Base::ElementCNoVoid>>;
-    constexpr bool fuse_reduction = meta.comm_spec().fuse_reduction();
-    constexpr int fused_align_size =
-        std::is_same_v<typename Base::ElementCNoVoid, cutlass::half_t> ? 32 : 16;
-    constexpr int align_c = (fuse_reduction ? fused_align_size : 128) /
-                            cute::sizeof_bits_v<typename Base::ElementCNoVoid>;
-    using AlignmentC_Type = cute::Int<align_c>;
-    auto kparams = gemm_v2_impl::KernelParams<TBSwizzle, AlignmentC_Type, void>();
-    using EVT_D = decltype(this->evt_d(kparams));
-    using StoreD = decltype(this->evt_store_d(kparams));
-    using EVT = cutlass::epilogue::threadblock::Sm80EVT<StoreD, EVT_D>;
-    return gemm_v2_impl::KernelParams<TBSwizzle, AlignmentC_Type, EVT>();
+    if constexpr (is_fp8_gemm && is_sm89) {
+      using AlignmentC_Type = cute::Int<8>;
+      using ElementCNoVoid = typename Base::ElementCNoVoid;
+      using ElementAccumulator = typename Base::ElementAccumulator;
+      using SM89Epilogue = cutlass::epilogue::thread::LinearCombinationGenericWithScalingAndAbsMax<
+          cutlass::epilogue::thread::Identity,  // maybe not need this, so use Identity
+          ElementCNoVoid,
+          ElementCNoVoid,
+          AlignmentC_Type{},
+          ElementAccumulator,
+          ElementAccumulator>;
+      return gemm_v2_impl::KernelParams<TBSwizzle, AlignmentC_Type, SM89Epilogue>();
+    } else {
+      constexpr bool fuse_reduction = meta.comm_spec().fuse_reduction();
+      constexpr int fused_align_size =
+          std::is_same_v<typename Base::ElementCNoVoid, cutlass::half_t> ? 32 : 16;
+      constexpr int align_c = (fuse_reduction ? fused_align_size : 128) /
+                              cute::sizeof_bits_v<typename Base::ElementCNoVoid>;
+      using AlignmentC_Type = cute::Int<align_c>;
+      auto kparams = gemm_v2_impl::KernelParams<TBSwizzle, AlignmentC_Type, void>();
+      using EVT_D = decltype(this->evt_d(kparams));
+      using StoreD = decltype(this->evt_store_d(kparams));
+      using EVT = cutlass::epilogue::threadblock::Sm80EVT<StoreD, EVT_D>;
+      return gemm_v2_impl::KernelParams<TBSwizzle, AlignmentC_Type, EVT>();
+    }
   }
 
   auto
   gemm_kernel() const {
     using ElementCompute = typename Base::ElementD;
     auto params = this->kernel_params();
+
     return this->default_gemm_kernel(params);
   }
 
@@ -265,11 +285,13 @@ class GemmV2ReduceScatter
   auto
   custom_evt_d(gemm_v2_impl::KernelParams<Ts...> params) const {
     using namespace cutlass::epilogue::threadblock;
+    constexpr bool no_nvlink = rs_meta.comm_kind() == _IntraNodePcie{};
+
     return this->default_evt_d(params);
   }
 
   auto
-  to_gemm_args_impl(GemmReduceScatterArguments const &args) const {
+  to_gemm_args_impl(GemmReduceScatterArguments const &args, void *args_workspace) const {
     using Gemm = identity_t<decltype(this->gemm_device())>;
     using GemmArguments = typename Gemm::Arguments;
 
@@ -289,14 +311,28 @@ class GemmV2ReduceScatter
     using EvtArgumentsType = typename EVT::Arguments;
     using EvtDArgumentType = typename tree_node_type<1, EVT>::Arguments;
     using EvtStoreDArgumentType = typename tree_node_type<0, EVT>::Arguments;
+    constexpr bool no_nvlink = rs_meta.comm_kind() == _IntraNodePcie{};
     auto evt_d_args = [&]() {
       if constexpr (has_bias) {
-        return EvtDArgumentType{
-            {args.beta},                                    // Beta
-            {ptr_C, typename Base::ElementC(0), stride_C},  // C
-            {{{args.alpha}}, {}, {}},                       // compute0 args
-            {}                                              // compute 1
-        };
+        if constexpr (no_nvlink) {
+          return EvtDArgumentType{
+              {args.beta},  // Beta
+              {ptr_C,
+               typename Base::ElementC(0),
+               stride_C,
+               args.world_size,
+               args.reduce_scatter_args.use_gemmk},  // C
+              {{{args.alpha}}, {}, {}},              // compute0 args
+              {}                                     // compute 1
+          };
+        } else {
+          return EvtDArgumentType{
+              {args.beta},                                    // Beta
+              {ptr_C, typename Base::ElementC(0), stride_C},  // C
+              {{{args.alpha}}, {}, {}},                       // compute0 args
+              {}                                              // compute 1
+          };
+        }
       } else {
         return EvtDArgumentType{{{args.alpha}}, {}, {}};
       }
@@ -350,15 +386,78 @@ class GemmV2ReduceScatter
     return gemm_args;
   }
 
+  auto
+  to_fp8_gemm_args_impl(GemmReduceScatterFp8Arguments const &args, void *args_workspace) const {
+    using Gemm = identity_t<decltype(this->gemm_device())>;
+    using GemmArguments = typename Gemm::Arguments;
+    using ElementC = decltype(to_cutlass_element(dt_conf.c()));
+    using ElementD = decltype(to_cutlass_element(dt_conf.d()));
+
+    auto ptr_C = static_cast<typename Base::ElementC *>(const_cast<void *>(args.bias));
+    auto ptr_scatter_D = reinterpret_cast<typename Base::ElementD **>(args.output_scatter_ptrs);
+    auto ptr_barrier [[maybe_unused]] =
+        reinterpret_cast<typename SystemBarrier::T **>(args.barrier_ptrs);
+
+    auto ptr_Aux = static_cast<ElementD *>(args.Aux);
+    auto ptr_Vector = static_cast<ElementC *>(args.Vector);
+
+    int stride_b = this->get_stride_b(args.n, args.k);
+    int stride_c = this->get_stride_c(args.m, args.n);
+    int stride_d = stride_c;
+
+    using EVT = identity_t<decltype(this->kernel_params().evt())>;
+    constexpr bool no_nvlink = rs_meta.comm_kind() == _IntraNodePcie{};
+
+    typename EVT::Params epilogue_params{
+        {ElementD(args.alpha), ElementD(args.beta)},
+        args.scaleA,
+        args.scaleB,
+        args.scaleC,
+        args.scaleD,
+        args.scaleAux,
+        args.abs_max_Aux,
+        args.abs_max_D};  // TODO(houqi.1993)
+
+    auto gemm_args = GemmArguments(
+        cutlass::gemm::GemmUniversalMode::kGemm,
+        {args.m, args.n, args.k},
+        /* batch_count = */ 1,
+        epilogue_params,
+        args.input,
+        args.weight,
+        args.bias,                            // ptr_C not used
+        args.output_scatter_ptrs[args.rank],  // ptr_D not used
+        args.Aux,
+        args.Vector,
+        args.m * args.k,
+        args.n * args.k,
+        args.m * args.n,
+        args.m * args.n,
+        (int)args.m,  // Batch stride vector
+        args.k,
+        stride_b,
+        stride_c,
+        stride_d,
+        (int64_t)0  // Leading dimension of vector. This must be 0
+    );
+
+    return gemm_args;
+  }
+
  public:
   auto
-  to_gemm_args(std::any const &args) const {
-    return to_gemm_args_impl(std::any_cast<GemmReduceScatterArguments>(args));
+  to_gemm_args(std::any const &args, void *args_workspace) const {
+    if constexpr (is_sm89 && is_fp8_gemm) {
+      return to_fp8_gemm_args_impl(
+          std::any_cast<GemmReduceScatterFp8Arguments>(args), args_workspace);
+    } else {
+      return to_gemm_args_impl(std::any_cast<GemmReduceScatterArguments>(args), args_workspace);
+    }
   }
 
   std::size_t
   get_barrier_workspace_size(std::any const &var_args) const override {
-    const auto &args = std::any_cast<GemmReduceScatterArguments>(var_args);
+    const auto &args = to_argument_type(var_args);
 
     auto align_buffer = [](size_t size) { return (size + 127) / 128 * 128; };
     using ThreadblockShape = decltype(to_gemm_shape(hparams.tile_shape()));
@@ -368,6 +467,27 @@ class GemmV2ReduceScatter
     size_t nflags =
         ((args.m + epi_tile_m - 1) / epi_tile_m) * ((args.n + epi_tile_n - 1) / epi_tile_n);
     return align_buffer(nflags * sizeof(SystemBarrier::T));
+  }
+
+  [[nodiscard]] size_t
+  get_args_workspace_size(std::any const &args) const override {
+    return 0;
+  }
+
+  void
+  initialize_args_workspace(
+      std::any const &args,
+      void *args_workspace = nullptr,
+      void *stream = nullptr) const override {}
+
+ private:
+  auto
+  to_argument_type(std::any const &args) const {
+    if constexpr (is_fp8_gemm && is_sm89) {
+      return std::any_cast<GemmReduceScatterFp8Arguments>(args);
+    } else {
+      return std::any_cast<GemmReduceScatterArguments>(args);
+    }
   }
 };
 
@@ -384,10 +504,11 @@ struct GemmV2ReduceScatter_Space : OpSpaceBase<GemmV2ReduceScatter_Space> {
       cute::make_tuple(_RCR{}, _RRR{}),
       cute::make_tuple(_GemmV2{}),
       cute::make_tuple(None{}),
-      tuple_transform(
-          tuple_cartesian_product(
-              cute::make_tuple(_True{}, _False{}), cute::make_tuple(_IntraNode{}, _AcrossNode{})),
-          [](auto tup) { return to_reduce_scatter_meta(tup); }));
+      cute::make_tuple(
+          make_reduce_scatter_meta(_False{}, _IntraNode{}),
+          make_reduce_scatter_meta(_True{}, _IntraNode{}),
+          make_reduce_scatter_meta(_False{}, _AcrossNode{}),
+          make_reduce_scatter_meta(_True{}, _AcrossNode{})));
 
   static constexpr auto AllGemmHParams = make_space_gemm_hparams(
       cute::make_tuple(Auto{}),

@@ -15,18 +15,17 @@
 #
 ################################################################################
 
-# usage: torchrun --node_rank=0 --nproc_per_node=8 --nnodes=1 --rdzv_id=none --master_addr=127.0.0.1 --master_port=23456 test/test_ag_kernel.py 4096 49152 12288
 import argparse
 import os
 import sys
 import time
+from flux.util import is_fp8_dtype
 import torch
 import numpy as np
 import datetime
 import torch.distributed
 from contextlib import nullcontext
 import flux
-from flux import pynvshmem
 
 
 RANK = int(os.environ.get("RANK", 0))
@@ -81,15 +80,28 @@ class PerfResult:
         self.gemm_only_time_ms = gemm_only_time_ms
 
     def __repr__(self) -> str:
-        return (
-            f"{self.name}: total {self.total_ms:.3f} ms, {self.time1} {self.gemm_time_ms:.3f} ms"
-            f", {self.time2} {self.comm_time_ms:.3f} ms, {self.time3} {self.gemm_only_time_ms:.3f} ms"
-        )
+        if self.gemm_only_time_ms == 0.0:
+            return (
+                f"{self.name}: total {self.total_ms:.3f} ms, {self.time1} {self.gemm_time_ms:.3f} ms"
+                f", {self.time2} {self.comm_time_ms:.3f} ms"
+            )
+        else:
+            return (
+                f"{self.name}: total {self.total_ms:.3f} ms, {self.time1} {self.gemm_time_ms:.3f} ms"
+                f", {self.time2} {self.comm_time_ms:.3f} ms, {self.time3} {self.gemm_only_time_ms:.3f} ms"
+            )
 
 
 @torch.no_grad()
 def perf_torch(
-    input: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, warmup: int, iters: int
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    is_fp8: bool,
+    warmup: int,
+    iters: int,
 ):
     local_M = input.size(0)
     M = local_M * TP_GROUP.size()
@@ -102,6 +114,14 @@ def perf_torch(
         device=torch.cuda.current_device(),
         requires_grad=False,
     )
+
+    alpha_scale = 1.0
+    if is_fp8:
+        alpha_scale = input_scale * weight_scale
+        input = input.to(torch.bfloat16)
+        weight = weight.to(torch.bfloat16)
+        full_input = full_input.to(torch.bfloat16)
+
     torch.distributed.all_gather_into_tensor(full_input, input, group=TP_GROUP)
 
     torch.distributed.barrier()
@@ -116,7 +136,10 @@ def perf_torch(
         start_events[i].record()
         torch.distributed.all_gather_into_tensor(full_input, input, group=TP_GROUP)
         allgather_end_events[i].record()
-        output = torch.matmul(full_input, weight.t())
+
+        output = alpha_scale * torch.matmul(full_input, weight.t())
+        if is_fp8:
+            output = output.to(torch.bfloat16)
         if bias is not None:
             output += bias
         end_events[i].record()
@@ -144,18 +167,24 @@ def perf_torch(
     )
 
 
+
 @torch.no_grad()
 def perf_flux(
     input: torch.Tensor,
     weight: torch.Tensor,
     bias: torch.Tensor,
-    warmup: int,
-    iters: int,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    is_fp8: bool,
     transpose_weight: bool = True,
     local_copy: bool = False,
     gather_output: bool = False,
     ring_mode: flux.AgRingMode = flux.AgRingMode.Auto,
+    warmup: int = 5,
+    iters: int = 10,
+    fast_acc: bool = False,
 ):
+    input_dtype = input.dtype
     local_M = input.size(0)
     M = local_M * TP_GROUP.size()
     K = input.size(1)
@@ -174,10 +203,27 @@ def perf_flux(
         device=torch.cuda.current_device(),
         requires_grad=False,
     )
+    if is_fp8:
+        input = input.to(torch.bfloat16)
+        full_input = full_input.to(torch.bfloat16)
     torch.distributed.all_gather_into_tensor(full_input, input, group=TP_GROUP)
+    if is_fp8:
+        input = input.to(input_dtype)
+        full_input = full_input.to(input_dtype)
     torch.distributed.barrier()
 
-    gemm_only_op = flux.GemmOnly(w.dtype, transpose_weight=transpose_weight)
+    output_dtype = torch.bfloat16 if is_fp8 else input.dtype
+    use_fp8_gemm = True if is_fp8 else False
+    gemm_only_op = flux.GemmOnly(
+        input_dtype=input.dtype,
+        output_dtype=output_dtype,
+        transpose_weight=transpose_weight,
+        use_fp8_gemm=use_fp8_gemm,
+    )
+    gemm_only_output_buf = torch.empty(
+        [M, N], dtype=output_dtype, device=input.device, requires_grad=False
+    )
+
     all_gather_gemm_kernel = flux.AGKernel(
         TP_GROUP,
         NNODES,
@@ -185,6 +231,7 @@ def perf_flux(
         N,
         K,
         input.dtype,
+        output_dtype=input.dtype if not is_fp8 else torch.bfloat16,
         transpose_weight=transpose_weight,
         local_copy=local_copy,
         ring_mode=ring_mode,
@@ -194,15 +241,19 @@ def perf_flux(
     total_iters = warmup_iters + iters
     start_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
     end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
-    gemm_only_output_buf = torch.empty(
-        [M, N], dtype=input.dtype, device=input.device, requires_grad=False
-    )
 
     torch.distributed.barrier()
     for i in range(total_iters):
         start_events[i].record()
         gemm_only_output = gemm_only_op.forward(
-            full_input, w, bias=bias, output_buf=gemm_only_output_buf
+            full_input,
+            w,
+            bias=bias,
+            output_buf=gemm_only_output_buf,
+            input_scale=input_scale,
+            weight_scale=weight_scale,
+            output_scale=None,
+            fast_accum=fast_acc,
         )
         end_events[i].record()
     torch.cuda.current_stream().synchronize()
@@ -222,7 +273,15 @@ def perf_flux(
         if local_copy:
             all_gather_gemm_kernel.copy_local(input)
         start_events[i].record()
-        output = all_gather_gemm_kernel.forward(input, w, bias=bias)
+        output = all_gather_gemm_kernel.forward(
+            input,
+            w,
+            bias=bias,
+            input_scale=input_scale,
+            weight_scale=weight_scale,
+            output_scale=None,
+            fast_accum=fast_acc,
+        )
         gathered = all_gather_gemm_kernel.gather() if gather_output else None
         end_events[i].record()
 
@@ -240,7 +299,15 @@ def perf_flux(
     ## signals are already set
     for i in range(total_iters):
         start_events[i].record()
-        _ = all_gather_gemm_kernel.gemm_only(input, w, bias=bias)
+        _ = all_gather_gemm_kernel.gemm_only(
+            input,
+            w,
+            bias=bias,
+            input_scale=input_scale,
+            weight_scale=weight_scale,
+            output_scale=None,
+            fast_accum=fast_acc,
+        )
         end_events[i].record()
 
     torch.distributed.barrier()
@@ -305,24 +372,44 @@ def parse_args():
     )
     parser.add_argument("--has_bias", default=False, action="store_true", help="whether have bias")
     parser.add_argument(
+        "--fastacc",
+        default=False,
+        action="store_true",
+        help="whether to use fast accumulation (FP8 Gemm only)",
+    )
+    parser.add_argument(
         "--ring_mode",
         default=-1,
         type=int,
-        help="ring mode. -1 for auto detect. 0 for all-to-all, 1 for 1d ring. 2 for 2d ring",
+        help="ring mode. -1 for auto detect. 0 for all-to-all, 1 for 1d ring. 2 for 2d ring. 3 for custom ring.",
     )
     return parser.parse_args()
 
 
-DTYPE_MAP = {"bfloat16": torch.bfloat16, "float16": torch.float16}
+DTYPE_MAP = {
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+}
+
+THRESHOLD_MAP = {
+    torch.float16: 1e-2,
+    torch.bfloat16: 1e-2,
+    torch.float8_e4m3fn: 1e-2,
+    torch.float8_e5m2: 1e-2,
+}
 
 if __name__ == "__main__":
     torch.cuda.set_device(LOCAL_RANK)
     args = parse_args()
 
-    pynvshmem.init_with_c10d_pg(TP_GROUP)
+    flux.init_flux_shm(TP_GROUP)
     torch.cuda.synchronize()
 
     dtype = DTYPE_MAP[args.dtype]
+    is_fp8 = False # to be supported in the future
+    if args.transpose_weight and is_fp8:
+        raise ValueError("FP8 GEMM does not support RRR layout")
+
     assert args.M % TP_GROUP.size() == 0
     assert args.N % TP_GROUP.size() == 0
     assert args.K % TP_GROUP.size() == 0
@@ -330,16 +417,28 @@ if __name__ == "__main__":
     local_N = args.N // TP_GROUP.size()
 
     # input: [M, K], weight: [N, K]
+    input = None
+    weight = None
     input = (
-        (-2 * torch.rand((local_M, args.K), dtype=dtype).cuda() + 1) / 100 * (TP_GROUP.rank() + 1)
+        (-2 * torch.rand((local_M, args.K), dtype=dtype).cuda() + 1)
+        / 100
+        * (TP_GROUP.rank() + 1)
     )
     weight = (
-        (-2 * torch.rand((local_N, args.K), dtype=dtype).cuda() + 1) / 100 * (TP_GROUP.rank() + 1)
+        (-2 * torch.rand((local_N, args.K), dtype=dtype).cuda() + 1)
+        / 100
+        * (TP_GROUP.rank() + 1)
+    )
+    input_scale = None
+    weight_scale = None
+    bias = None
+    bias = (
+        torch.rand((args.M, local_N), dtype=dtype).cuda() / 10 * (TP_GROUP.rank() + 1)
+        if args.has_bias
+        else None
     )
 
-    bias = None
-    if args.has_bias:
-        bias = torch.rand((args.M, local_N), dtype=dtype).cuda() / 10 * (TP_GROUP.rank() + 1)
+    torch.distributed.barrier()
 
     ctx = (
         torch.profiler.profile(
@@ -351,17 +450,23 @@ if __name__ == "__main__":
     )
 
     with ctx:
-        perf_res_torch = perf_torch(input, weight, bias, args.warmup, args.iters)
+        perf_res_torch = perf_torch(
+            input, weight, bias, input_scale, weight_scale, is_fp8, args.warmup, args.iters
+        )
         perf_res_flux = perf_flux(
             input,
             weight,
             bias,
-            args.warmup,
-            args.iters,
+            input_scale,
+            weight_scale,
+            is_fp8,
             args.transpose_weight,
             args.local_copy,
             args.gather_output,
             flux.AgRingMode(args.ring_mode),
+            args.warmup,
+            args.iters,
+            args.fastacc,
         )
 
     if args.profile:
@@ -381,13 +486,19 @@ if __name__ == "__main__":
             print(perf_res_torch)
         torch.distributed.barrier()
     torch.distributed.barrier()
+
+
     for i in range(TP_GROUP.size()):
         if i == TP_GROUP.rank():
             print(perf_res_flux)
         torch.distributed.barrier()
     torch.distributed.barrier()
 
-    flux_output = perf_res_flux.output
     torch_output = perf_res_torch.output
-    flux.torch_allclose(flux_output, torch_output, atol=1e-02, rtol=1e-02)
+    flux_output = perf_res_flux.output
+    torch.distributed.barrier()
+
+    atol = THRESHOLD_MAP[dtype]
+    rtol = THRESHOLD_MAP[dtype]
+    flux.torch_allclose(flux_output, torch_output, atol=atol, rtol=rtol)
     torch.cuda.synchronize()

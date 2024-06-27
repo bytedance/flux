@@ -57,10 +57,10 @@
 #include "cutlass/epilogue/threadblock/fusion/visitor_2x.hpp"
 #include "cutlass/barrier.h"
 #include "flux/cuda/memory_utils.hpp"
-
+#ifdef FLUX_SHM_USE_NVSHMEM
 #include <nvshmem.h>
 #include <nvshmemx.h>
-
+#endif
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass::epilogue::threadblock {
@@ -299,7 +299,9 @@ struct VisitorAuxStoreScatterAccrossNode {
 
     CUTLASS_DEVICE void
     copy_remote(void *dst, void *src, int size, int dst_rank) {
+#ifdef FLUX_SHM_USE_NVSHMEM
       nvshmemx_putmem_nbi_block(dst, src, size, dst_rank);
+#endif
     }
     CUTLASS_DEVICE void
     end_epilogue() {
@@ -344,9 +346,14 @@ struct VisitorAuxStoreScatterAccrossNode {
     constexpr int local_world_size = 8;  // should be passed from parameters
     // constexpr int tile_size = ThreadblockShape::kM;
     constexpr int tile_size [[maybe_unused]] = ThreadblockShape::kM;
-
+#ifdef FLUX_SHM_USE_NVSHMEM
     const int world_size = nvshmem_n_pes();
     const int rank = nvshmem_my_pe();
+#else
+    // only support InterNode when nvshmem is enabled
+    const int world_size = -1;
+    const int rank = -1;
+#endif
     const int local_rank = rank % local_world_size;
     auto M = get<0>(problem_shape);
     auto N = get<1>(problem_shape);

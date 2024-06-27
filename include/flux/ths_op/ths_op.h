@@ -23,8 +23,7 @@
 #include "flux/gemm_meta.h"
 #include "flux/op_registry.h"
 #include "./util.h"
-#include "nvshmem_utils.h"
-
+#include "flux_shm.h"
 #include <ATen/core/ivalue.h>
 #include <pybind11/pybind11.h>
 #include <c10/core/ScalarType.h>
@@ -38,8 +37,9 @@ namespace flux {
 namespace ths_op {
 
 DataTypeEnum from_torch_dtype(at::ScalarType torch_dtype);
+bool is_fp8_torch_dtype(at::ScalarType torch_dtype);
 size_t torch_dtype_size(at::ScalarType torch_dtype);
-
+// used by MoE
 torch::Tensor setup_shared_memory(
     int64_t rank, int64_t world_size, torch::Tensor local_data, std::vector<void *> *host_ptrs);
 
@@ -143,8 +143,30 @@ struct DistEnvTPWithEP : public DistEnv, torch::CustomClassHolder {
   std::string toString() const;
 };
 
+struct MoeArguments : public torch::CustomClassHolder {
+  const int32_t max_ntokens;
+  const int32_t hidden;
+  const int32_t ffn_hidden;
+  const int32_t nexperts;
+  const int32_t topk;
+
+  const c10::ScalarType input_dtype;
+  const c10::ScalarType output_dtype;
+
+  MoeArguments(
+      int32_t max_ntokens,
+      int32_t hidden,
+      int32_t ffn_hidden,
+      int32_t nexperts,
+      int32_t topk,
+      c10::ScalarType input_dtype,
+      c10::ScalarType output_dtype);
+};
+
 bool bitwise_check(torch::Tensor A, torch::Tensor B);
 void uniform_initialize(torch::Tensor tensor, uint64_t seed, double min, double max);
+void cudaipc_barrier_all_on_stream(
+    cudaStream_t stream, std::vector<torch::Tensor> &sync_buffer, int rank);
 void lazy_init_buffer_tensor(torch::Tensor *tensor, int64_t buffer_size);
 }  // namespace ths_op
 }  // namespace flux

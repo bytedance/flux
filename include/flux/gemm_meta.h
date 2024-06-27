@@ -308,7 +308,9 @@ struct GemmMeta : FluxNamedTupleBase<GemmMeta, Ts...> {
     UnifiedImplMeta impl_spec = unify_type(obj.impl_spec());
     if ((obj.impl() == _GemmV2{}) and std::holds_alternative<None>(impl_spec)) {
       impl_spec = unify_type(to_gemm_v2_meta(std::get<None>(impl_spec)));
-    } else if ((obj.impl() == _GemmV3{}) and std::holds_alternative<None>(impl_spec)) {
+    } else if (
+        (obj.impl() == _GemmV3{} or obj.impl() == _GemmGroupedV3{}) and
+        std::holds_alternative<None>(impl_spec)) {
       impl_spec = unify_type(to_gemm_v3_meta(std::get<None>(impl_spec)));
     }
 
@@ -385,15 +387,27 @@ constexpr bool
 filter_fast_accum(GemmMeta<Ts...> meta) {
   auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
   if constexpr (dt_conf.is_input_fp8()) {
-    if (meta.impl() == _GemmV2{}) {
-      return false;
+    if (meta.impl() == _GemmV2{} or meta.impl() == _GemmGroupedV2{}) {
+      return meta.arch() == _Sm89{};
     }
-  } else if constexpr (meta.impl() == _GemmV3{}) {
+  } else if constexpr (meta.impl() == _GemmV3{} or meta.impl() == _GemmGroupedV3{}) {
     // FastAccum does not matter for non FP8 dtype, thus filter out True cases.
     return meta.impl_spec().fast_accum() == _False{};
   }
   return true;
 }
+
+template <class... Ts>
+constexpr bool
+filter_layout(GemmMeta<Ts...> meta) {
+  auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
+  // Hardware cannot transpose 8bit data, thus cannot support RRR layout
+  if constexpr (dt_conf.is_input_fp8()) {
+    return meta.gemm_layout() == _RRR{};
+  }
+  return false;
+}
+
 }  // namespace detail
 
 /////////////////////////////////////////////////////
@@ -423,6 +437,9 @@ make_space_gemm_meta(
   return tuple_filter(gemm_meta_space, [](auto const tup) {
     auto meta = to_gemm_meta(tup);
     if constexpr (not detail::filter_fast_accum(meta)) {
+      return false;
+    }
+    if constexpr (detail::filter_layout(meta)) {
       return false;
     }
     return true;

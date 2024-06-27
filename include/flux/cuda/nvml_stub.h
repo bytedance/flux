@@ -1,4 +1,4 @@
-//===- nvml.h ----------------------------------------------------- C++ ---===//
+//===- nvml.h ----------------------------------------------- C++ ---===//
 //
 // Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,22 +26,23 @@
 
 namespace bytedance::flux {
 
-#define FLUX_FORALL_NVML(_)             \
-  _(nvmlDeviceGetCount)                 \
-  _(nvmlDeviceGetCudaComputeCapability) \
-  _(nvmlDeviceGetFieldValues)           \
-  _(nvmlDeviceGetHandleByIndex)         \
-  _(nvmlDeviceGetHandleByPciBusId)      \
-  _(nvmlDeviceGetIndex)                 \
-  _(nvmlDeviceGetMaxPcieLinkGeneration) \
-  _(nvmlDeviceGetName)                  \
-  _(nvmlDeviceGetNvLinkCapability)      \
-  _(nvmlDeviceGetNvLinkRemotePciInfo)   \
-  _(nvmlDeviceGetNvLinkState)           \
-  _(nvmlDeviceGetNvLinkVersion)         \
-  _(nvmlDeviceGetP2PStatus)             \
-  _(nvmlErrorString)                    \
-  _(nvmlInit)                           \
+#define FLUX_FORALL_NVML(_)              \
+  _(nvmlDeviceGetCount)                  \
+  _(nvmlDeviceGetCudaComputeCapability)  \
+  _(nvmlDeviceGetNvLinkRemoteDeviceType) \
+  _(nvmlDeviceGetFieldValues)            \
+  _(nvmlDeviceGetHandleByIndex)          \
+  _(nvmlDeviceGetHandleByPciBusId)       \
+  _(nvmlDeviceGetIndex)                  \
+  _(nvmlDeviceGetMaxPcieLinkGeneration)  \
+  _(nvmlDeviceGetName)                   \
+  _(nvmlDeviceGetNvLinkCapability)       \
+  _(nvmlDeviceGetNvLinkRemotePciInfo)    \
+  _(nvmlDeviceGetNvLinkState)            \
+  _(nvmlDeviceGetNvLinkVersion)          \
+  _(nvmlDeviceGetP2PStatus)              \
+  _(nvmlErrorString)                     \
+  _(nvmlInit)                            \
   _(nvmlShutdown)
 
 extern "C" {

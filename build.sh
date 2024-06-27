@@ -2,10 +2,15 @@
 set -x
 set -e
 
+export PATH=/usr/local/cuda/bin:$PATH
+CMAKE=${CMAKE:-cmake}
+
 ARCH=""
 BUILD_TEST="ON"
 BDIST_WHEEL="OFF"
+WITH_PROTOBUF="OFF"
 FLUX_DEBUG="OFF"
+ENABLE_NVSHMEM="OFF"
 
 function clean_py() {
     rm -rf build/lib.*
@@ -52,10 +57,19 @@ while [[ $# -gt 0 ]]; do
         ;;
     --debug)
         FLUX_DEBUG="ON"
-        shift;;
+        shift
+        ;;
     --package)
         BDIST_WHEEL="ON"
         shift # Skip the argument key
+        ;;
+    --protobuf)
+        WITH_PROTOBUF="ON"
+        shift
+        ;;
+    --nvshmem)
+        ENABLE_NVSHMEM="ON"
+        shift
         ;;
     *)
         # Unknown argument
@@ -67,6 +81,7 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT=${SCRIPT_DIR}
+PROTOBUF_ROOT=$PROJECT_ROOT/3rdparty/protobuf
 
 cd ${PROJECT_ROOT}
 
@@ -77,6 +92,20 @@ fi
 if [[ -z $JOBS ]]; then
     JOBS=$(nproc --ignore 2)
 fi
+
+##### build protobuf #####
+function build_protobuf() {
+    if [ $WITH_PROTOBUF == "ON" ]; then
+        pushd $PROTOBUF_ROOT
+        mkdir -p $PWD/build/local
+        pushd build
+        CFLAGS="-fPIC" CXXFLAGS="-fPIC" cmake ../cmake -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=$(realpath local)
+        make -j$(nproc)
+        make install
+        popd
+        popd
+    fi
+}
 
 function build_nccl() {
     pushd $NCCL_ROOT
@@ -108,6 +137,8 @@ function build_nccl() {
 
 ##### build nvshmem_bootstrap_torch  #####
 function build_pynvshmem() {
+    PYNVSHMEM_DIR=$PROJECT_ROOT/pynvshmem
+    export NVSHMEM_HOME=$PROJECT_ROOT/3rdparty/nvshmem/build/src
     mkdir -p ${PYNVSHMEM_DIR}/build
 
     pushd ${PYNVSHMEM_DIR}/build
@@ -126,11 +157,18 @@ function build_flux_cuda() {
     pushd build
     if [ ! -f CMakeCache.txt ] || [ -z ${FLUX_BUILD_SKIP_CMAKE} ]; then
         CMAKE_ARGS=(
-            -DENABLE_NVSHMEM=on
+            -DENABLE_NVSHMEM=${ENABLE_NVSHMEM}
             -DCUDAARCHS=${ARCH}
             -DCMAKE_EXPORT_COMPILE_COMMANDS=1
             -DBUILD_TEST=${BUILD_TEST}
         )
+        if [ $WITH_PROTOBUF == "ON" ]; then
+            CMAKE_ARGS+=(
+                -DWITH_PROTOBUF=ON
+                -DProtobuf_ROOT=${PROTOBUF_ROOT}/build/local
+                -DProtobuf_PROTOC_EXECUTABLE=${PROTOBUF_ROOT}/build/local/bin/protoc
+            )
+        fi
         if [ $FLUX_DEBUG == "ON" ]; then
             CMAKE_ARGS+=(
                 -DFLUX_DEBUG=ON
@@ -140,28 +178,6 @@ function build_flux_cuda() {
     fi
     make -j${JOBS} VERBOSE=1
     popd
-}
-
-function build_flux_py {
-    LIBDIR=${PROJECT_ROOT}/python/lib
-    mkdir -p ${LIBDIR}
-
-    rm -f ${LIBDIR}/libflux_cuda.so
-    rm -f ${LIBDIR}/nvshmem_bootstrap_torch.so
-    rm -f ${LIBDIR}/nvshmem_transport_ibrc.so.2
-    rm -f ${LIBDIR}/libnvshmem_host.so.2
-    pushd ${LIBDIR}
-    cp -s ../../build/lib/libflux_cuda.so .
-    cp -s ../../pynvshmem/build/nvshmem_bootstrap_torch.so .
-    cp -s ../../3rdparty/nvshmem/build/src/lib/nvshmem_transport_ibrc.so.2 .
-    cp -s ../../3rdparty/nvshmem/build/src/lib/libnvshmem_host.so.2 .
-    popd
-
-    ##### build flux torch bindings #####
-    MAX_JOBS=${JOBS} python3 setup.py develop --user
-    if [ $BDIST_WHEEL == "ON" ]; then
-        MAX_JOBS=${JOBS} python3 setup.py bdist_wheel
-    fi
 }
 
 function merge_compile_commands() {
@@ -185,17 +201,45 @@ EOF
     fi
 }
 
+function build_flux_py {
+    LIBDIR=${PROJECT_ROOT}/python/lib
+    rm -rf ${LIBDIR}
+    mkdir -p ${LIBDIR}
+
+    # rm -f ${LIBDIR}/libflux_cuda.so
+    # rm -f ${LIBDIR}/nvshmem_bootstrap_torch.so
+    # rm -f ${LIBDIR}/nvshmem_transport_ibrc.so.2
+    # rm -f ${LIBDIR}/libnvshmem_host.so.2
+    pushd ${LIBDIR}
+    cp -s ../../build/lib/libflux_cuda.so .
+    if [ $ENABLE_NVSHMEM == "ON" ]; then
+        cp -s ../../pynvshmem/build/nvshmem_bootstrap_torch.so .
+        cp -s ../../3rdparty/nvshmem/build/src/lib/nvshmem_transport_ibrc.so.2 .
+        cp -s ../../3rdparty/nvshmem/build/src/lib/libnvshmem_host.so.2 .
+        export FLUX_SHM_USE_NVSHMEM=1
+    fi
+    popd
+    ##### build flux torch bindings #####
+    MAX_JOBS=${JOBS} python3 setup.py develop --user
+    if [ $BDIST_WHEEL == "ON" ]; then
+        MAX_JOBS=${JOBS} python3 setup.py bdist_wheel
+    fi
+    merge_compile_commands
+}
+
 NCCL_ROOT=$PROJECT_ROOT/3rdparty/nccl
 build_nccl
 
-./build_nvshmem.sh ${build_args} --jobs ${JOBS}
 
-export PATH=/usr/local/cuda/bin:$PATH
-CMAKE=${CMAKE:-cmake}
-PYNVSHMEM_DIR=$PROJECT_ROOT/pynvshmem
-export NVSHMEM_HOME=$PROJECT_ROOT/3rdparty/nvshmem/build/src
+if [ $ENABLE_NVSHMEM == "ON" ]; then
+    ./build_nvshmem.sh ${build_args} --jobs ${JOBS}
+fi
 
-build_pynvshmem
+build_protobuf
+
+if [ $ENABLE_NVSHMEM == "ON" ]; then
+    build_pynvshmem
+fi
+
 build_flux_cuda
 build_flux_py
-merge_compile_commands

@@ -113,6 +113,7 @@ CUDA_STUB4(cuStreamWaitValue64_v2, CUstream, CUdeviceptr, cuuint64_t, unsigned i
 CUDA_STUB4(cuStreamWriteValue64_v2, CUstream, CUdeviceptr, cuuint64_t, unsigned int);
 CUDA_STUB4(
     cuStreamBatchMemOp_v2, CUstream, unsigned int, CUstreamBatchMemOpParams *, unsigned int);
+CUDA_STUB1(cuCtxGetDevice, CUdevice *);
 
 CUDA cuda_stub_ = {
 #define _REFERENCE_MEMBER(name) _stubs::name,

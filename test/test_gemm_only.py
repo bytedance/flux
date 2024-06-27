@@ -22,6 +22,7 @@ import datetime
 import torch
 import numpy as np
 import flux
+from flux.util import is_fp8_dtype
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"
 torch.use_deterministic_algorithms(True, warn_only=True)
@@ -31,6 +32,8 @@ torch.cuda.manual_seed_all(3)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
 np.random.seed(3)
 
 
@@ -59,13 +62,29 @@ def perf_gemm(iters: int, name: str, fn: callable):
     return PerfResult(name=name, output=output, gemm_time_ms=total_time / iters * 1000)
 
 
-def perf_torch(input: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, iters: int):
+def perf_torch(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    is_fp8: bool,
+    iters: int,
+):
+
+    alpha_scale = 1.0
+    if is_fp8:
+        alpha_scale = input_scale * weight_scale
+        input = input.to(torch.bfloat16)
+        weight = weight.to(torch.bfloat16)
+
     def fn():
-        return (
-            torch.matmul(input, weight.t())
-            if bias is None
-            else (torch.matmul(input, weight.t()) + bias)
-        )
+        output = alpha_scale * torch.matmul(input, weight.t())
+        if is_fp8:
+            output = output.to(torch.bfloat16)
+        if bias is not None:
+            output = output + bias
+        return output
 
     return perf_gemm(iters, "torch", fn)
 
@@ -74,20 +93,42 @@ def perf_flux(
     input: torch.Tensor,
     weight: torch.Tensor,
     bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
     transpose_weight: bool,
+    is_fp8: bool,
     iters: int,
 ):
     m = input.size(0)
     if transpose_weight:
+        assert is_fp8 == False, "FP8 GEMM does not support RRR layout"
         weight = weight.t().contiguous()
         n = weight.size(1)
     else:
         n = weight.size(0)
-    output = torch.empty([m, n], dtype=input.dtype, device=input.device, requires_grad=False)
-    op = flux.GemmOnly(weight.dtype, transpose_weight=transpose_weight)
+
+    output_dtype = torch.bfloat16 if is_fp8 else input.dtype
+    output = torch.empty([m, n], dtype=output_dtype, device=input.device, requires_grad=False)
+    ## TODO: remove below once moe fp8 gemm invoke get fixed
+    use_fp8_gemm = True if is_fp8 else False
+    op = flux.GemmOnly(
+        input_dtype=input.dtype,
+        output_dtype=output_dtype,
+        transpose_weight=transpose_weight,
+        use_fp8_gemm=use_fp8_gemm,
+    )
 
     def fn():
-        return op.forward(input, weight, bias=bias, output_buf=output)
+        return op.forward(
+            input,
+            weight,
+            bias=bias,
+            output_buf=output,
+            input_scale=input_scale,
+            weight_scale=weight_scale,
+            output_scale=None,
+            fast_accum=False,
+        )
 
     return perf_gemm(iters, "flux", fn)
 
@@ -98,7 +139,12 @@ def parse_args():
     parser.add_argument("N", type=int)
     parser.add_argument("K", type=int)
     parser.add_argument("--iters", default=50, type=int, help="perf iterations")
-    parser.add_argument("--dtype", default="bfloat16", type=str, help="data type")
+    parser.add_argument(
+        "--dtype",
+        default="bfloat16",
+        type=str,
+        help="allowed data type:: bfloat16(default),float16,fp8e4m3,fp8e5m2.",
+    )
     parser.add_argument(
         "--has_bias", default=False, action="store_true", help="whether to add bias"
     )
@@ -109,22 +155,64 @@ def parse_args():
     return parser.parse_args()
 
 
-DTYPE_MAP = {"bfloat16": torch.bfloat16, "float16": torch.float16}
+DTYPE_MAP = {
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+    "fp8e4m3": torch.float8_e4m3fn,
+    "fp8e5m2": torch.float8_e5m2,
+}
+
+THRESHOLD_MAP = {
+    torch.float16: 1e-2,
+    torch.bfloat16: 2e-2,
+    torch.float8_e4m3fn: 2e-2,
+    torch.float8_e5m2: 2e-2,
+}
 
 if __name__ == "__main__":
     args = parse_args()
     dtype = DTYPE_MAP[args.dtype]
-    input = torch.rand((args.M, args.K), dtype=dtype).cuda() / 10
-    weight = torch.rand((args.N, args.K), dtype=dtype).cuda() / 10
-    bias = torch.rand((args.M, args.N), dtype=dtype).cuda() if args.has_bias else None
-    perf_result_flux = perf_flux(input, weight, bias, args.transpose_weight, args.iters)
-    perf_result_torch = perf_torch(input, weight, bias, args.iters)
+    is_fp8 = is_fp8_dtype(dtype)
+
+    input = None
+    weight = None
+    if is_fp8:
+        torch.use_deterministic_algorithms(False, warn_only=True)
+        input = torch.rand((args.M, args.K), dtype=torch.bfloat16).cuda() / 10
+        weight = torch.rand((args.N, args.K), dtype=torch.bfloat16).cuda() / 10
+        # convert to fp8
+        input = input.to(dtype)
+        weight = weight.to(dtype)
+    else:
+        input = torch.rand((args.M, args.K), dtype=dtype).cuda() / 10
+        weight = torch.rand((args.N, args.K), dtype=dtype).cuda() / 10
+
+    input_scale = None
+    weight_scale = None
+
+    if is_fp8:
+        input_scale = torch.rand(1, dtype=torch.float32).cuda()
+        weight_scale = torch.rand(1, dtype=torch.float32).cuda()
+
+    bias = None
+    if is_fp8:
+        bias = torch.rand((1, args.N), dtype=torch.bfloat16).cuda() if args.has_bias else None
+    else:
+        bias = torch.rand((args.M, args.N), dtype=dtype).cuda() if args.has_bias else None
+
+    perf_result_flux = perf_flux(
+        input, weight, bias, input_scale, weight_scale, args.transpose_weight, is_fp8, args.iters
+    )
+    perf_result_torch = perf_torch(
+        input, weight, bias, input_scale, weight_scale, is_fp8, args.iters
+    )
+
     print(f"SOL gemm {flux.estimate_gemm_sol_time_ms(args.M, args.N, args.K):.3f}ms")
     print(perf_result_torch)
     print(perf_result_flux)
 
     flux_output = perf_result_flux.output
     torch_output = perf_result_torch.output
-    atol = 1e-2 if dtype == torch.float16 else 2e-2
-    rtol = 1e-2 if dtype == torch.float16 else 2e-2
+    atol = THRESHOLD_MAP[dtype]
+    rtol = THRESHOLD_MAP[dtype]
     flux.torch_allclose(flux_output, torch_output, atol=atol, rtol=rtol)

@@ -58,7 +58,9 @@
 #include "cutlass/functional.h"
 #include "cutlass/barrier.h"
 #include "flux/cuda/memory_utils.hpp"
+#ifdef FLUX_SHM_USE_NVSHMEM
 #include <nvshmem.h>
+#endif
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {
@@ -413,16 +415,13 @@ class EpilogueReduceScatterVectorizedNvshmemLocalReduce {
 
       auto offset_src = static_cast<int>(gD.layout()(cutlass::make_coord(0, 0)));
       auto offset_dst = static_cast<int>(gR.layout()(cutlass::make_coord(0, 0)));
-      // need call nvshmem_quiet() after this kernel(refer to test_gemm_rs_nvshmem.py), calling
-      // nvshmem_quiet() in the kernel will extremely slow down the kernel I guess the reason is
-      // that the quiet operation may also wait the remoting write requests issued by other CTAs.
+#ifdef FLUX_SHM_USE_NVSHMEM
       nvshmemx_putmem_nbi_block(
           (gR.data() + offset_dst).get(),
           (gD.data() + offset_src).get(),
           BM * BN * sizeof(ElementD),
           remote_dst_rank);
-      // nvshmemx_putmem_nbi_block((gR.data()+offset_dst).get(), (gD.data()+offset_src).get(), BM *
-      // BN * sizeof(ElementD), remote_dst_rank);
+#endif
     }
   }
 

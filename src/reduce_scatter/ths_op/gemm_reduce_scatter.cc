@@ -39,20 +39,20 @@
 #include <c10/cuda/CUDAStream.h>
 #include <ATen/cuda/CUDAEvent.h>
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
-#include <nvshmemx.h>
 #include <torch/python.h>
 #include "flux/utils.h"
-
 #include "reduce_scatter/ths_op/helper_ops.h"
 #include "reduce_scatter/reduce_scatter_barrier_struct.hpp"
 #include "flux/ths_op/topo_utils.h"
+#include "torch/serialize.h"
 #ifdef FLUX_REDUCE_SCATTERT_WITH_NCCL
 #include "nccl.h"
 #endif
 
-namespace bytedance {
-namespace flux {
-namespace ths_op {
+#ifdef FLUX_SHM_USE_NVSHMEM
+#include "nvshmemx.h"
+#endif
+namespace bytedance::flux::ths_op {
 using torch::Tensor;
 
 class GemmRS : public torch::CustomClassHolder {
@@ -74,6 +74,14 @@ class GemmRS : public torch::CustomClassHolder {
   const int32_t node_idx;
 
  private:
+  // Symmetrically distributed tensor
+  std::vector<torch::Tensor> output_buffers;
+  std::vector<torch::Tensor> reduce_buffers;
+  std::vector<torch::Tensor> barrier_buffers;
+#ifndef FLUX_SHM_USE_NVSHMEM
+  // used for the cuda-ipc-barrier
+  std::vector<torch::Tensor> sync_buffers;
+#endif
   torch::Tensor output_buffer;
   torch::Tensor reduce_buffer;
   torch::Tensor barrier_buffer;
@@ -86,32 +94,47 @@ class GemmRS : public torch::CustomClassHolder {
   cudaEvent_t event_;
   bool use_1d_ring;
   bool use_p2p_read;
+  const bool is_fp8_gemm;
+
 #ifdef FLUX_REDUCE_SCATTERT_WITH_NCCL
   ncclComm_t nccl_comm;
 #endif
   void
   init_output_buffer() {
     // update max_m and allocate buffer
-    if (get_arch() == _Sm80{} && nnodes > 1) {
-      int reduce_m_dim = max_m;
-      this->reduce_buffer = nvshmem_create_tensor({reduce_m_dim, n_dim}, output_dtype);
+    if (get_arch() == _Sm90{} || no_nvlink || (get_arch() == _Sm80{} && nnodes > 1)) {
+      int reduce_m_dim = (get_arch() == _Sm90{})
+                             ? (max_m + world_size - 1) / world_size * nnodes * nnodes
+                             : max_m;
+      this->reduce_buffers =
+          flux_create_tensor_list({reduce_m_dim, n_dim}, output_dtype, this->tp_group);
+      this->reduce_buffer = this->reduce_buffers[this->local_rank];
     }
     if (get_arch() == _Sm80{} && nnodes > 1 && from_torch_dtype(this->input_dtype) == _BF16{}) {
       // SM80 does not support the fuse reduction for the bfloat16 data type
       // we have to use the float32 global_red instruction when SM80 && nnodes>1 && input_type=bf16
       // Therefore, in this case, here double the size of the output_buffer.
-      this->output_buffer = nvshmem_create_tensor({max_m * 2, n_dim}, output_dtype);
+      this->output_buffers =
+          flux_create_tensor_list({max_m * 2, n_dim}, output_dtype, this->tp_group);
     } else {
-      this->output_buffer = nvshmem_create_tensor({max_m, n_dim}, output_dtype);
+      this->output_buffers = flux_create_tensor_list({max_m, n_dim}, output_dtype, this->tp_group);
     }
+    this->output_buffer = this->output_buffers[this->local_rank];
     for (int i = 0; i < world_size; ++i) {
-      output_scatter_ptrs[i] = nvshmem_ptr(output_buffer.data_ptr(), i);
-      if (i / nnodes == rank / nnodes) {
+      if (i / this->local_world_size == rank / this->local_world_size) {
+        output_scatter_ptrs[i] = this->output_buffers[i % this->local_world_size].data_ptr();
         // only check for ranks on the same node
         TORCH_CHECK(
             output_scatter_ptrs[i] != nullptr, "nullptr buffr of rank " + std::to_string(i));
+      } else {
+        output_scatter_ptrs[i] = nullptr;
       }
     }
+#ifndef FLUX_SHM_USE_NVSHMEM
+    this->sync_buffers =
+        flux_create_tensor_list({this->world_size}, c10::ScalarType::Int, this->tp_group);
+    this->sync_buffers[this->rank].zero_();  // zeros the sync buffer for cuda ipc at the start
+#endif
   }
 
   void
@@ -120,16 +143,36 @@ class GemmRS : public torch::CustomClassHolder {
         (barrier_buffer.defined() && buffer_size <= barrier_buffer.numel())) {
       return;
     }
-
-    barrier_buffer = nvshmem_create_tensor({buffer_size}, c10::ScalarType::Byte);
+    this->barrier_buffers =
+        flux_create_tensor_list({buffer_size}, c10::ScalarType::Byte, this->tp_group);
+    this->barrier_buffer = this->barrier_buffers[this->local_rank];
     for (int i = 0; i < world_size; ++i) {
-      barrier_ptrs[i] = nvshmem_ptr(barrier_buffer.data_ptr(), i);
+      if (i / this->local_world_size == rank / this->local_world_size) {
+        barrier_ptrs[i] = this->barrier_buffers[i % this->local_world_size].data_ptr();
+        // only check for ranks on the same node
+        TORCH_CHECK(barrier_ptrs[i] != nullptr, "nullptr buffr of rank " + std::to_string(i));
+      } else {
+        barrier_ptrs[i] = nullptr;
+      }
     }
   }
 
   bool
   has_nvlink() {
-    return true;
+    topo_utils::initialize_topo(const_cast<c10d::ProcessGroup &>(this->tp_group));
+    this->sub_world_size = topo_utils::topo_numa_local_world_size();
+    static int has_nvlink_env = get_int_from_env("FLUX_FORCE_NVLINK", -1);
+    if (has_nvlink_env == -1) {
+      if (topo_utils::has_nvswitch()) {
+        return true;
+      } else {
+        if (topo_utils::has_heterogeneous_nvlink()) {
+          this->sub_world_size = topo_utils::topo_nvlink_local_world_size();
+        }
+        return false;
+      }
+    }
+    return has_nvlink_env;
   }
 
   bool
@@ -170,7 +213,9 @@ class GemmRS : public torch::CustomClassHolder {
   CreateReduceScatterStream() {
     at::cuda::CUDAGuard guard(at::cuda::current_device());
     cudaStream_t rs_stream = nullptr;
-    CUDA_CHECK(cudaStreamCreateWithFlags(&rs_stream, cudaStreamNonBlocking));
+    int least_priority, greatest_priority;
+    CUDA_CHECK(cudaDeviceGetStreamPriorityRange(&least_priority, &greatest_priority));
+    CUDA_CHECK(cudaStreamCreateWithPriority(&rs_stream, cudaStreamNonBlocking, greatest_priority));
     return at::cuda::getStreamFromExternal(rs_stream, at::cuda::current_device());
   }
 
@@ -202,7 +247,8 @@ class GemmRS : public torch::CustomClassHolder {
         no_nvlink(!has_nvlink()),
         rs_stream_(CreateReduceScatterStream()),  // private stream. never dup with gemm stream
         use_1d_ring(use_1d_ring_or_not()),
-        use_p2p_read(use_p2p_read_or_not()) {
+        use_p2p_read(use_p2p_read_or_not()),
+        is_fp8_gemm(is_fp8_torch_dtype(input_dtype)) {
     TORCH_CHECK(
         rank >= 0 && rank < world_size,
         "invalid rank: " + std::to_string(rank) +
@@ -211,9 +257,29 @@ class GemmRS : public torch::CustomClassHolder {
         world_size % nnodes == 0,
         "invalid nnodes: world_size[" + std::to_string(world_size) + "] % nnodes[" +
             std::to_string(nnodes) + "] != 0");
-
+    TORCH_CHECK(
+        !fuse_reduction || input_dtype == at::ScalarType::Half,
+        "Fuse reduction only support float16 type on SM80 due to instruction limitation.");
     this->init_output_buffer();
     CUDA_CHECK(cudaEventCreate(&event_));
+#if defined(FLUX_DEBUG)
+    if (no_nvlink) {
+      LOG(WARNING) << "NvLink is not supported, seems running on a PCI-e machine.";
+      ensure_nvml_init();
+      int devid = at::cuda::current_device();
+      std::string devname(get_gpu_device_name(devid));
+      if (devname != "NVIDIA A100 80GB PCIe" && devname != "NVIDIA A800 80GB PCIe") {
+        LOG(WARNING) << "Only NVIDIA A100/A800 80GB PCIe is tuned for. got " << devname;
+      }
+      if (world_size > 4 && world_size != 8) {
+        LOG(WARNING) << "Only TensorParallel = 4 or 8 is tuned for. got " << world_size;
+      }
+      unsigned int gen = get_pcie_gen(devid);
+      if (gen != 4) {
+        LOG(WARNING) << "only PCI-e 4 version is tuned for. got PCI-e " << gen;
+      }
+    }
+#endif
 #ifdef FLUX_REDUCE_SCATTERT_WITH_NCCL
     if (nnodes > 1 && no_nvlink) {
       nccl_comm = topo_utils::create_nccl_comm_with_processgroup(tp_group);
@@ -234,22 +300,29 @@ class GemmRS : public torch::CustomClassHolder {
   }
 
   auto
-  get_gemm_meta(bool has_bias) {
+  get_gemm_meta(bool has_bias, bool fast_accum = false) {
     ArchEnum arch = get_arch();
     auto gemm_layout = transpose_weight ? _RRR{}() : _RCR{}();
     auto input_dtype = from_torch_dtype(this->input_dtype);
     auto output_dtype = from_torch_dtype(this->output_dtype);
     auto dt_conf = make_gemm_dtype_config(
         input_dtype, input_dtype, has_bias ? output_dtype : _Void{}(), output_dtype);
+
+    fast_accum = fast_accum & dt_conf.is_input_fp8();
+    bool is_gemm_v2 = ((int)arch < (int)_Sm90{}());
     auto meta = make_gemm_meta(
         dt_conf,
         arch,
         _ReduceScatter{},
         gemm_layout,
-        ((int)arch < (int)_Sm90{}()) ? _GemmV2{}() : _GemmV3{}(),
-        None{},
+        is_gemm_v2 ? _GemmV2{}() : _GemmV3{}(),
+        is_gemm_v2 ? UnifiedImplMeta(make_gemm_v2_meta(fast_accum))
+                   : UnifiedImplMeta(make_gemm_v3_meta(fast_accum)),
         make_reduce_scatter_meta(
-            this->fuse_reduction, nnodes > 1 ? _AcrossNode{}() : _IntraNode{}()));
+            this->fuse_reduction,
+            nnodes > 1        ? _AcrossNode{}()
+            : this->no_nvlink ? _IntraNodePcie{}()
+                              : _IntraNode{}()));
     return meta;
   }
 
@@ -287,8 +360,12 @@ class GemmRS : public torch::CustomClassHolder {
       torch::Tensor input,
       torch::Tensor weight,
       c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum,
       c10::optional<UnifiedGemmHParams> const &hparams) {
-    auto meta = get_gemm_meta(/*has_bias=*/bias.has_value());
+    auto meta = get_gemm_meta(/*has_bias=*/bias.has_value(), fast_accum);
     auto rt_conf = get_rt_conf(input, weight, bias);
     // get cutlass op
     OpRegistry::OpPtr cutlass_op;
@@ -305,59 +382,113 @@ class GemmRS : public torch::CustomClassHolder {
     static bool use_cudaMemcpyAsync = get_bool_from_env("FLUX_RS_USE_CUDA_MEMCPY_ASYNC", false);
     static int n_split = get_int_from_env("FLUX_RS_N_SPLIT", 1);
     static bool per_tile_flags = get_bool_from_env("FLUX_RS_PER_TILE_FLAGS", no_nvlink);
-    const GemmReduceScatterArguments args{
-        .m = rt_conf.m(),
-        .n = rt_conf.n(),
-        .k = rt_conf.k(),
-        .rank = static_cast<int>(this->rank),
-        .world_size = static_cast<int>(this->world_size),
-        .nnodes = static_cast<int>(this->nnodes),
-        .alpha = 1.0f,
-        .beta = bias.has_value() ? 1.0f : 0.0f,
-        .input = input.data_ptr(),
-        .weight = weight.data_ptr(),
-        .bias = bias.has_value() ? bias->data_ptr() : nullptr,
-        .output_scatter_ptrs = this->output_scatter_ptrs.data(),
-        .local_reduce_buffer =
-            this->reduce_buffer.defined() ? this->reduce_buffer.data_ptr() : nullptr,
-        .barrier_ptrs = this->barrier_ptrs.data(),
-        .avail_sms = no_nvlink ? 1 : -1,
-        .reduce_scatter_args{
-            .reduce_scatter_num_blocks = num_blocks,
-            .rs_stream = rs_stream_,
-            .event = event_,
-            .use_barrier_queue = use_barrier_queue,
-            .use_gemmk = use_gemmk,
-            .per_tile_flags = per_tile_flags,
-            .use_cudaMemcpyAsync = use_cudaMemcpyAsync,
-            .n_split = n_split,
-            .sub_world_size = this->sub_world_size,
+    ReduceScatterArguments reduce_scatter_args{
+        .reduce_scatter_num_blocks = num_blocks,
+        .rs_stream = rs_stream_,
+        .event = event_,
+        .use_barrier_queue = use_barrier_queue,
+        .use_gemmk = use_gemmk,
+        .per_tile_flags = per_tile_flags,
+        .use_cudaMemcpyAsync = use_cudaMemcpyAsync,
+        .n_split = n_split,
+        .sub_world_size = this->sub_world_size,
 #ifdef FLUX_REDUCE_SCATTERT_WITH_NCCL
-            .opaque = nccl_comm,
+        .opaque = nccl_comm,
 #else
-            .opaque = nullptr,
+        .opaque = nullptr,
 #endif
-            .use_1d_ring = use_1d_ring,
-            .use_p2p_read = use_p2p_read,
-        }};
-
-    // initialize workspace
+        .use_1d_ring = use_1d_ring,
+        .use_p2p_read = use_p2p_read,
+    };
     cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
-    int64_t workspace_size = cutlass_op->get_workspace_size(args);
-    this->lazy_init_gemm_buffer(input, workspace_size);
-    void *workspace = this->gemm_buffer.defined() ? this->gemm_buffer.data_ptr() : nullptr;
 
-    // initialize barrier workspace
-    int64_t barrier_workspace_size = cutlass_op->get_barrier_workspace_size(args);
-    // printf("barrier_workspace_size:%d \n", barrier_workspace_size);
-    barrier_workspace_size = barrier_workspace_size / sizeof(int) * sizeof(PerTileFlags);
-    this->lazy_init_barrier_buffer(barrier_workspace_size);
+    if (!is_fp8_gemm) {
+      FLUX_CHECK(!input_scale.has_value());
+      FLUX_CHECK(!weight_scale.has_value());
+      FLUX_CHECK(!output_scale.has_value());
+      const GemmReduceScatterArguments args{
+          .m = rt_conf.m(),
+          .n = rt_conf.n(),
+          .k = rt_conf.k(),
+          .rank = static_cast<int>(this->rank),
+          .world_size = static_cast<int>(this->world_size),
+          .nnodes = static_cast<int>(this->nnodes),
+          .alpha = 1.0f,
+          .beta = bias.has_value() ? 1.0f : 0.0f,
+          .input = input.data_ptr(),
+          .weight = weight.data_ptr(),
+          .bias = bias.has_value() ? bias->data_ptr() : nullptr,
+          .output_scatter_ptrs = this->output_scatter_ptrs.data(),
+          .local_reduce_buffer =
+              this->reduce_buffer.defined() ? this->reduce_buffer.data_ptr() : nullptr,
+          .barrier_ptrs = this->barrier_ptrs.data(),
+          .avail_sms = no_nvlink ? 1 : -1,
+          .reduce_scatter_args = reduce_scatter_args};
 
-    if ((fuse_reduction && !(meta.arch() == _Sm90{})) || this->no_nvlink) {
-      // need to zero buffers;
-      zero_buffers();
+      // initialize workspace
+      int64_t workspace_size = cutlass_op->get_workspace_size(args);
+      this->lazy_init_gemm_buffer(input, workspace_size);
+      void *workspace = this->gemm_buffer.defined() ? this->gemm_buffer.data_ptr() : nullptr;
+
+      // initialize barrier workspace
+      int64_t barrier_workspace_size = cutlass_op->get_barrier_workspace_size(args);
+      // * 8 is for corner case reduce_scatter tiles. never mind this won't be a large memory
+      barrier_workspace_size = barrier_workspace_size / sizeof(int) * sizeof(PerTileFlags) * 8;
+      this->lazy_init_barrier_buffer(barrier_workspace_size);
+
+      if ((fuse_reduction && !(meta.arch() == _Sm90{})) || this->no_nvlink) {
+        // need to zero buffers;
+        zero_buffers();
+      }
+      cutlass_op->run(args, workspace, stream);
+
+    } else {
+      GemmReduceScatterFp8Arguments fp8_args{
+          .m = rt_conf.m(),
+          .n = rt_conf.n(),
+          .k = rt_conf.k(),
+          .rank = static_cast<int>(this->rank),
+          .world_size = static_cast<int>(this->world_size),
+          .nnodes = static_cast<int>(this->nnodes),
+          .alpha = 1.0f,
+          .beta = bias.has_value() ? 1.0f : 0.0f,
+          .input = input.data_ptr(),
+          .weight = weight.data_ptr(),
+          .bias = bias.has_value() ? bias->data_ptr() : nullptr,
+          .output_scatter_ptrs = this->output_scatter_ptrs.data(),
+          .local_reduce_buffer =
+              this->reduce_buffer.defined() ? this->reduce_buffer.data_ptr() : nullptr,
+          .barrier_ptrs = this->barrier_ptrs.data(),
+          .avail_sms = no_nvlink ? 1 : -1,
+          .reduce_scatter_args = reduce_scatter_args,
+          .Aux = nullptr,
+          .Vector = bias.has_value() ? bias->data_ptr() : nullptr,
+          .abs_max_Aux = nullptr,
+          .abs_max_D = nullptr,
+          .scaleA = (float *)(input_scale.has_value() ? input_scale->data_ptr() : nullptr),
+          .scaleB = (float *)(weight_scale.has_value() ? weight_scale->data_ptr() : nullptr),
+          .scaleC = nullptr,
+          .scaleD = (float *)(output_scale.has_value() ? output_scale->data_ptr() : nullptr),
+          .scaleAux = nullptr};
+
+      // initialize workspace
+      int64_t workspace_size = cutlass_op->get_workspace_size(fp8_args);
+      this->lazy_init_gemm_buffer(input, workspace_size);
+      void *workspace = this->gemm_buffer.defined() ? this->gemm_buffer.data_ptr() : nullptr;
+
+      // initialize barrier workspace
+      int64_t barrier_workspace_size = cutlass_op->get_barrier_workspace_size(fp8_args);
+      // * 8 is for corner case reduce_scatter tiles. never mind this won't be a large memory
+      barrier_workspace_size = barrier_workspace_size / sizeof(int) * sizeof(PerTileFlags) * 8;
+      this->lazy_init_barrier_buffer(barrier_workspace_size);
+
+      if ((fuse_reduction && !(meta.arch() == _Sm90{})) || this->no_nvlink) {
+        // need to zero buffers;
+        zero_buffers();
+      }
+      cutlass_op->run(fp8_args, workspace, stream);
     }
-    cutlass_op->run(args, workspace, stream);
+
   }  // namespace ths_op
 
   torch::Tensor
@@ -366,7 +497,7 @@ class GemmRS : public torch::CustomClassHolder {
       torch::Tensor weight,
       c10::optional<torch::Tensor> bias,
       c10::optional<UnifiedGemmHParams> hparams) {
-    auto meta = get_gemm_meta(/*has_bias=*/bias.has_value());
+    auto meta = get_gemm_meta(/*has_bias=*/bias.has_value());  // fast_accum doesn't matter
     auto rt_conf = get_rt_conf(input, weight, bias);
 
     // get cutlass op
@@ -380,30 +511,73 @@ class GemmRS : public torch::CustomClassHolder {
     int m = rt_conf.m();
     int n = rt_conf.n();
 
-    auto full_output = this->output_buffer.slice(0, 0, m);
-    if (nnodes > 1 && !no_nvlink) {
-      // printf("fuse_reduction:%d \n\n", fuse_reduction);
-      auto unified_hparams = cutlass_op->get_runtime_gemm_hparams();
-      auto tile_shape = unified_hparams.tile_shape();
-      auto [tile_M, tile_N, tile_K] = tile_shape;
-      int m_rank = m / world_size;
-      auto result = torch::empty({m_rank, n}, this->output_buffer.options());
-      auto output_to_reduce =
-          this->reduce_buffer.slice(0, 0, nnodes * m_rank).view({nnodes, m_rank, this->n_dim});
-      bsr_reduce(output_to_reduce, result, tile_M, tile_N);
-      return result;
-      // return full_output;
-    } else {
-      int local_world_size = world_size / nnodes;
-      if (fuse_reduction) {
-        auto length = m / world_size;
-        // return this->output_buffer.slice(0, rank * length, (rank + 1) * length).unsqueeze(0);
-        return this->output_buffer.slice(0, 0, length).unsqueeze(0);
+    if (((int)get_arch() < (int)_Sm90{}())) {
+      auto full_output = this->output_buffer.slice(0, 0, m);
+      if (nnodes > 1 && !no_nvlink) {
+        // printf("fuse_reduction:%d \n\n", fuse_reduction);
+        auto unified_hparams = cutlass_op->get_runtime_gemm_hparams();
+        auto tile_shape = unified_hparams.tile_shape();
+        auto [tile_M, tile_N, tile_K] = tile_shape;
+        int m_rank = m / world_size;
+        auto result = torch::empty({m_rank, n}, this->output_buffer.options());
+        auto output_to_reduce =
+            this->reduce_buffer.slice(0, 0, nnodes * m_rank).view({nnodes, m_rank, this->n_dim});
+        bsr_reduce(output_to_reduce, result, tile_M, tile_N);
+        return result;
+        // return full_output;
+      } else if (no_nvlink) {
+        int m_per_rank = m / this->world_size;
+        auto output_2d =
+            output_buffer.slice(0, m_per_rank * this->rank, m_per_rank * (this->rank + 1));
+        constexpr int kNumaWorldSize = 4;
+        constexpr int kNumaNodes = 2;
+        int local_world_size = world_size / nnodes;
+        int local_rank = rank % local_world_size;
+        int node_id = rank / local_world_size;
+        int numa_id = local_rank / kNumaWorldSize;
+        int rank_numa_local = local_rank % kNumaWorldSize;
+        int rank_prev = (rank_numa_local - 1 + kNumaWorldSize) % kNumaWorldSize;
+        rank_prev += numa_id * kNumaWorldSize + node_id * local_world_size;
+        int rank_next = (rank_numa_local + 1) % kNumaWorldSize;
+        rank_next += numa_id * kNumaWorldSize + node_id * local_world_size;
+        int rank_from = numa_id == 0 ? rank_next : rank_prev;
+        for (int i = 1; i < nnodes; i++) {
+          int reduce_unused_segment = (rank_from + kNumaNodes + i * local_world_size) % world_size;
+          auto segment_other_node = reduce_buffer.slice(
+              0, m_per_rank * reduce_unused_segment, m_per_rank * (reduce_unused_segment + 1));
+          output_2d.add_(segment_other_node);
+        }
+        return output_2d;
       } else {
-        auto output_4d = full_output.view({nnodes, local_world_size, m / world_size, n});
-        auto output = output_4d.sum(1);  // (nnodes,m_rank,n)
+        int local_world_size = world_size / nnodes;
+        if (fuse_reduction) {
+          auto length = m / world_size;
+          // return this->output_buffer.slice(0, rank * length, (rank + 1) * length).unsqueeze(0);
+          return this->output_buffer.slice(0, 0, length).unsqueeze(0);
+        } else {
+          auto output_4d = full_output.view({nnodes, local_world_size, m / world_size, n});
+          auto output = output_4d.sum(1);  // (nnodes,m_rank,n)
+          return output;
+        }
+      }
+    } else if (meta.arch() == _Sm90{}) {
+      int reduce_m_dim = m / world_size * nnodes * nnodes;
+      auto full_output = this->reduce_buffer.slice(0, 0, reduce_m_dim);
+      auto output_4d = full_output.view({nnodes, nnodes, m / world_size, n});
+      if (nnodes == 1) {
+        auto output = output_4d[node_idx].sum(0);  // (m_rank,n)
+        return output;
+      } else {
+        int m_rank = m / world_size;
+        auto output = torch::empty({m_rank, n}, output_buffer.options());
+        auto unified_hparams = cutlass_op->get_runtime_gemm_hparams();
+        auto tile_shape = unified_hparams.tile_shape();
+        auto [tile_M, tile_N, tile_K] = tile_shape;
+        bsr_reduce(output_4d[node_idx], output, tile_M, tile_N);
         return output;
       }
+    } else {
+      TORCH_CHECK(false, "unsupported arch:" + std::string(enum_to_string(meta.arch())));
     }
   }
 
@@ -412,21 +586,49 @@ class GemmRS : public torch::CustomClassHolder {
       torch::Tensor input,
       torch::Tensor weight,
       c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum,
       c10::optional<UnifiedGemmHParams> const &hparams) {
-    forward_gemm_impl(input, weight, bias, hparams);
+    forward_gemm_impl(
+        input, weight, bias, input_scale, weight_scale, output_scale, fast_accum, hparams);
     forward_barrier(input, weight, bias);
     return forward_reduce_scatter_impl(input, weight, bias, hparams);
   }
 
   void
-  forward_gemm(torch::Tensor input, torch::Tensor weight, c10::optional<torch::Tensor> bias) {
-    return forward_gemm_impl(std::move(input), std::move(weight), std::move(bias), c10::nullopt);
+  forward_gemm(
+      torch::Tensor input,
+      torch::Tensor weight,
+      c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum) {
+    return forward_gemm_impl(
+        std::move(input),
+        std::move(weight),
+        std::move(bias),
+        input_scale,
+        weight_scale,
+        output_scale,
+        fast_accum,
+        c10::nullopt);
   }
 
   void
   forward_barrier(torch::Tensor input, torch::Tensor weight, c10::optional<torch::Tensor> bias) {
     cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
-    nvshmemx_barrier_all_on_stream(stream);
+    if (get_arch() == _Sm90{} and nnodes == 1) {
+      // only local reduce, skip nvshmem barrier
+    } else {
+#ifdef FLUX_SHM_USE_NVSHMEM
+      flux_barrier_all_on_stream(stream);
+#else
+      flux_barrier_all_on_stream(stream, this->sync_buffers, this->rank);
+#endif
+    }
   }
 
   torch::Tensor
@@ -437,8 +639,23 @@ class GemmRS : public torch::CustomClassHolder {
   }
 
   torch::Tensor
-  forward(torch::Tensor input, torch::Tensor weight, c10::optional<torch::Tensor> bias) {
-    return forward_impl(std::move(input), std::move(weight), std::move(bias), c10::nullopt);
+  forward(
+      torch::Tensor input,
+      torch::Tensor weight,
+      c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum) {
+    return forward_impl(
+        std::move(input),
+        std::move(weight),
+        std::move(bias),
+        std::move(input_scale),
+        std::move(weight_scale),
+        std::move(output_scale),
+        fast_accum,
+        c10::nullopt);
   }
 
   void
@@ -453,7 +670,11 @@ class GemmRS : public torch::CustomClassHolder {
     if (this->reduce_buffer.defined()) {
       this->reduce_buffer.zero_();
     }
-    nvshmemx_barrier_all_on_stream(stream);
+#ifdef FLUX_SHM_USE_NVSHMEM
+    flux_barrier_all_on_stream(stream);
+#else
+    flux_barrier_all_on_stream(stream, this->sync_buffers, this->rank);
+#endif
     if (!no_nvlink) {
       c10::cuda::stream_synchronize(stream);
     }
@@ -464,8 +685,13 @@ class GemmRS : public torch::CustomClassHolder {
       torch::Tensor input,
       torch::Tensor weight,
       c10::optional<torch::Tensor> bias,
+      c10::optional<torch::Tensor> input_scale,
+      c10::optional<torch::Tensor> weight_scale,
+      c10::optional<torch::Tensor> output_scale,
+      bool fast_accum,
       c10::intrusive_ptr<ProfilingContext> opt_ctx) {
-    auto meta = unify_type(this->get_gemm_meta(/*has_bias=*/bias.has_value()));
+#ifdef FLUX_SHM_USE_NVSHMEM
+    auto meta = unify_type(this->get_gemm_meta(/*has_bias=*/bias.has_value(), fast_accum));
     auto rt_conf = this->get_rt_conf(input, weight, bias);
     ProfilingContext tmp_ctx("__tmp__");
     ProfilingContext *ctx = opt_ctx == nullptr ? &tmp_ctx : opt_ctx.get();
@@ -486,12 +712,13 @@ class GemmRS : public torch::CustomClassHolder {
           float total_elapsed = 0;
 
           auto stream = c10::cuda::getCurrentCUDAStream();
-          nvshmemx_barrier_all_on_stream(stream);
+          flux_barrier_all_on_stream(stream);
           c10::cuda::stream_synchronize(stream);
           for (int iter = 0; iter < warm_iters + iters; ++iter) {
             GpuTimer timer;
             timer.start(stream);
-            auto output [[maybe_unused]] = this->forward_impl(input, weight, bias, hparams);
+            auto output [[maybe_unused]] = this->forward_impl(
+                input, weight, bias, input_scale, weight_scale, output_scale, fast_accum, hparams);
             timer.stop();
             if (iter >= warm_iters) {
               total_elapsed += timer.elapsed_millis();
@@ -499,7 +726,7 @@ class GemmRS : public torch::CustomClassHolder {
           }
 
           // Avoid GPU frequency adjustment
-          nvshmemx_barrier_all_on_stream(stream);
+          flux_barrier_all_on_stream(stream);
           c10::cuda::stream_synchronize(stream);
           sleep(1);
 
@@ -520,7 +747,18 @@ class GemmRS : public torch::CustomClassHolder {
 
     auto best_hparams = ctx->record_best(meta, rt_conf);
     return this->forward_impl(
-        std::move(input), std::move(weight), std::move(bias), std::move(best_hparams));
+        std::move(input),
+        std::move(weight),
+        std::move(bias),
+        std::move(input_scale),
+        std::move(weight_scale),
+        std::move(output_scale),
+        fast_accum,
+        std::move(best_hparams));
+    // only support profiling when nvshmem is enabled
+    assert(false);
+    return torch::Tensor();
+#endif
   }
 
   void
@@ -574,13 +812,21 @@ static int _register_gemm_rs_ops [[maybe_unused]] = []() {
             &GemmRS::forward,
             py::arg("input"),
             py::arg("weight"),
-            py::arg("bias") = py::none())
+            py::arg("bias") = py::none(),
+            py::arg("input_scale") = py::none(),
+            py::arg("weight_scale") = py::none(),
+            py::arg("output_scale") = py::none(),
+            py::arg("fast_accum") = false)
         .def(
             "forward_gemm",
             &GemmRS::forward_gemm,
             py::arg("input"),
             py::arg("weight"),
-            py::arg("bias") = py::none())
+            py::arg("bias") = py::none(),
+            py::arg("input_scale") = py::none(),
+            py::arg("weight_scale") = py::none(),
+            py::arg("output_scale") = py::none(),
+            py::arg("fast_accum") = false)
         .def(
             "forward_barrier",
             &GemmRS::forward_barrier,
@@ -599,11 +845,13 @@ static int _register_gemm_rs_ops [[maybe_unused]] = []() {
             py::arg("input"),
             py::arg("weight"),
             py::arg("bias") = py::none(),
+            py::arg("input_scale") = py::none(),
+            py::arg("weight_scale") = py::none(),
+            py::arg("output_scale") = py::none(),
+            py::arg("fast_accum") = false,
             py::arg("prof_ctx") = nullptr);
   });
   return 0;
 }();
 
-}  // namespace ths_op
-}  // namespace flux
-}  // namespace bytedance
+}  // namespace bytedance::flux::ths_op

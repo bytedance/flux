@@ -42,4 +42,15 @@ uniform_initialize(torch::Tensor tensor, uint64_t seed, double min, double max) 
       stream);
 }
 
+void
+cudaipc_barrier_all_on_stream(
+    cudaStream_t stream, int rank, std::vector<torch::Tensor> &sync_buffers) {
+  std::vector<int32_t *> sync_buffer_ptrs;
+  int world_size = sync_buffers.size();
+  for (int i = 0; i < sync_buffers.size(); i++) {
+    sync_buffer_ptrs.push_back(reinterpret_cast<int32_t *>(sync_buffers[i].data_ptr()));
+  }
+  cudaipc_barrier_all_on_stream_impl(stream, sync_buffer_ptrs.data(), rank, world_size);
+}
+
 }  // namespace bytedance::flux::ths_op
