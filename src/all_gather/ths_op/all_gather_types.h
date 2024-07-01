@@ -19,22 +19,7 @@ static const int intra_numa_world_size = 4;
 
 static AGRingMode
 get_ring_mode(AGRingMode ring_mode) {
-  if (ring_mode == AGRingMode::Auto) {  // auto detect. with nvlink use ring mode.
-    if (topo_utils::has_nvswitch()) {
       return AGRingMode::All2All;
-    }
-
-    if (topo_utils::has_heterogeneous_pcie()) {
-      if (topo_utils::topo_numa_local_world_size() != intra_numa_world_size) {
-        std::cerr << "warning: only NUMA world_size==" << intra_numa_world_size
-                  << " is optimized for\n";
-        return AGRingMode::Ring1D;  // PCI-e ring mode with no optimization
-      }
-      return AGRingMode::Ring2D;
-    }
-    return AGRingMode::Ring1D;
-  }
-  return ring_mode;
 }
 
 }  // namespace bytedance::flux
