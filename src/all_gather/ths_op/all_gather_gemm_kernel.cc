@@ -25,7 +25,6 @@
 #include "flux/op_registry.h"
 #include "flux/runtime_config.h"
 #include "flux/ths_op/ths_op.h"
-#include "flux/ths_op/topo_utils.h"
 #include "flux/ths_op/util.h"
 #include "flux/args/all_gather.h"
 #include "flux/utils.h"
@@ -162,7 +161,6 @@ class AGKernel : public torch::CustomClassHolder {
         << "invalid nnodes: world_size[" << world_size << "] %% nnodes[" << nnodes << "] != 0";
     FLUX_CHECK(!(transpose_weight == true && is_fp8_gemm == true))
         << "FP8 GEMM does not support transpose weight";
-    _ensure_topo_initialized();
     this->ring_mode = get_ring_mode(ring_mode_);
 
     // input buffer
@@ -812,12 +810,6 @@ class AGKernel : public torch::CustomClassHolder {
         CU_STREAM_WRITE_VALUE_DEFAULT));
   }
 
-  void
-  _ensure_topo_initialized() {
-    if (!topo_utils::is_topo_initialized()) {
-      topo_utils::initialize_topo(const_cast<c10d::ProcessGroup &>(this->tp_group));
-    }
-  }
 
   void
   copy_all_to_all(torch::Tensor input, at::cuda::CUDAStream stream) {
@@ -889,39 +881,6 @@ class AGKernel : public torch::CustomClassHolder {
 
   void
   copy_ring_push_2d_pcie(torch::Tensor input, at::cuda::CUDAStream stream) {
-    // [0, numa_world_size) stages:  0 <- 1 <- 2 <- 3 <- 4 <- 5 <- 6 <- 7 <- 0
-    // [numa_world_size, world_size) stages: 0 <- 1 <- 2 <-3 <- 0 && 4 <- 5 <- 6 <- 7 <- 4
-    int to_rank = (rank - 1 + world_size) % world_size;  // always recv data from rank prev
-    int numa_world_size = topo_utils::topo_numa_local_world_size();
-    FLUX_CHECK_DIV(this->local_world_size, numa_world_size);
-    int numa_nodes = this->local_world_size / numa_world_size;
-    FLUX_CHECK_EQ(numa_nodes, 2) << " world_size " << this->local_world_size
-                                 << " with numa_world_size " << numa_world_size;
-    int nnode = rank / numa_world_size;
-    for (int i = 0; i < world_size - 1; i++) {  // with inner and intra numa node
-      int send_segment = (rank + i) % world_size;
-      if (i >= numa_world_size && rank % numa_world_size == 0) {
-        send_segment = (send_segment + numa_world_size) % world_size;
-        to_rank = (rank - 1 + numa_world_size) % numa_world_size + nnode * numa_world_size;
-      }
-      for (int j = 0; j < SPLIT; ++j) {
-        auto split_offset = j * split_chunk_size;
-        if (i != 0 && !(i >= numa_world_size &&
-                        rank % numa_world_size == 0)) {  // for i == 0 it is always ready
-          // previous rank recv done
-          wait_ready(rank, send_segment, j, stream);
-        }
-        void *from_ptr = this->input_ptrs[rank];
-        void *to_ptr = this->input_ptrs[to_rank];
-        CUDA_CHECK(cudaMemcpyAsync(
-            ptr_offset(to_ptr, send_segment * chunk_size + split_offset),
-            ptr_offset(from_ptr, send_segment * chunk_size + split_offset),
-            split_chunk_size,
-            cudaMemcpyDeviceToDevice,
-            stream));
-        set_ready(to_rank, send_segment, j, stream);
-      }
-    }
   }
 
   void

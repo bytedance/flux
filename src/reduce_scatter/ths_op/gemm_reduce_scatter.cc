@@ -159,20 +159,7 @@ class GemmRS : public torch::CustomClassHolder {
 
   bool
   has_nvlink() {
-    topo_utils::initialize_topo(const_cast<c10d::ProcessGroup &>(this->tp_group));
-    this->sub_world_size = topo_utils::topo_numa_local_world_size();
-    static int has_nvlink_env = get_int_from_env("FLUX_FORCE_NVLINK", -1);
-    if (has_nvlink_env == -1) {
-      if (topo_utils::has_nvswitch()) {
-        return true;
-      } else {
-        if (topo_utils::has_heterogeneous_nvlink()) {
-          this->sub_world_size = topo_utils::topo_nvlink_local_world_size();
-        }
-        return false;
-      }
-    }
-    return has_nvlink_env;
+    return true;
   }
 
   bool
