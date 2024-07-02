@@ -57,7 +57,7 @@ using torch::Tensor;
 
 class GemmRS : public torch::CustomClassHolder {
  private:
-  const c10d::ProcessGroup tp_group;
+  c10::intrusive_ptr<c10d::ProcessGroup> tp_group;
   const int32_t nnodes;
   const int32_t max_m;
   const int32_t n_dim;
@@ -208,7 +208,7 @@ class GemmRS : public torch::CustomClassHolder {
 
  public:
   GemmRS(
-      c10d::ProcessGroup tp_group,
+      c10::intrusive_ptr<c10d::ProcessGroup> tp_group_,
       int32_t nnodes,
       int32_t max_m,
       int32_t n_dim,
@@ -216,7 +216,7 @@ class GemmRS : public torch::CustomClassHolder {
       c10::ScalarType output_dtype,
       bool transpose_weight,
       bool fuse_reduction)
-      : tp_group(tp_group),
+      : tp_group(tp_group_),
         nnodes(nnodes),
         max_m(max_m),
         n_dim(n_dim),
@@ -224,8 +224,8 @@ class GemmRS : public torch::CustomClassHolder {
         output_dtype(output_dtype),
         transpose_weight(transpose_weight),
         fuse_reduction(fuse_reduction),
-        rank(tp_group.getRank()),
-        world_size(tp_group.getSize()),
+        rank(tp_group->getRank()),
+        world_size(tp_group->getSize()),
         local_world_size(world_size / nnodes),
         local_rank(rank % local_world_size),
         node_idx(rank / local_world_size),
@@ -742,8 +742,8 @@ class GemmRS : public torch::CustomClassHolder {
         std::move(output_scale),
         fast_accum,
         std::move(best_hparams));
-    // only support profiling when nvshmem is enabled
-    assert(false);
+#else
+    FLUX_CHECK(false) << "only support profiling when nvshmem is enabled";
     return torch::Tensor();
 #endif
   }
@@ -751,7 +751,7 @@ class GemmRS : public torch::CustomClassHolder {
   void
   _ensure_topo_initialized() {
     if (!topo_utils::is_topo_initialized()) {
-      topo_utils::initialize_topo(const_cast<c10d::ProcessGroup &>(this->tp_group));
+      topo_utils::initialize_topo(this->tp_group);
     }
   }
 };  // namespace flux
@@ -762,7 +762,7 @@ static int _register_gemm_rs_ops [[maybe_unused]] = []() {
   ThsOpsInitRegistry::instance().register_one("gemm_reduce_scatter", [](py::module &m) {
     py::class_<GemmRS>(m, "GemmRS")
         .def(
-            py::init([](c10d::ProcessGroup tp_group,
+            py::init([](c10::intrusive_ptr<c10d::ProcessGroup> tp_group,
                         int32_t nnodes,
                         int32_t max_m,
                         int32_t n_dim,

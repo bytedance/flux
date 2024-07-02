@@ -275,8 +275,8 @@ ThsOpsInitRegistry::initialize_all(py::module &m) const {
   }
 }
 
-DistEnvTP::DistEnvTP(c10d::ProcessGroup tp_group, int nnodes)
-    : DistEnv(tp_group.getRank(), tp_group.getSize(), nnodes), tp_group(tp_group) {}
+DistEnvTP::DistEnvTP(c10::intrusive_ptr<c10d::ProcessGroup> tp_group, int nnodes)
+    : DistEnv(tp_group->getRank(), tp_group->getSize(), nnodes), tp_group(tp_group) {}
 
 std::string
 DistEnvTP::toString() const {
@@ -290,12 +290,14 @@ DistEnvTP::toString() const {
 }
 
 DistEnvTPWithEP::DistEnvTPWithEP(
-    c10d::ProcessGroup tp_group, int nnodes, c10::optional<c10d::ProcessGroup> ep_group)
-    : DistEnv(tp_group.getRank(), tp_group.getSize(), nnodes),
-      tp_group(tp_group),
+    c10::intrusive_ptr<c10d::ProcessGroup> tp_group_,
+    int nnodes,
+    c10::intrusive_ptr<c10d::ProcessGroup> ep_group)
+    : DistEnv(tp_group_->getRank(), tp_group_->getSize(), nnodes),
+      tp_group(tp_group_),
       ep_group(ep_group),
-      ep_rank(ep_group.has_value() ? ep_group->getRank() : 0),
-      ep_size(ep_group.has_value() ? ep_group->getSize() : 1),
+      ep_rank(ep_group != nullptr ? ep_group->getRank() : 0),
+      ep_size(ep_group != nullptr ? ep_group->getSize() : 1),
       ffn_tp_size(world_size / ep_size),
       ffn_tp_rank(rank % ffn_tp_size) {
   FLUX_CHECK(world_size % ep_size == 0) << world_size << " % " << ep_size << " != 0";
@@ -348,9 +350,9 @@ init_tuning_record(py::module &m) {
 
 void
 init_dist_env_tp(py::module &m) {
-  py::class_<DistEnvTP, c10::intrusive_ptr<DistEnvTP>>(m, "DistEnvTP")
+  py::class_<DistEnvTP>(m, "DistEnvTP")
       .def(
-          py::init([](c10d::ProcessGroup tp_group, int32_t nnodes) {
+          py::init([](c10::intrusive_ptr<c10d::ProcessGroup> tp_group, int32_t nnodes) {
             return new DistEnvTP(tp_group, nnodes);
           }),
           py::arg("tp_group"),
@@ -360,11 +362,11 @@ init_dist_env_tp(py::module &m) {
 
 void
 init_dist_env_tp_with_ep(py::module &m) {
-  py::class_<DistEnvTPWithEP, c10::intrusive_ptr<DistEnvTPWithEP>>(m, "DistEnvTPWithEP")
+  py::class_<DistEnvTPWithEP>(m, "DistEnvTPWithEP")
       .def(
-          py::init([](c10d::ProcessGroup tp_group,
+          py::init([](c10::intrusive_ptr<c10d::ProcessGroup> tp_group,
                       int32_t nnodes,
-                      c10::optional<c10d::ProcessGroup> ep_group) {
+                      c10::intrusive_ptr<c10d::ProcessGroup> ep_group) {
             return new DistEnvTPWithEP(tp_group, nnodes, ep_group);
           }),
           py::arg("tp_group"),

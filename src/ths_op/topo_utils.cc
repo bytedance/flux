@@ -1,4 +1,4 @@
-//===- ths_op.cc -------------------------------------------------- C++ ---===//
+//===- topo_utils.cc -------------------------------------------- C++ ---===//
 //
 // Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +18,7 @@
 #include "flux/ths_op/topo_utils.h"
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <mutex>
 #include <numeric>
 #include <ostream>
@@ -63,7 +64,8 @@ struct TopoInfo {
 };
 
 static void
-allgather_cpu(c10d::ProcessGroup &pg, const void *sendbuf, void *recvbuf, int length) {
+allgather_cpu(
+    c10::intrusive_ptr<c10d::ProcessGroup> pg, const void *sendbuf, void *recvbuf, int length) {
   // cpu -> gpu -> gpu_gather -> cpu_gather
   auto option_gpu = at::TensorOptions()
                         .dtype(at::ScalarType::Byte)
@@ -72,11 +74,11 @@ allgather_cpu(c10d::ProcessGroup &pg, const void *sendbuf, void *recvbuf, int le
   auto option_cpu = at::TensorOptions().dtype(at::ScalarType::Byte).device(at::kCPU);
 
   auto src_cpu = at::from_blob(const_cast<void *>(sendbuf), length, option_cpu);
-  auto dst_cpu = at::from_blob(const_cast<void *>(recvbuf), length * pg.getSize(), option_cpu);
+  auto dst_cpu = at::from_blob(const_cast<void *>(recvbuf), length * pg->getSize(), option_cpu);
   auto src_gpu = at::empty({length}, option_gpu);
-  auto dst_gpu = at::empty({length * pg.getSize()}, option_gpu);
+  auto dst_gpu = at::empty({length * pg->getSize()}, option_gpu);
   src_gpu.copy_(src_cpu);
-  auto work = pg._allgather_base(dst_gpu, src_gpu);
+  auto work = pg->_allgather_base(dst_gpu, src_gpu);
   FLUX_CHECK(work->wait()) << "bootstrap_c10_pg_allgather hangs";
   dst_cpu.copy_(dst_gpu);
   LOG(INFO) << "bootstrap_c10_pg_allgather done";
@@ -232,8 +234,8 @@ init_topo(const std::vector<CUdevice> &gpu_device_ids, TopoInfo &topo_info) {
 }
 
 std::vector<CUdevice>
-get_processs_group_devices(c10d::ProcessGroup &pg) {
-  int world_size = pg.getSize();
+get_processs_group_devices(c10::intrusive_ptr<c10d::ProcessGroup> pg) {
+  int world_size = pg->getSize();
   CHECK(world_size > 0);
 
   CUdevice gpu_device_id;
@@ -247,7 +249,7 @@ get_processs_group_devices(c10d::ProcessGroup &pg) {
 }
 
 bool
-init_topo(c10d::ProcessGroup &pg, TopoInfo &topo_info) {
+init_topo(c10::intrusive_ptr<c10d::ProcessGroup> pg, TopoInfo &topo_info) {
   return init_topo(get_processs_group_devices(pg), topo_info);
 }
 
@@ -258,10 +260,10 @@ static std::mutex mutex;
 }  // namespace
 
 ncclComm_t
-create_nccl_comm_with_processgroup(c10d::ProcessGroup &pg) {
+create_nccl_comm_with_processgroup(c10::intrusive_ptr<c10d::ProcessGroup> pg) {
   //-- NCCL--
   ncclComm_t nccl_comm;
-  int rank = pg.getRank();
+  int rank = pg->getRank();
   auto stream = c10::cuda::getCurrentCUDAStream();
   void *hptr_id = nullptr;
   CUDA_CHECK(cudaMallocHost(&hptr_id, sizeof(ncclUniqueId)));
@@ -280,11 +282,11 @@ create_nccl_comm_with_processgroup(c10d::ProcessGroup &pg) {
   c10::cuda::memcpy_and_sync(
       src_gpus[0].data_ptr(), hptr_id, sizeof(ncclUniqueId), cudaMemcpyHostToDevice, stream);
 
-  auto work = pg.broadcast(src_gpus);
+  auto work = pg->broadcast(src_gpus);
   work->wait();
   c10::cuda::memcpy_and_sync(
       hptr_id, src_gpus[0].data_ptr(), sizeof(ncclUniqueId), cudaMemcpyDeviceToHost, stream);
-  NCCL_CHECK(ncclCommInitRank(&nccl_comm, pg.getSize(), id, rank));
+  NCCL_CHECK(ncclCommInitRank(&nccl_comm, pg->getSize(), id, rank));
   CUDA_CHECK(cudaFreeHost(hptr_id));
   return nccl_comm;
 }
@@ -310,7 +312,7 @@ initialize_topo(const std::vector<int> &gpu_device_ids) {
 }
 
 void
-initialize_topo(c10d::ProcessGroup &group) {
+initialize_topo(c10::intrusive_ptr<c10d::ProcessGroup> group) {
   initialize_topo(get_processs_group_devices(group));
 }
 

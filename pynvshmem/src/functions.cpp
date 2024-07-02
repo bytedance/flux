@@ -24,13 +24,13 @@
 #include <vector>
 
 inline void
-init_with_c10d_pg(const c10d::ProcessGroup &c10_pg) {
+init_with_c10d_pg(c10::intrusive_ptr<c10d::ProcessGroup> c10_pg) {
   nvshmemx_init_attr_t init_attr;
-  init_attr.mpi_comm = (void *)&c10_pg;  // bad! pretend I'm the MPIComm
+  init_attr.mpi_comm = (void *)c10_pg.get();  // bad! pretend I'm the MPIComm
   nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &init_attr);
   int mype = nvshmem_my_pe();
-  CHECK(c10_pg.getRank() == mype) << "NVShmem init: rank does not match PE!" << c10_pg.getRank()
-                                  << " vs " << mype;
+  CHECK(c10_pg->getRank() == mype)
+      << "NVShmem init: rank does not match PE!" << c10_pg->getRank() << " vs " << mype;
 }
 
 namespace {

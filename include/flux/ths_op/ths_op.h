@@ -122,24 +122,24 @@ class ThsOpsInitRegistry {
   ThsOpsInitRegistry &operator=(const ThsOpsInitRegistry &) = delete;
 };
 
-struct DistEnvTP : public DistEnv, torch::CustomClassHolder {
-  c10d::ProcessGroup tp_group;
-  DistEnvTP(c10d::ProcessGroup tp_group, int nnodes = 1);
+struct DistEnvTP : public DistEnv {
+  c10::intrusive_ptr<c10d::ProcessGroup> tp_group;
+  DistEnvTP(c10::intrusive_ptr<c10d::ProcessGroup> tp_group, int nnodes = 1);
   std::string toString() const;
 };
 
-struct DistEnvTPWithEP : public DistEnv, torch::CustomClassHolder {
-  c10d::ProcessGroup tp_group;
-  c10::optional<c10d::ProcessGroup> ep_group;
+struct DistEnvTPWithEP : public DistEnv {
+  c10::intrusive_ptr<c10d::ProcessGroup> tp_group;
+  c10::intrusive_ptr<c10d::ProcessGroup> ep_group;
   int32_t ep_rank;
   int32_t ep_size;
   int32_t ffn_tp_size;
   int32_t ffn_tp_rank;
 
   DistEnvTPWithEP(
-      c10d::ProcessGroup tp_group,
+      c10::intrusive_ptr<c10d::ProcessGroup> tp_group,
       int nnodes = 1,
-      c10::optional<c10d::ProcessGroup> ep_group = c10::nullopt);
+      c10::intrusive_ptr<c10d::ProcessGroup> ep_group = nullptr);
   std::string toString() const;
 };
 
