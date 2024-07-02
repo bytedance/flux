@@ -94,11 +94,13 @@ nvshmem_create_tensor_list(const std::vector<int64_t> &shape, c10::ScalarType dt
 
 std::vector<torch::Tensor>
 cudaipc_create_tensor_list(
-    c10d::ProcessGroup &pg, const std::vector<int64_t> &shape, c10::ScalarType dtype) {
+    c10::intrusive_ptr<c10d::ProcessGroup> pg,
+    const std::vector<int64_t> &shape,
+    c10::ScalarType dtype) {
   auto option_gpu =
       at::TensorOptions().dtype(dtype).device(at::kCUDA).device_index(c10::cuda::current_device());
 
-  FLUX_CHECK(pg.getSize() <= torch::cuda::device_count())
+  FLUX_CHECK(pg->getSize() <= torch::cuda::device_count())
       << "create_ipc_tensors should only be used intra node";
   auto size = torch::elementSize(dtype) *
               std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
@@ -115,19 +117,19 @@ cudaipc_create_tensor_list(
   auto handle_d = torch::empty({sizeof(cudaIpcMemHandle_t)}, option_local);
   CUDA_CHECK(cudaMemcpy(
       handle_d.data_ptr(), &handle, sizeof(cudaIpcMemHandle_t), cudaMemcpyHostToDevice));
-  auto handles_d = torch::empty({sizeof(cudaIpcMemHandle_t) * pg.getSize()}, option_local);
-  pg._allgather_base(handles_d, handle_d)->wait();
+  auto handles_d = torch::empty({sizeof(cudaIpcMemHandle_t) * pg->getSize()}, option_local);
+  pg->_allgather_base(handles_d, handle_d)->wait();
 
-  std::vector<cudaIpcMemHandle_t> handles_h(pg.getSize());
+  std::vector<cudaIpcMemHandle_t> handles_h(pg->getSize());
   CUDA_CHECK(cudaMemcpy(
       handles_h.data(),
       handles_d.data_ptr(),
-      sizeof(cudaIpcMemHandle_t) * pg.getSize(),
+      sizeof(cudaIpcMemHandle_t) * pg->getSize(),
       cudaMemcpyDeviceToHost));
 
-  std::vector<void *> ptrs(pg.getSize());
-  for (int i = 0; i < pg.getSize(); ++i) {
-    if (i != pg.getRank()) {
+  std::vector<void *> ptrs(pg->getSize());
+  for (int i = 0; i < pg->getSize(); ++i) {
+    if (i != pg->getRank()) {
       CUDA_CHECK(cudaIpcOpenMemHandle(&ptrs[i], handles_h[i], cudaIpcMemLazyEnablePeerAccess));
     } else {
       ptrs[i] = ptr;
@@ -135,9 +137,9 @@ cudaipc_create_tensor_list(
   }
 
   std::vector<torch::Tensor> tensors;
-  for (int i = 0; i < pg.getSize(); ++i) {
+  for (int i = 0; i < pg->getSize(); ++i) {
     torch::Tensor tensor;
-    if (i == pg.getRank()) {
+    if (i == pg->getRank()) {
       tensor = at::from_blob(ptr, shape, [](void *ptr) { cudaFree(ptr); }, option_gpu);
     } else {
       tensor =
@@ -149,14 +151,14 @@ cudaipc_create_tensor_list(
 }
 
 void
-init_flux_shm(c10d::ProcessGroup &c10_pg) {
+init_flux_shm(c10::intrusive_ptr<c10d::ProcessGroup> c10_pg) {
 #ifdef FLUX_SHM_USE_NVSHMEM
   nvshmemx_init_attr_t init_attr;
-  init_attr.mpi_comm = (void *)&c10_pg;  // bad! pretend I'm the MPIComm
+  init_attr.mpi_comm = (void *)c10_pg.get();  // bad! pretend I'm the MPIComm
   nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &init_attr);
   int mype = nvshmem_my_pe();
-  CHECK(c10_pg.getRank() == mype) << "NVShmem init: rank does not match PE!" << c10_pg.getRank()
-                                  << " vs " << mype;
+  CHECK(c10_pg->getRank() == mype)
+      << "NVShmem init: rank does not match PE!" << c10_pg->getRank() << " vs " << mype;
 #endif
 }
 
@@ -164,11 +166,11 @@ torch::Tensor
 flux_create_tensor(
     const std::vector<int64_t> &shape,
     c10::ScalarType dtype,
-    c10::optional<c10d::ProcessGroup> pg) {
+    c10::intrusive_ptr<c10d::ProcessGroup> pg) {
 #ifdef FLUX_SHM_USE_NVSHMEM
   return nvshmem_create_tensor(shape, dtype);
 #else
-  assert(false && "This line should never be reached");
+  FLUX_CHECK(false && "This line should never be reached");
   return torch::Tensor();
 #endif
 }
@@ -176,12 +178,12 @@ std::vector<torch::Tensor>
 flux_create_tensor_list(
     const std::vector<int64_t> &shape,
     c10::ScalarType dtype,
-    c10::optional<c10d::ProcessGroup> pg) {
+    c10::intrusive_ptr<c10d::ProcessGroup> pg) {
 #ifdef FLUX_SHM_USE_NVSHMEM
   return nvshmem_create_tensor_list(shape, dtype);
 #else
-  assert(pg.has_value());
-  return cudaipc_create_tensor_list(pg.value(), shape, dtype);
+  FLUX_CHECK(pg != nullptr);
+  return cudaipc_create_tensor_list(pg, shape, dtype);
 #endif
 }
 
@@ -193,11 +195,11 @@ flux_barrier_all_on_stream(
 #ifdef FLUX_SHM_USE_NVSHMEM
   nvshmemx_barrier_all_on_stream(stream);
 #else
-  assert(sync_buffers.has_value());
-  assert(rank.has_value());
+  FLUX_CHECK(sync_buffers.has_value());
+  FLUX_CHECK(rank.has_value());
   std::vector<int32_t *> sync_buffer_ptrs;
   auto sync_buffers_val = sync_buffers.value();
-  assert(sync_buffers_val[rank.value()].defined());
+  FLUX_CHECK(sync_buffers_val[rank.value()].defined());
   int world_size = sync_buffers_val.size();
   for (int i = 0; i < sync_buffers_val.size(); i++) {
     sync_buffer_ptrs.push_back(reinterpret_cast<int32_t *>(sync_buffers_val[i].data_ptr()));

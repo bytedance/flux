@@ -22,14 +22,14 @@
 
 namespace bytedance::flux::topo_utils {
 
-ncclComm_t create_nccl_comm_with_processgroup(c10d::ProcessGroup &pg);
+ncclComm_t create_nccl_comm_with_processgroup(c10::intrusive_ptr<c10d::ProcessGroup> pg);
 
 bool is_topo_initialized();
 /**
  * call this function multi times, you will got some warnings and only runs once really
  * @param group: this should be a local group. if not, split it to a local group from outside
  */
-void initialize_topo(c10d::ProcessGroup &group);
+void initialize_topo(c10::intrusive_ptr<c10d::ProcessGroup> group);
 void initialize_topo(const std::vector<int> &device_ids);
 
 // has any NV-link supported GPU exists

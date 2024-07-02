@@ -25,6 +25,7 @@
 #include "flux/op_registry.h"
 #include "flux/runtime_config.h"
 #include "flux/ths_op/ths_op.h"
+#include "flux/ths_op/topo_utils.h"
 #include "flux/ths_op/util.h"
 #include "flux/args/all_gather.h"
 #include "flux/utils.h"
@@ -79,7 +80,7 @@ class AGKernel : public torch::CustomClassHolder {
   using FlagType = int32_t;
 
  private:
-  const c10d::ProcessGroup tp_group;
+  c10::intrusive_ptr<c10d::ProcessGroup> tp_group;
   int32_t nnodes;
   int32_t full_m;
   int32_t n_dim;
@@ -129,7 +130,7 @@ class AGKernel : public torch::CustomClassHolder {
 
  public:
   AGKernel(
-      c10d::ProcessGroup tp_group,
+      c10::intrusive_ptr<c10d::ProcessGroup> tp_group_,
       int32_t nnodes,
       int32_t full_m,
       int32_t n_dim,
@@ -139,7 +140,7 @@ class AGKernel : public torch::CustomClassHolder {
       bool transpose_weight = true,
       bool local_copy = false,
       AGRingMode ring_mode_ = AGRingMode::Auto)
-      : tp_group(tp_group),
+      : tp_group(tp_group_),
         nnodes(nnodes),
         full_m(full_m),
         n_dim(n_dim),
@@ -149,8 +150,8 @@ class AGKernel : public torch::CustomClassHolder {
         transpose_weight(transpose_weight),
         local_copy(local_copy),
         is_fp8_gemm(is_fp8_torch_dtype(input_dtype)),
-        rank(tp_group.getRank()),
-        world_size(tp_group.getSize()),
+        rank(tp_group->getRank()),
+        world_size(tp_group->getSize()),
         local_world_size(world_size / nnodes),
         local_rank(rank % local_world_size),
         input_ptrs(world_size, nullptr),
@@ -924,7 +925,7 @@ static int _register_ag_kernel_ops [[maybe_unused]] = []() {
         .value("Ring2D", AGRingMode::Ring2D);
     py::class_<AGKernel>(m, "AGKernel")
         .def(
-            py::init([](c10d::ProcessGroup tp_group,
+            py::init([](c10::intrusive_ptr<c10d::ProcessGroup> tp_group,
                         int32_t nnodes,
                         int32_t full_m,
                         int32_t n_dim,

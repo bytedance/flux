@@ -104,8 +104,8 @@ run_memcpy() {
 /// All Gather GEMM Kernel OP
 class AGKernelCrossNode : public torch::CustomClassHolder {
  private:
-  const c10d::ProcessGroup tp_group;
-  c10d::ProcessGroup intra_node_group;
+  c10::intrusive_ptr<c10d::ProcessGroup> tp_group;
+  c10::intrusive_ptr<c10d::ProcessGroup> intra_node_group;
   int32_t nnodes;
   int32_t rank;
   int32_t world_size;
@@ -170,8 +170,8 @@ class AGKernelCrossNode : public torch::CustomClassHolder {
   }
 
   AGKernelCrossNode(
-      c10d::ProcessGroup &tp_group,
-      c10d::ProcessGroup &intra_node_group_,
+      c10::intrusive_ptr<c10d::ProcessGroup> &tp_group_,
+      c10::intrusive_ptr<c10d::ProcessGroup> &intra_node_group_,
       int32_t nnodes,
       torch::Tensor output_buffer,
       int32_t full_m,
@@ -181,11 +181,11 @@ class AGKernelCrossNode : public torch::CustomClassHolder {
       bool transpose_weight = true,
       bool local_copy = false,
       AGRingMode ring_mode_ = AGRingMode::Auto)
-      : tp_group(tp_group),
+      : tp_group(tp_group_),
         intra_node_group(intra_node_group_),
         nnodes(nnodes),
-        rank(tp_group.getRank()),
-        world_size(tp_group.getSize()),
+        rank(tp_group->getRank()),
+        world_size(tp_group->getSize()),
         local_world_size(world_size / nnodes),
         local_rank(rank % local_world_size),
         node_id(rank / local_world_size),
@@ -853,7 +853,7 @@ class AGKernelCrossNode : public torch::CustomClassHolder {
   void
   _ensure_topo_initialized() {
     if (!topo_utils::is_topo_initialized()) {
-      topo_utils::initialize_topo(const_cast<c10d::ProcessGroup &>(this->tp_group));
+      topo_utils::initialize_topo(this->tp_group);
     }
   }
 };
@@ -865,8 +865,8 @@ static int _register_ag_kernel_crossnode_ops [[maybe_unused]] = []() {
       "all_gather_gemm_kernel_crossnode", [](py::module &m) {
         py::class_<AGKernelCrossNode>(m, "AGKernelCrossNode")
             .def(
-                py::init([](c10d::ProcessGroup tp_group,
-                            c10d::ProcessGroup intra_node_group,
+                py::init([](c10::intrusive_ptr<c10d::ProcessGroup> tp_group,
+                            c10::intrusive_ptr<c10d::ProcessGroup> intra_node_group,
                             int32_t nnodes,
                             torch::Tensor output_buffer,
                             int32_t full_m,

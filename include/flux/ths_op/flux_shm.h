@@ -16,20 +16,22 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
+#include <cuda_runtime_api.h>
 #include <torch/torch.h>
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
 #include <vector>
+#include "c10/util/intrusive_ptr.h"
 namespace bytedance::flux {
 
-void init_flux_shm(c10d::ProcessGroup &pg);
+void init_flux_shm(c10::intrusive_ptr<c10d::ProcessGroup> pg);
 torch::Tensor flux_create_tensor(
     const std::vector<int64_t> &shape,
     c10::ScalarType dtype,
-    c10::optional<c10d::ProcessGroup> pg = c10::nullopt);
+    c10::intrusive_ptr<c10d::ProcessGroup> pg = nullptr);
 std::vector<torch::Tensor> flux_create_tensor_list(
     const std::vector<int64_t> &shape,
     c10::ScalarType dtype,
-    c10::optional<c10d::ProcessGroup> pg = c10::nullopt);
+    c10::intrusive_ptr<c10d::ProcessGroup> pg = nullptr);
 void flux_barrier_all_on_stream(
     cudaStream_t stream,
     c10::optional<std::vector<torch::Tensor>> barrier_tensors = c10::nullopt,
@@ -41,7 +43,9 @@ void pyflux_barrier_all_on_stream(
 
 // suggest use the functions above if possible
 std::vector<torch::Tensor> cudaipc_create_tensor_list(
-    c10d::ProcessGroup &pg, const std::vector<int64_t> &shape, c10::ScalarType dtype);
+    c10::intrusive_ptr<c10d::ProcessGroup> pg,
+    const std::vector<int64_t> &shape,
+    c10::ScalarType dtype);
 
 #ifdef FLUX_SHM_USE_NVSHMEM
 std::vector<torch::Tensor> nvshmem_create_tensor_list(

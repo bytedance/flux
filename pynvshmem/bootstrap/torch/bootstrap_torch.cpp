@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
 
+// don't own this. make use this lives longer than using this
 static c10d::ProcessGroup *pg = nullptr;
 static int nvshmem_initialized_torch = 0;
 
