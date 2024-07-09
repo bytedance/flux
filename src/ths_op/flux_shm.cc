@@ -53,8 +53,11 @@ nvshmem_create_tensor(const std::vector<int64_t> &shape, c10::ScalarType dtype) 
   auto size = torch::elementSize(dtype) *
               std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
   FLUX_CHECK(size != 0);
+  void *ptr = nvshmem_malloc(size);
+  FLUX_CHECK(ptr != nullptr);
+  CUDA_CHECK(cudaMemset(ptr, 0, size)); // memset the allocated buffer
   return at::from_blob(
-      nvshmem_malloc(size), shape, [](void *ptr) { nvshmem_free(ptr); }, option_gpu);
+      ptr, shape, [](void *ptr) { nvshmem_free(ptr); }, option_gpu);
 }
 
 std::vector<torch::Tensor>
@@ -71,6 +74,7 @@ nvshmem_create_tensor_list(const std::vector<int64_t> &shape, c10::ScalarType dt
   std::vector<torch::Tensor> tensors;
   tensors.reserve(local_world_size);
   void *ptr = nvshmem_malloc(size);
+  CUDA_CHECK(cudaMemset(ptr, 0, size)); // memset the allocated buffer
   FLUX_CHECK(ptr != nullptr);
   int rank_offset = rank - local_rank;
   for (int i = 0; i < local_world_size; i++) {
@@ -107,6 +111,7 @@ cudaipc_create_tensor_list(
   FLUX_CHECK(size != 0);
   void *ptr = nullptr;
   CUDA_CHECK(cudaMalloc(&ptr, size));
+  CUDA_CHECK(cudaMemset(ptr, 0, size)); // memset the allocated buffer
   cudaIpcMemHandle_t handle;
   CUDA_CHECK(cudaIpcGetMemHandle(&handle, ptr));
 
