@@ -651,7 +651,7 @@ class AGKernel : public torch::CustomClassHolder {
 
     this->chunk_size = input.numel() * input.element_size();
     this->split_chunk_size = this->chunk_size / SPLIT;
-    return forward_impl(
+    auto result = forward_impl(
         std::move(input),
         std::move(weight),
         std::move(bias),
@@ -660,6 +660,8 @@ class AGKernel : public torch::CustomClassHolder {
         std::move(output_scale),
         fast_accum,
         c10::nullopt);
+    this->reset_signals(); // clear the signals at the end of the forward
+    return result;
   }
 
   torch::Tensor
@@ -678,7 +680,6 @@ class AGKernel : public torch::CustomClassHolder {
 #else
     flux_barrier_all_on_stream(current_stream, this->sync_buffers, this->rank);
 #endif
-    c10::cuda::stream_synchronize(current_stream);
 
     this->barrier_buffer.zero_();
   }
@@ -686,6 +687,7 @@ class AGKernel : public torch::CustomClassHolder {
   void
   copy_local(const torch::Tensor &input) {
     this->chunk_size = input.numel() * input.element_size();
+    this->split_chunk_size = this->chunk_size / SPLIT;
     cudaStream_t current_stream = c10::cuda::getCurrentCUDAStream();
     void *input_ptr = input.data_ptr();
     void *input_buffer_ptr = this->input_buffer.data_ptr();
