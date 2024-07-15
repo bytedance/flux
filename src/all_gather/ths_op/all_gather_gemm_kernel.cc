@@ -686,6 +686,7 @@ class AGKernel : public torch::CustomClassHolder {
   void
   copy_local(const torch::Tensor &input) {
     this->chunk_size = input.numel() * input.element_size();
+    this->split_chunk_size = this->chunk_size / SPLIT;
     cudaStream_t current_stream = c10::cuda::getCurrentCUDAStream();
     void *input_ptr = input.data_ptr();
     void *input_buffer_ptr = this->input_buffer.data_ptr();
