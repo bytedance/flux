@@ -269,7 +269,7 @@ def perf_flux(
 
     torch.distributed.barrier()
     for i in range(total_iters):
-        all_gather_gemm_kernel.reset_signals()
+        # all_gather_gemm_kernel.reset_signals() # move to the critical path, no need to reset the signal manually
         if local_copy:
             all_gather_gemm_kernel.copy_local(input)
         start_events[i].record()
