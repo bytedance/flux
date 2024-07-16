@@ -182,8 +182,8 @@ struct GemmV2AGKernel_Space : OpSpaceBase<GemmV2AGKernel_Space> {
           make_gemm_v2_hparams(Shape<_64, _64, _32>{}, Shape<_16, _8, _16>{}, _StreamkDP{})),
       cute::make_tuple(Auto{}),
       cute::make_tuple(
-          Shape<_128, _128, _64>{},
           Shape<_128, _128, _32>{},
+          Shape<_128, _128, _64>{},
           Shape<_64, _128, _32>{},
           Shape<_64, _128, _64>{},
           Shape<_64, _256, _32>{},
