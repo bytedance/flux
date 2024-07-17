@@ -19,7 +19,6 @@ from functools import partial
 import torch
 import torch.distributed as dist
 import flux
-from flux import pynvshmem
 from typing import Optional
 
 FLUX_GEMM_RS_INTER_NODE_GROUP = None
