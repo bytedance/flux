@@ -213,6 +213,7 @@ struct VisitorAuxStoreScatter {
           row_start(row_start),
           col_start(col_start) {}
 
+   public:
     GTensor tC_gAux;
     RTensor tC_rAux;
     CTensor tC_cAux;
@@ -226,6 +227,9 @@ struct VisitorAuxStoreScatter {
     uint32_t row_start;
     uint32_t col_start;
     Element **rs_ptrs;
+    static constexpr int MAX_RANK_SIZE = 4;
+    int row_stride[MAX_RANK_SIZE];
+    int col_stride[MAX_RANK_SIZE];
 
     CUTLASS_DEVICE void
     begin_step(int step_idx) {
@@ -256,7 +260,8 @@ struct VisitorAuxStoreScatter {
       auto coord_v = filter(tC_cAux(_, _, _, step_idx));
       auto dst_v = filter(tC_gAux(_, _, _, step_idx));
       auto shape = cute::make_shape(m_end, size<1>(problem_shape), size<2>(problem_shape));
-
+      const int cur_step_row = row_start + step_idx * row_stride[3];
+      const int cur_step_col = col_start + step_idx * col_stride[3];
       if constexpr (kPcieMode) {
         CUTLASS_PRAGMA_UNROLL
         for (int i = 0; i < size(src_v); ++i) {
@@ -274,28 +279,46 @@ struct VisitorAuxStoreScatter {
       } else {
         auto dst_flat = flatten(tC_cAux.layout().shape());
         int dst_step = size(take<3, 6>(dst_flat));
-
-        if constexpr (FuseReduction) {
+        using Layout_tC_gAux = decltype(tC_gAux.layout());
+        using Shape_tC_gAux = decltype(flatten(tC_gAux.shape()));
+        // if (threadIdx.x == 0 && blockIdx.x == 0) {
+        //   print("tC_cAux ");
+        //   print(tC_cAux.layout());
+        //   print("\n");
+        //   print("tC_gAux ");
+        //   print(tC_gAux.layout());
+        //   print("\n");
+        //   printf("dst_step:%d  \n", dst_step);
+        //   printf("row_stride: (%d %d %d %d)\n", row_stride[0], row_stride[1], row_stride[2],
+        //   row_stride[3]); printf("col_stride: (%d %d %d %d)\n", col_stride[0], col_stride[1],
+        //   col_stride[2], col_stride[3]); printf("blockDim: %d %d %d\n", blockDim.x, blockDim.y,
+        //   blockDim.z); print(get<3>(tC_gAux.stride())); print("\n"); int size4 =
+        //   size<4>(Shape_tC_gAux{}); printf("size4:%d \n", size4);
+        // }
+        constexpr int size2 = size<2>(Shape_tC_gAux{});
+        constexpr int size1 = size<1>(Shape_tC_gAux{});
+        constexpr int size0 = size<0>(Shape_tC_gAux{});
+        constexpr int size01 = size0 * size1;
+        CUTLASS_PRAGMA_UNROLL
+        for (int p2 = 0; p2 < size2; p2++) {
           CUTLASS_PRAGMA_UNROLL
-          for (int p1 = 0; p1 < size(src_v) / size<0>(dst_v); p1++) {
+          for (int p1 = 0; p1 < size1; p1++) {
             CUTLASS_PRAGMA_UNROLL
-            for (int p0 = 0; p0 < size<0>(dst_v); p0++) {
-              int row = row_start + p1 + dst_step * step_idx;
-              int col = col_start + p0 * size(dst_flat);
+            for (int p0 = 0; p0 < size0; p0++) {
+              int row =
+                  cur_step_row + p0 * row_stride[0] + p1 * row_stride[1] + p2 * row_stride[2];
+              int col =
+                  cur_step_col + p0 * col_stride[0] + p1 * col_stride[1] + p2 * col_stride[2];
               void *dst_ptr = rs_ptrs[row] + col;
-              int pos = p0 + size<0>(dst_v) * p1;
+              int pos = p0 + p1 * size0 + p2 * size01;
               bool guard = elem_less(coord_v(pos), problem_shape);
-              cutlass::arch::global_red<VecType, sizeof(VecType), half_t>(
-                  src_v(pos), dst_ptr, guard);
+              if constexpr (FuseReduction) {
+                cutlass::arch::global_red<VecType, sizeof(VecType), half_t>(
+                    src_v(pos), dst_ptr, guard);
+              } else {
+                cutlass::arch::global_store<VecType, sizeof(VecType)>(src_v(pos), dst_ptr, guard);
+              }
             }
-          }
-        } else {
-          CUTLASS_PRAGMA_UNROLL
-          for (int i = 0; i < size(src_v); ++i) {
-            bool guard = elem_less(coord_v(i), problem_shape);
-            int row = row_start + size<0>(src_v) * i + dst_step * step_idx;
-            void *dst_ptr = rs_ptrs[row] + col_start;
-            cutlass::arch::global_store<VecType, sizeof(VecType)>(src_v(i), dst_ptr, guard);
           }
         }
       }
@@ -471,20 +494,47 @@ struct VisitorAuxStoreScatter {
       col_offset_start = ptr_offset_start / sizeof(Element) % N;
     }
 
-    return Callbacks<decltype(tC_gAux), decltype(tC_rAux), decltype(tC_cAux), ProblemShape>(
-        cute::move(tC_gAux),
-        cute::move(tC_rAux),
-        cute::move(tC_cAux),
-        problem_shape,
-        params,
-        barrier_ptr,
-        thread_idx,
-        tile_idx,
-        dst_rank,
-        m_end,
-        smem_ptr,
-        row_offset_start,
-        col_offset_start);
+    auto callback =
+        Callbacks<decltype(tC_gAux), decltype(tC_rAux), decltype(tC_cAux), ProblemShape>(
+            cute::move(tC_gAux),
+            cute::move(tC_rAux),
+            cute::move(tC_cAux),
+            problem_shape,
+            params,
+            barrier_ptr,
+            thread_idx,
+            tile_idx,
+            dst_rank,
+            m_end,
+            smem_ptr,
+            row_offset_start,
+            col_offset_start);
+    if constexpr (!kPcieMode) {
+      auto flattened_stride = flatten(tC_gAux.stride());
+      using Layout_tC_gAux = decltype(tC_gAux.layout());
+      using Shape_tC_gAux = decltype(flatten(tC_gAux.shape()));
+      using Stride_tC_gAux = decltype(flatten(tC_gAux.stride()));
+      constexpr int flatten_rank = rank(Shape_tC_gAux{});
+      static_assert(flatten_rank == 6);
+      const int STRIDE_UNIT = N;
+      callback.row_stride[0] =
+          get<0>(flattened_stride) * VecLength / STRIDE_UNIT;  // not constexpr
+      callback.col_stride[0] =
+          get<0>(flattened_stride) * VecLength % STRIDE_UNIT;  // not constexpr
+      callback.row_stride[1] =
+          get<1>(flattened_stride) * VecLength / STRIDE_UNIT;  // not constexpr
+      callback.col_stride[1] =
+          get<1>(flattened_stride) * VecLength % STRIDE_UNIT;  // not constexpr
+      callback.row_stride[2] =
+          get<2>(flattened_stride) * VecLength / STRIDE_UNIT;  // not constexpr
+      callback.col_stride[2] = get<2>(flattened_stride) * VecLength % STRIDE_UNIT;
+      callback.row_stride[3] =
+          get<3>(flattened_stride) * VecLength / STRIDE_UNIT;  // not constexpr
+      callback.col_stride[3] = get<3>(flattened_stride) * VecLength % STRIDE_UNIT;
+      static_assert(size<4>(Shape_tC_gAux{}) == 1);
+      static_assert(size<5>(Shape_tC_gAux{}) == 1);
+    }
+    return callback;
   }
 };
 
