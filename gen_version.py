@@ -22,6 +22,7 @@ from pathlib import Path
 import shutil
 import re
 from typing import Optional, Tuple
+import torch
 
 CUR_DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -83,7 +84,9 @@ def get_flux_version(version_txt, *, dev=False):
         version = f.readline()
         version = version.strip()
     cuda_version_major, cuda_version_minor = cuda_version()
-    version = version + f"+cu{cuda_version_major}{cuda_version_minor}"
+    torch_version_splits = torch.__version__.split(".")
+    torch_version = f"{torch_version_splits[0]}.{torch_version_splits[1]}"
+    version = version + f"+cu{cuda_version_major}{cuda_version_minor}" + f"torch{torch_version}"
     if dev:
         commit_id = get_git_commit(CUR_DIR)
 
