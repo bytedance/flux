@@ -79,10 +79,15 @@ def cuda_version() -> Tuple[int, ...]:
     return tuple(int(v) for v in version)
 
 
-def get_flux_version(version_txt, *, dev=False):
+def get_tag_version(version_txt):
     with open(version_txt) as f:
         version = f.readline()
         version = version.strip()
+        return version
+
+
+def get_flux_version(version_txt, *, dev=False):
+    version = get_tag_version(version_txt)
     cuda_version_major, cuda_version_minor = cuda_version()
     torch_version_splits = torch.__version__.split(".")
     torch_version = f"{torch_version_splits[0]}.{torch_version_splits[1]}"
