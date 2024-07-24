@@ -3,30 +3,79 @@ import os
 import shutil
 import sys
 import re
+import ast
 from pathlib import Path
 import urllib
 import urllib.request
 import urllib.error
 import setuptools
 import torch
+import subprocess
 from torch.utils.cpp_extension import BuildExtension
 from packaging.version import parse, Version
-from gen_version import generate_versoin_file, check_final_release, get_tag_version
+from typing import Optional, Tuple
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 # Project directory root
 root_path: Path = Path(__file__).resolve().parent
-
-version_txt = os.path.join(root_path, "version.txt")
-version_file = os.path.join(root_path, "python/flux/version.py")
-is_dev = not check_final_release()
-flux_local_version = generate_versoin_file(version_txt, version_file, dev=is_dev)
-flux_version = get_tag_version(version_txt)
 enable_nvshmem = int(os.getenv("FLUX_SHM_USE_NVSHMEM", 0))
 PACKAGE_NAME = "byte_flux"
 BASE_WHEEL_URL = "https://github.com/bytedance/flux/releases/download/{tag_name}/{wheel_name}"
 FORCE_BUILD = os.getenv("FLASH_ATTENTION_FORCE_BUILD", "FALSE") == "TRUE"
+USE_LOCAL_VERSION = int(os.getenv("FLUX_USE_LOCAL_VERSION", 0))
 
+def cuda_version() -> Tuple[int, ...]:
+    """CUDA Toolkit version as a (major, minor) by nvcc --version"""
+
+    # Try finding NVCC
+    nvcc_bin: Optional[Path] = None
+    if nvcc_bin is None and os.getenv("CUDA_HOME"):
+        # Check in CUDA_HOME
+        cuda_home = Path(os.getenv("CUDA_HOME"))
+        nvcc_bin = cuda_home / "bin" / "nvcc"
+    if nvcc_bin is None:
+        # Check if nvcc is in path
+        nvcc_bin = shutil.which("nvcc")
+        if nvcc_bin is not None:
+            nvcc_bin = Path(nvcc_bin)
+    if nvcc_bin is None:
+        # Last-ditch guess in /usr/local/cuda
+        cuda_home = Path("/usr/local/cuda")
+        nvcc_bin = cuda_home / "bin" / "nvcc"
+    if not nvcc_bin.is_file():
+        raise FileNotFoundError(f"Could not find NVCC at {nvcc_bin}")
+
+    # Query NVCC for version info
+    output = subprocess.run(
+        [nvcc_bin, "-V"],
+        capture_output=True,
+        check=True,
+        universal_newlines=True,
+    )
+    match = re.search(r"release\s*([\d.]+)", output.stdout)
+    version = match.group(1).split(".")
+    return tuple(int(v) for v in version)
+
+
+def get_local_version(public_version):
+    cuda_version_major, cuda_version_minor = cuda_version()
+    torch_version_splits = torch.__version__.split(".")
+    torch_version = f"{torch_version_splits[0]}.{torch_version_splits[1]}"
+    version = public_version + f"+cu{cuda_version_major}{cuda_version_minor}" + f"torch{torch_version}"
+    return version
+
+def get_public_version():
+    with open(Path(root_path) / "python" / "flux" / "__init__.py", "r") as f:
+        version_match = re.search(r"^__version__\s*=\s*(.*)$", f.read(), re.MULTILINE)
+    public_version = ast.literal_eval(version_match.group(1))
+    return public_version
+
+def get_package_version():
+    global USE_LOCAL_VERSION
+    public_version = get_public_version()
+    if USE_LOCAL_VERSION:
+        return get_local_version(public_version)
+    return public_version
 
 def pathlib_wrapper(func):
     def wrapper(*kargs, **kwargs):
@@ -139,7 +188,7 @@ def setup_pytorch_extension() -> setuptools.Extension:
 
 
 def get_wheel_url():
-    flux_tag_version = get_tag_version(version_txt)
+    flux_tag_version = get_public_version()
     python_version = f"cp{sys.version_info.major}{sys.version_info.minor}"
     torch_version_raw = parse(torch.__version__)
     torch_version = f"{torch_version_raw.major}.{torch_version_raw.minor}"
@@ -186,10 +235,7 @@ class CachedWheelsCommand(_bdist_wheel):
 
 
 def main():
-    global flux_version
-    # Submodules to install
-    if(int(os.getenv("FLUX_USE_LOCAL_VERSION", 0))):
-        flux_version = flux_local_version
+    flux_version = get_package_version()
     packages = setuptools.find_packages(
         where="python",
         include=["flux", "flux.pynvshmem", "flux_ths_pybind"],

@@ -14,6 +14,7 @@
 # limitations under the License.
 #
 ################################################################################
+__version__ = "1.0.0"
 
 from .cpp_mod import *
 from .ag_gemm import *
@@ -24,4 +25,4 @@ if not isinstance(cpp_mod.AgRingMode, cpp_mod.NotCompiled):
 from .gemm_rs_sm80 import *
 from .util import *
 from .dist_utils import *
-from .version import __version__ as __version__
+
