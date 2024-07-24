@@ -23,7 +23,7 @@ is_dev = not check_final_release()
 flux_local_version = generate_versoin_file(version_txt, version_file, dev=is_dev)
 flux_version = get_tag_version(version_txt)
 enable_nvshmem = int(os.getenv("FLUX_SHM_USE_NVSHMEM", 0))
-
+PACKAGE_NAME = "byte_flux"
 BASE_WHEEL_URL = "https://github.com/bytedance/flux/releases/download/{tag_name}/{wheel_name}"
 FORCE_BUILD = os.getenv("FLASH_ATTENTION_FORCE_BUILD", "FALSE") == "TRUE"
 
@@ -146,7 +146,7 @@ def get_wheel_url():
     torch_cuda_version = parse(torch.version.cuda)
     torch_cuda_version = parse("11.8") if torch_cuda_version.major == 11 else parse("12.3")
     cuda_version = f"{torch_cuda_version.major}{torch_cuda_version.minor}"
-    wheel_filename = f"flux-{flux_tag_version}+cu{cuda_version}torch{torch_version}-{python_version}-{python_version}-linux_x86_64.whl"
+    wheel_filename = f"{PACKAGE_NAME}-{flux_tag_version}+cu{cuda_version}torch{torch_version}-{python_version}-{python_version}-linux_x86_64.whl"
     wheel_url = BASE_WHEEL_URL.format(tag_name=f"v{flux_tag_version}", wheel_name=wheel_filename)
     return wheel_url, wheel_filename
 
@@ -203,7 +203,7 @@ def main():
         ]
     # Configure package
     setuptools.setup(
-        name="byte_flux",
+        name=PACKAGE_NAME,
         version=flux_version,
         package_dir={"": "python"},
         packages=packages,
