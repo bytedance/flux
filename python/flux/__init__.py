@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 ################################################################################
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 from .cpp_mod import *
 from .ag_gemm import *
