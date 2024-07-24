@@ -203,7 +203,7 @@ def main():
         ]
     # Configure package
     setuptools.setup(
-        name="flux",
+        name="byte_flux",
         version=flux_version,
         package_dir={"": "python"},
         packages=packages,
