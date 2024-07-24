@@ -20,7 +20,8 @@ root_path: Path = Path(__file__).resolve().parent
 version_txt = os.path.join(root_path, "version.txt")
 version_file = os.path.join(root_path, "python/flux/version.py")
 is_dev = not check_final_release()
-flux_version = generate_versoin_file(version_txt, version_file, dev=is_dev)
+flux_local_version = generate_versoin_file(version_txt, version_file, dev=is_dev)
+flux_version = get_tag_version(version_txt)
 enable_nvshmem = int(os.getenv("FLUX_SHM_USE_NVSHMEM", 0))
 
 BASE_WHEEL_URL = "https://github.com/bytedance/flux/releases/download/{tag_name}/{wheel_name}"
@@ -185,7 +186,10 @@ class CachedWheelsCommand(_bdist_wheel):
 
 
 def main():
+    global flux_version
     # Submodules to install
+    if(int(os.getenv("FLUX_USE_LOCAL_VERSION", 0))):
+        flux_version = flux_local_version
     packages = setuptools.find_packages(
         where="python",
         include=["flux", "flux.pynvshmem", "flux_ths_pybind"],
