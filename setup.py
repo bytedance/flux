@@ -22,7 +22,7 @@ enable_nvshmem = int(os.getenv("FLUX_SHM_USE_NVSHMEM", 0))
 PACKAGE_NAME = "byte_flux"
 BASE_WHEEL_URL = "https://github.com/bytedance/flux/releases/download/{tag_name}/{wheel_name}"
 FORCE_BUILD = os.getenv("FLASH_ATTENTION_FORCE_BUILD", "FALSE") == "TRUE"
-USE_LOCAL_VERSION = int(os.getenv("FLUX_USE_LOCAL_VERSION", 1))
+USE_LOCAL_VERSION = int(os.getenv("FLUX_USE_LOCAL_VERSION", 0))
 
 def cuda_version() -> Tuple[int, ...]:
     """CUDA Toolkit version as a (major, minor) by nvcc --version"""
