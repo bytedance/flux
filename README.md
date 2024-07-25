@@ -5,9 +5,16 @@ Flux is a fast communication-overlapping library for tensor parallelism on GPUs.
 
 ## Why Flux
 
-Flux significantly can reduce latency and increase throughput for tensor parallelism for both inference and training.
+Flux can significantly reduce latency and increase throughput for tensor parallelism for both inference and training.
 
-## Build
+## Install from pip
+```
+# Make sure that PyTorch is installed.
+pip install packaging
+pip install byte-flux
+```
+
+## Build from source
 ```bash
 git clone https://github.com/bytedance/flux.git
 git submodule update --init --recursive
