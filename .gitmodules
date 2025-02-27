@@ -4,7 +4,3 @@
 [submodule "3rdparty/nccl"]
 	path = 3rdparty/nccl
 	url = https://github.com/NVIDIA/nccl
-[submodule "3rdparty/nvshmem"]
-	path = 3rdparty/nvshmem
-	url = git@code.byted.org:mlsys/nvshmem.git
-	branch = 2.10.1-3_byted
