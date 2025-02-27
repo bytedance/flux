@@ -1,6 +1,6 @@
 ################################################################################
 #
-# Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+# Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -15,34 +15,39 @@
 #
 ################################################################################
 
-from contextlib import contextmanager
 import ctypes
-import os
-import sys
-from pathlib import Path
-import torch
 import importlib
 import logging
+from pathlib import Path
+
+import torch
 
 FLUX_TORCH_EXTENSION_NAME = "flux_ths_pybind"
 
 
 def _preload_libs(libname):
-    libpath = Path(__file__).parent.parent / "lib" / libname
+    libpath = Path(__file__).parent / "lib" / libname
     try:
         ctypes.CDLL(libpath)
     except OSError as e:
         # Try to load from the LD_LIBRARY_PATH
+        logging.debug(f"failed to load {libpath}:\n {e}")
         ctypes.CDLL(libname)
 
 
 def _load_deps():
+    try:
+        _preload_libs("libnvshmem_host.so.3")
+        _preload_libs("nvshmem_bootstrap_uid.so")
+        _preload_libs("nvshmem_transport_ibrc.so.3")
+    except Exception as e:
+        logging.warning("Failed to load NVSHMEM libs")
     _preload_libs("libflux_cuda.so")
     try:
-        _preload_libs("nvshmem_bootstrap_torch.so")
-        _preload_libs("nvshmem_transport_ibrc.so.2")
+        _preload_libs("libflux_triton_aot.so")
     except Exception as e:
-        logging.info("Failed to load NVSHMEM libs")
+        logging.debug("Failed to load triton_aot libs")
+    _preload_libs("libflux_cuda_ths_op.so")
 
 
 _load_deps()
@@ -53,65 +58,151 @@ class NotCompiled:
     pass
 
 
-bsr_reduce = getattr(flux_mod, "bsr_reduce", NotCompiled())
-init_flux_shm = flux_mod.init_flux_shm
-nvshmem_create_tensor = getattr(flux_mod, "nvshmem_create_tensor", NotCompiled())
-bitwise_check = flux_mod.bitwise_check
-uniform_initialize = flux_mod.uniform_initialize
-load_tuning_record = flux_mod.load_tuning_record
-
-ProfilingContext = flux_mod.ProfilingContext
-TuningRecord = flux_mod.TuningRecord
-DistEnvTP = flux_mod.DistEnvTP
-DistEnvTPWithEP = flux_mod.DistEnvTPWithEP
-MoeArguments = flux_mod.MoeArguments
-GemmOnly = getattr(flux_mod, "GemmOnly", NotCompiled())
-GemmRS = getattr(flux_mod, "GemmRS", NotCompiled())
-GemmRSAcrossNode = getattr(flux_mod, "GemmRSAcrossNode", NotCompiled())
-AllGatherGemm = getattr(flux_mod, "AllGatherGemm", NotCompiled())
-AGKernel = getattr(flux_mod, "AGKernel", NotCompiled())
-AGKernelCrossNode = getattr(flux_mod, "AGKernelCrossNode", NotCompiled())
-AGKernelCrossNodeNvshmem = getattr(flux_mod, "AGKernelCrossNodeNvshmem", NotCompiled())
-GemmGroupedV3AGScatter = getattr(flux_mod, "GemmGroupedV3AGScatter", NotCompiled())
-GemmGroupedV3GatherRS = getattr(flux_mod, "GemmGroupedV3GatherRS", NotCompiled())
-AgRingMode = getattr(flux_mod, "AGRingMode", NotCompiled())
+def _get_flux_member(member):
+    return getattr(flux_mod, member, NotCompiled())
 
 
-def get_from_torch_classes(name: str):
+def _get_from_torch_classes(name: str):
     try:
         return getattr(torch.classes.flux, name)
     except:
         return NotCompiled()
 
 
-All2AllOp = get_from_torch_classes("All2AllOp")
-GemmGrouped = get_from_torch_classes("GemmGrouped")
-GemmGroupedV3 = get_from_torch_classes("GemmGroupedV3")
-# GemmGroupedV3GatherRS = get_from_torch_classes("GemmGroupedV3GatherRS")
+bsr_reduce = _get_flux_member("bsr_reduce")
+init_flux_shm = flux_mod.init_flux_shm
+bitwise_check = flux_mod.bitwise_check
+uniform_initialize = flux_mod.uniform_initialize
+load_tuning_record = flux_mod.load_tuning_record
+create_tensor_list = flux_mod.flux_create_tensor_list
+GroupBarrier = flux_mod.GroupBarrier
 
+calc_scatter_index = _get_flux_member("calc_scatter_index")
+
+ProfilingContext = flux_mod.ProfilingContext
+TuningRecord = flux_mod.TuningRecord
+DistEnvTP = flux_mod.DistEnvTP
+DistEnvTPWithEP = flux_mod.DistEnvTPWithEP
+MoeArguments = flux_mod.MoeArguments
+
+# GEMM only
+GemmOnly = _get_flux_member("GemmOnly")
+BlockScaleGemm = _get_flux_member("BlockScaleGemm")
+GemmGroupedV2 = _get_flux_member("GemmGroupedV2")
+GemmGroupedV3 = _get_flux_member("GemmGroupedV3")
+
+# GEMM+RS
+GemmRS = _get_flux_member("GemmRS")
+get_gemm_rs_threadblock_segments_info = _get_flux_member("get_gemm_rs_threadblock_segments_info")
+calc_gemm_rs_threadblock_segments_info = _get_flux_member("calc_gemm_rs_threadblock_segments_info")
+GemmRSAcrossNode = _get_flux_member("GemmRSAcrossNode")
+
+# allgather op
+AGRingMode = _get_flux_member("AGRingMode")
+AllGatherOption = _get_flux_member("AllGatherOption")
+if not isinstance(AllGatherOption, NotCompiled):
+    AllGatherOption.__repr__ = (
+        lambda x: f"AllGatherOption(mode={x.mode}, fuse_sync={x.fuse_sync}, use_cuda_core_local={x.use_cuda_core_local}, use_cuda_core_ag={x.use_cuda_core_ag}, input_buffer_copied={x.input_buffer_copied}, use_read={x.use_read})"
+    )
+AllGatherOp = _get_flux_member("AllGatherOp")
+RingMode = _get_flux_member("RingMode")
+ReduceScatterOption = _get_flux_member("ReduceScatterOption")
+if not isinstance(ReduceScatterOption, NotCompiled):
+    ReduceScatterOption.__repr__ = (
+        lambda x: f"use_barrier_queue={x.use_barrier_queue}, "
+        "use_1d_ring={x.use_1d_ring}, "
+        "use_p2p_read={x.use_p2p_read}, "
+        "use_cudaMemcpyAsync={x.use_cudaMemcpyAsync}, "
+        "use_gemmk={x.use_gemmk}, "
+        "per_tile_flags={x.per_tile_flags}, "
+        "n_split={x.n_split}, "
+        "num_blocks={x.num_blocks}, "
+        "ring_mode={x.ring_mode}"
+    )
+
+# AG+GEMM
+AGKernel = _get_flux_member("AGKernel")
+AGKernelCrossNode = _get_flux_member("AGKernelCrossNode")
+
+# MOE ag-scatter
+GemmGroupedV2AGScatterOp = _get_flux_member("GemmGroupedV2AGScatterOp")
+GemmGroupedV3AGScatter = _get_flux_member("GemmGroupedV3AGScatter")
+prepare_moe_ag_scatter_args = _get_flux_member("prepare_moe_ag_scatter_args")
+
+# MOE gather-rs
+GemmGroupedV2GatherRSOp = _get_flux_member("GemmGroupedV2GatherRSOp")
+TopkReduceScatterOp = _get_flux_member("TopkReduceScatterOp")
+calc_moe_triton_blocked_gather_a = getattr(
+    flux_mod, "calc_moe_triton_blocked_gather_a", NotCompiled()
+)
+GemmGroupedV3GatherRS = _get_flux_member("GemmGroupedV3GatherRS")
+topk_scatter_reduce = _get_flux_member("topk_scatter_reduce")
+All2AllOp = _get_flux_member("All2AllOp")
+
+# inplace cast
+inplace_cast_fp32_to_bf16 = _get_flux_member("inplace_cast_fp32_to_bf16")
+InplaceCast = _get_flux_member("InplaceCast")
+
+# All2AllTranspose
+A2ARingMode = _get_flux_member("A2ARingMode")
+AllToAllOption = _get_flux_member("AllToAllOption")
+
+# Gemm + All2AllTranspose
+PreAttnAllToAllCommOp = _get_flux_member("PreAttnAllToAllCommOp")
+GemmAllToAllTranspose = _get_flux_member("GemmAllToAllTranspose")
+
+# All2AllTranspose + Gemm
+AllToAllTransposeGemm = _get_flux_member("AllToAllTransposeGemm")
+DisScatterForward = _get_flux_member("DisScatterForward")
+DisScatterBackward = _get_flux_member("DisScatterBackward")
+All2AllInference = _get_flux_member("All2AllInference")
 
 __all__ = [
     "bsr_reduce",
     "init_flux_shm",
+    "create_tensor_list",
+    "GroupBarrier",
     "bitwise_check",
     "uniform_initialize",
+    "topk_scatter_reduce",
     "load_tuning_record",
     "TuningRecord",
     "ProfilingContext",
     "DistEnvTP",
     "DistEnvTPWithEP",
     "MoeArguments",
-    "GemmOnly",
+    "ReduceScatterOption",
+    "RingMode",
     "GemmRS",
     "GemmRSAcrossNode",
-    "AllGatherGemm",
     "AGKernel",
     "AGKernelCrossNode",
+    "AllToAllTransposeGemm",
     "All2AllOp",
-    "GemmGrouped",
+    "GemmOnly",
+    "BlockScaleGemm",
+    "GemmAllToAllTranspose",
+    "GemmGroupedV2",
     "GemmGroupedV3",
     "GemmGroupedV3AGScatter",
     "GemmGroupedV3GatherRS",
-    "AgRingMode",
-    "nvshmem_create_tensor",
+    "GemmGroupedV2AGScatterOp",
+    "prepare_moe_ag_scatter_args",
+    "GemmGroupedV2GatherRSOp",
+    "TopkReduceScatterOp",
+    "InplaceCast",
+    "AGRingMode",
+    "A2ARingMode",
+    "AllGatherOption",
+    "AllGatherOp",
+    "AllToAllOption",
+    "inplace_cast_fp32_to_bf16",
+    "get_gemm_rs_threadblock_segments_info",
+    "calc_gemm_rs_threadblock_segments_info",
+    "calc_scatter_index",
+    "calc_moe_triton_blocked_gather_a",
+    "DisScatterForward",
+    "DisScatterBackward",
+    "All2AllInference",
+    "PreAttnAllToAllCommOp",
 ]
