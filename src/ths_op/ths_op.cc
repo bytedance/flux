@@ -1,6 +1,6 @@
 //===- ths_op.cc -------------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,33 +16,103 @@
 //===----------------------------------------------------------------------===//
 
 #include "flux/ths_op/ths_op.h"
-#include "c10/cuda/CUDAFunctions.h"
-#include "flux/flux.h"
 #include "flux/cuda/cuda_common.h"
+#include "flux/cuda/moe_utils.h"
+#include "flux/flux.h"
 #include "flux/gemm_hparams.h"
 #include "flux/gemm_meta.h"
 #include "flux/op_registry.h"
+#include "flux/runtime_config.h"
+#include <ATen/Context.h>
+#include <ATen/core/function_schema.h>
+#include <ATen/core/jit_type.h>
 #include <ATen/core/List.h>
 #include <ATen/ops/empty.h>
 #include <c10/core/ScalarType.h>
 #include <c10/core/TensorOptions.h>
-#include <c10/util/intrusive_ptr.h>
-#include <cuda_runtime_api.h>
-#include <ATen/core/jit_type.h>
+#include <c10/cuda/CUDAFunctions.h>
 #include <c10/cuda/CUDAStream.h>
+#include <c10/util/intrusive_ptr.h>
+#include <c10/util/Optional.h>
 #include <cstdint>
 #include <cstdlib>
+#include <cuda_runtime_api.h>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
-#include "flux/runtime_config.h"
+#include <utility>
 
 namespace bytedance::flux::ths_op {
+
+namespace {
+bool
+get_deterministic() {
+  return
+#if TORCH_VERSION_MAJOR >= 2 && TORCH_VERSION_MINOR >= 2
+      at::globalContext().deterministicFillUninitializedMemory();
+#else
+      at::globalContext().deterministicAlgorithms();
+#endif
+}
+void
+set_deterministic(bool use_deterministic_algorithms, bool deterministic_algorithms_warn_only) {
+#if TORCH_VERSION_MAJOR >= 2 && TORCH_VERSION_MINOR >= 2
+  at::globalContext().setDeterministicFillUninitializedMemory(use_deterministic_algorithms);
+#else
+  at::globalContext().setDeterministicAlgorithms(
+      use_deterministic_algorithms, deterministic_algorithms_warn_only);
+#endif
+}
+}  // namespace
+
+class TorchDeterministicGuard::TorchDeterministicGuardImpl {
+ public:
+  TorchDeterministicGuardImpl(bool use_deterministic_algorithms)
+      : use_deterministic_algorithms_old_(get_deterministic()),
+        deterministic_algorithms_warn_only_old_(
+            at::globalContext().deterministicAlgorithmsWarnOnly()) {
+    set_deterministic(use_deterministic_algorithms, use_deterministic_algorithms_old_);
+  }
+
+  ~TorchDeterministicGuardImpl() { exit(); }
+
+  void
+  exit() {
+    if (exited_)
+      return;
+    set_deterministic(
+        deterministic_algorithms_warn_only_old_, deterministic_algorithms_warn_only_old_);
+  }
+
+ private:
+  bool use_deterministic_algorithms_old_;
+  bool deterministic_algorithms_warn_only_old_;
+  bool exited_ = false;
+};
+
+TorchDeterministicGuard::TorchDeterministicGuard(bool use_deterministic_algorithms)
+    : impl_(new TorchDeterministicGuardImpl(use_deterministic_algorithms)) {}
+
+TorchDeterministicGuard::~TorchDeterministicGuard() { delete impl_; }
+
+void
+TorchDeterministicGuard::exit() {
+  impl_->exit();
+}
 
 DataTypeEnum
 from_torch_dtype(at::ScalarType torch_dtype) {
   switch (torch_dtype) {
+    case at::ScalarType::Float: {
+      return _FP32{};
+    }; break;
+    case at::ScalarType::Int: {
+      return _S32{};
+    }; break;
+    case at::ScalarType::Char: {
+      return _S8{};
+    }; break;
     case at::ScalarType::Half: {
       return _FP16{};
     }; break;
@@ -62,25 +132,42 @@ from_torch_dtype(at::ScalarType torch_dtype) {
   return DataTypeEnum{};
 }
 
-bool
-is_fp8_torch_dtype(at::ScalarType torch_dtype) {
-  return (torch_dtype == at::ScalarType::Float8_e4m3fn) ||
-         (torch_dtype == at::ScalarType::Float8_e5m2);
-}
-
-size_t
-torch_dtype_size(at::ScalarType torch_dtype) {
-  switch (torch_dtype) {
-    case at::ScalarType::Half:
-    case at::ScalarType::BFloat16: return 2;
-    case at::ScalarType::Float8_e4m3fn:
-    case at::ScalarType::Float8_e5m2: return 1;
+at::ScalarType
+to_torch_dtype(DataTypeEnum dtype) {
+  switch (dtype) {
+    case _FP32{}: {
+      return at::ScalarType::Float;
+    }; break;
+    case _S32{}: {
+      return at::ScalarType::Int;
+    }; break;
+    case _S8{}: {
+      return at::ScalarType::Char;
+    }; break;
+    case _FP16{}: {
+      return at::ScalarType::Half;
+    }; break;
+    case _BF16{}: {
+      return at::ScalarType::BFloat16;
+    }; break;
+    case _E4M3{}: {
+      return at::ScalarType::Float8_e4m3fn;
+    }; break;
+    case _E5M2{}: {
+      return at::ScalarType::Float8_e5m2;
+    }; break;
     default:
       throw std::runtime_error(
-          std::string("unsupported torch_dtype:") + at::toString(torch_dtype));
+          std::string("unsupported dtype: ") + std::string(enum_to_string(dtype)));
   }
-  return 0;
+  return at::ScalarType::Undefined;
 }
+
+bool
+is_s8_torch_dtype(at::ScalarType torch_dtype) {
+  return torch_dtype == at::ScalarType::Char;
+}
+
 void CUDART_CB
 closeIpcMemHandleCallback(cudaStream_t stream, cudaError_t status, void *devPtr) {
   cudaIpcCloseMemHandle(devPtr);
@@ -217,64 +304,6 @@ ProfilingContext::record_best(UnifiedGemmMeta const &meta, RuntimeConfig const &
   return best_hparams;
 }
 
-// inline torch::Tensor
-// create_tensor(const std::vector<int64_t> &shape, c10::ScalarType dtype) {
-//   check_nvshmem_init();
-//   auto option_gpu =
-//       at::TensorOptions().dtype(dtype).device(at::kCUDA).device_index(c10::cuda::current_device());
-//   auto size = torch::elementSize(dtype) *
-//               std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
-//   return at::from_blob(
-//       nvshmem_malloc(size), shape, [](void *ptr) { nvshmem_free(ptr); }, option_gpu);
-// }
-
-/**
- * @return vector<torch::Tensor> of size local_world_size (NOTE: not world_size)
- */
-// std::vector<torch::Tensor>
-// create_tensor_list(const std::vector<int64_t> &shape, c10::ScalarType dtype) {
-//   check_nvshmem_init();
-//   auto option_gpu =
-//       at::TensorOptions().dtype(dtype).device(at::kCUDA).device_index(c10::cuda::current_device());
-//   auto size = torch::elementSize(dtype) *
-//               std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
-//   void *ptr = nvshmem_malloc(size);
-//   std::vector<torch::Tensor> tensors;
-//   for (int i = 0; i < nvshmem_n_pes(); i++) {
-//     if (i == nvshmem_my_pe()) {  // release only local
-//       tensors.push_back(
-//           at::from_blob(ptr, shape, [](void *ptr) { nvshmem_free(ptr); }, option_gpu));
-//     } else {
-//       auto *rptr = nvshmem_ptr(ptr, i);
-//       if (rptr) {
-//         tensors.push_back(at::from_blob(nvshmem_ptr(ptr, i), shape, option_gpu));
-//       }
-//     }
-//   }
-//   return tensors;
-// }
-
-ThsOpsInitRegistry &
-ThsOpsInitRegistry::instance() {
-  static ThsOpsInitRegistry inst;
-  return inst;
-}
-
-void
-ThsOpsInitRegistry::register_one(std::string name, OpInitFunc &&func) {
-  std::lock_guard<std::mutex> guard(register_mutex_);
-  registry_.emplace(std::move(name), std::move(func));
-}
-
-void
-ThsOpsInitRegistry::initialize_all(py::module &m) const {
-  std::lock_guard<std::mutex> guard(register_mutex_);
-  for (auto const &par : registry_) {
-    auto [name, func] = par;
-    func(m);
-  }
-}
-
 DistEnvTP::DistEnvTP(c10::intrusive_ptr<c10d::ProcessGroup> tp_group, int nnodes)
     : DistEnv(tp_group->getRank(), tp_group->getSize(), nnodes), tp_group(tp_group) {}
 
@@ -300,7 +329,7 @@ DistEnvTPWithEP::DistEnvTPWithEP(
       ep_size(ep_group != nullptr ? ep_group->getSize() : 1),
       ffn_tp_size(world_size / ep_size),
       ffn_tp_rank(rank % ffn_tp_size) {
-  FLUX_CHECK(world_size % ep_size == 0) << world_size << " % " << ep_size << " != 0";
+  FLUX_CHECK_DIV(world_size, ep_size);
 }
 
 std::string
@@ -333,76 +362,6 @@ MoeArguments::MoeArguments(
       output_dtype(output_dtype) {}
 
 void
-init_profiling_context(py::module &m) {
-  py::class_<ProfilingContext, c10::intrusive_ptr<ProfilingContext>>(m, "ProfilingContext")
-      .def(py::init<std::string>())
-      .def("get_code", &ProfilingContext::get_code)
-      .def("get_all_prof_results", &ProfilingContext::get_all_prof_results)
-      .def("get_latest_prof_result", &ProfilingContext::get_latest_prof_result)
-      .def("get_latest_record", &ProfilingContext::get_latest_record)
-      .def("get_all_records", &ProfilingContext::get_all_records);
-}
-
-void
-init_tuning_record(py::module &m) {
-  py::class_<PyTuningRecord, c10::intrusive_ptr<PyTuningRecord>>(m, "TuningRecord");
-}
-
-void
-init_dist_env_tp(py::module &m) {
-  py::class_<DistEnvTP>(m, "DistEnvTP")
-      .def(
-          py::init([](c10::intrusive_ptr<c10d::ProcessGroup> tp_group, int32_t nnodes) {
-            return new DistEnvTP(tp_group, nnodes);
-          }),
-          py::arg("tp_group"),
-          py::arg("nnodes"))
-      .def("__repr__", &DistEnvTP::toString);
-}
-
-void
-init_dist_env_tp_with_ep(py::module &m) {
-  py::class_<DistEnvTPWithEP>(m, "DistEnvTPWithEP")
-      .def(
-          py::init([](c10::intrusive_ptr<c10d::ProcessGroup> tp_group,
-                      int32_t nnodes,
-                      c10::intrusive_ptr<c10d::ProcessGroup> ep_group) {
-            return new DistEnvTPWithEP(tp_group, nnodes, ep_group);
-          }),
-          py::arg("tp_group"),
-          py::arg("nnodes"),
-          py::arg("ep_group") = py::none())
-      .def("__repr__", &DistEnvTPWithEP::toString);
-}
-
-void
-init_moe_arguments(py::module &m) {
-  py::class_<MoeArguments, c10::intrusive_ptr<MoeArguments>>(m, "MoeArguments")
-      .def(
-          py::init([](int32_t max_ntokens,
-                      int32_t hidden,
-                      int32_t ffn_hidden,
-                      int32_t nexperts,
-                      int32_t topk,
-                      py::object py_input_dtype,
-                      py::object py_output_dtype) {
-            auto input_dtype = torch::python::detail::py_object_to_dtype(py_input_dtype);
-            auto output_dtype = py_output_dtype.is(py::none())
-                                    ? input_dtype
-                                    : torch::python::detail::py_object_to_dtype(py_output_dtype);
-            return new MoeArguments(
-                max_ntokens, hidden, ffn_hidden, nexperts, topk, input_dtype, output_dtype);
-          }),
-          py::arg("max_ntokens"),
-          py::arg("hidden"),
-          py::arg("ffn_hidden"),
-          py::arg("nexperts"),
-          py::arg("topk"),
-          py::arg("input_dtype"),
-          py::arg("output_dtype") = py::none());
-}
-
-void
 lazy_init_buffer_tensor(torch::Tensor *tensor, int64_t buffer_size) {
   if (buffer_size <= 0 || tensor == nullptr) {
     return;
@@ -417,25 +376,14 @@ lazy_init_buffer_tensor(torch::Tensor *tensor, int64_t buffer_size) {
   }
 }
 
-PYBIND11_MODULE(FLUX_TORCH_EXTENSION_NAME, m) {
-  m.def("bitwise_check", &bitwise_check);
-  m.def("uniform_initialize", &uniform_initialize);
-  m.def("load_tuning_record", &load_tuning_record);
-  m.def("init_flux_shm", &init_flux_shm);
-  m.def(
-      "flux_barrier_all_on_stream",
-      &pyflux_barrier_all_on_stream,
-      py::arg("stream"),
-      py::arg("sync_buffers") = py::none(),
-      py::arg("rank") = py::none());
-  init_tuning_record(m);
-  init_profiling_context(m);
-  init_dist_env_tp(m);
-  init_dist_env_tp_with_ep(m);
-  init_moe_arguments(m);
-
-  // Initialize ops in registry
-  ThsOpsInitRegistry::instance().initialize_all(m);
+void
+copy_tensor_with_kernel_async(const torch::Tensor src, torch::Tensor dst, cudaStream_t stream) {
+  FLUX_CHECK_EQ(src.scalar_type(), dst.scalar_type());
+  FLUX_CHECK_EQ(src.sizes(), dst.sizes());
+  FLUX_CHECK_EQ(src.numel(), dst.numel());
+  FLUX_CHECK(src.is_cuda() || src.is_pinned());
+  FLUX_CHECK(dst.is_cuda() || dst.is_pinned());
+  copy_continous_aligned(dst.data_ptr(), src.data_ptr(), src.nbytes(), 1, 1024, stream);
 }
 
 }  // namespace bytedance::flux::ths_op
