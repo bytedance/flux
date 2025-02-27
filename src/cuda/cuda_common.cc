@@ -1,6 +1,6 @@
 //===- cuda_common.cc --------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -58,12 +58,32 @@ get_pcie_gen(int devid) {
 }
 
 int
-get_sm_count() {
-  static int sms = []() {
-    int num_sms = -1;
-    cudaDeviceGetAttribute(&num_sms, cudaDevAttrMultiProcessorCount, 0);
-    return num_sms;
+get_sm_count(int device_id) {
+  static std::vector<int> sms = []() {
+    int device_count;
+    CUDA_CHECK(cudaGetDevice(&device_count));
+    FLUX_CHECK_GT(device_count, 0) << "No CUDA device found.";
+    std::vector<int> sm_counts(device_count, 0);
+    for (int i = 0; i < device_count; i++) {
+      cudaDeviceGetAttribute(&sm_counts[i], cudaDevAttrMultiProcessorCount, 0);
+    }
+    return sm_counts;
   }();
-  return sms;
+
+  if (device_id < 0) {
+    CUDA_CHECK(cudaGetDevice(&device_id));
+  }
+  FLUX_CHECK_LT(device_id, sms.size());
+  return sms[device_id];
+}
+
+int
+get_highest_cuda_stream_priority() {
+  static int priority = []() {
+    int least_priority, greatest_priority;
+    CUDA_CHECK(cudaDeviceGetStreamPriorityRange(&least_priority, &greatest_priority));
+    return greatest_priority;
+  }();
+  return priority;
 }
 }  // namespace bytedance::flux

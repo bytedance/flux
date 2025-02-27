@@ -16,8 +16,10 @@ set(LIB_FILES
   random_initialize.cu
   utils.cc
   cuda_common.cc
+  cuda_common.cu
   cuda_stub.cc
   nvml_stub.cc
+  moe_utils.cu
 )
 
 set(_VER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/version.ld)
@@ -28,6 +30,7 @@ set_target_properties(flux_cuda PROPERTIES
   LINK_DEPENDS ${_VER_FILE}
   POSITION_INDEPENDENT_CODE ON
 )
+
 if(ENABLE_NVSHMEM)
 target_link_libraries(flux_cuda
   PUBLIC -lnvshmem_host CUDA::cudart CUDA::cuda_driver ${FLUX_CUDA_OP_TARGETS}
@@ -45,4 +48,7 @@ target_link_options(flux_cuda
   $<$<PLATFORM_ID:Linux>:LINKER:--exclude-libs=libflux_proto:libprotobuf
                          LINKER:--version-script=${_VER_FILE}
                          LINKER:--no-as-needed>
+)
+install(TARGETS flux_cuda
+    PUBLIC_HEADER DESTINATION include
 )

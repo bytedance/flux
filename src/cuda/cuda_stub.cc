@@ -1,7 +1,7 @@
 
 //===- cuda_stub.cc --------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -125,6 +125,15 @@ CUDA cuda_stub_ = {
 CUDA &
 cuda_stub() {
   return _stubs::cuda_stub_;
+}
+
+CUresult
+CUStreamWaitValue(CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags) {
+  return cuda_stub().cuStreamWaitValue32_v2(stream, addr, value, flags);
+}
+CUresult
+CUStreamWriteValue(CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags) {
+  return cuda_stub().cuStreamWriteValue32_v2(stream, addr, value, flags);
 }
 
 }  // namespace bytedance::flux

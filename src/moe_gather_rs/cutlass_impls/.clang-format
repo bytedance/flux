@@ -1,0 +1,18 @@
+# cutlass does not respect .clang-format: even in a single doc format is not consistent.
+# but still we format document with best effort to make it like cutlass
+ColumnLimit: 120
+SortIncludes: false
+BreakBeforeBraces: Custom
+BraceWrapping:
+    BeforeElse: true
+    AfterEnum: true
+    AfterStruct: true
+    AfterFunction: false
+
+PointerAlignment: Middle
+ReferenceAlignment: Right
+
+BinPackArguments: false
+BinPackParameters: false
+ExperimentalAutoDetectBinPacking: true
+AllowAllParametersOfDeclarationOnNextLine: true
