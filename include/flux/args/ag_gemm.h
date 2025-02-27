@@ -1,6 +1,6 @@
-//===- all_gather.h ----------------------------------------------- C++ ---===//
+//===- ag_gemm.h -------------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,6 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
+#include <cstdint>
 namespace bytedance::flux {
 
 struct AGKernelArguments {
@@ -28,10 +29,27 @@ struct AGKernelArguments {
   float alpha;
   float beta;
   void *input;
-  void *input_buffer;
   void const *weight;
   void const *bias;
   void *output;
+  void *barrier_buffer;
+};
+
+struct AGS8KernelArguments {
+  int m;
+  int n;
+  int k;
+  int rank;
+  int world_size;
+  int nnodes;
+  float alpha;
+  float beta;
+  void *A;
+  void const *B;
+  void const *bias;
+  void *output;
+  void const *scale_A;
+  void const *scale_B;
   void *barrier_buffer;
 };
 
@@ -44,8 +62,7 @@ struct AGFP8KernelArguments {
   int nnodes;
   float alpha;
   float beta;
-  void *A;        // input
-  void *agA;      // all gathered A, aka input_buffer
+  void *A;        // all gathered A, aka input_buffer
   void const *B;  // weight
   void const *C;
   void *Aux = nullptr;

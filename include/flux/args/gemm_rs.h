@@ -1,6 +1,6 @@
-//===- reduce_scatter.h ------------------------------------------- C++ ---===//
+//===- gemm_rs.h -------------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -46,40 +46,21 @@ struct GemmReduceScatterArguments {
   void const *weight;
   void const *bias;
   void **output_scatter_ptrs;
-  void *local_reduce_buffer;
+  void **reduce_buffer_ptrs;
   void **barrier_ptrs = nullptr;
   int avail_sms = -1;
-  ReduceScatterArguments reduce_scatter_args;
-};
 
-struct GemmReduceScatterFp8Arguments {
-  int m;
-  int n;
-  int k;
-  int rank;
-  int world_size;
-  int nnodes;
-  float alpha;
-  float beta;
-  void const *input;
-  void const *weight;
-  void const *bias;
-  void **output_scatter_ptrs;
-  void *local_reduce_buffer;
-  void **barrier_ptrs = nullptr;
-  int avail_sms = -1;
-  ReduceScatterArguments reduce_scatter_args;
-
-  void *Aux;     // m * n
-  void *Vector;  // bias: 1 * n
-  float *abs_max_Aux;
-  float *abs_max_D;
+  void *Aux = nullptr;     // m * n
+  void *Vector = nullptr;  // bias: 1 * n
+  float *abs_max_Aux = nullptr;
+  float *abs_max_D = nullptr;
   // scaling tensors
-  float const *scaleA;
-  float const *scaleB;
-  float const *scaleC;
-  float const *scaleD;    // require if D is fp8
-  float const *scaleAux;  // require if Aux is fp8
+  float const *scaleA = nullptr;
+  float const *scaleB = nullptr;
+  float const *scaleC = nullptr;
+  float const *scaleD = nullptr;    // require if D is fp8
+  float const *scaleAux = nullptr;  // require if Aux is fp8
+  ReduceScatterArguments reduce_scatter_args;
 };
 
 }  // namespace bytedance::flux

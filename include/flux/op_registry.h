@@ -1,6 +1,6 @@
 //===- op_registry.h ---------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -157,9 +157,11 @@ class OpRegistry {
       return;
     }
 #if defined(FLUX_DEBUG)
-    std::cout << "register creator for meta:[" << meta << "], hparams:[" << hparams
-              << "] with hparams_idx:[" << hparams_idx << "]" << std::endl;
-#endif  // FLUX_DEBUG
+    if (get_int_from_env("RANK", 0) == 0) {
+      std::cout << "register creator for meta:[" << meta << "], hparams:[" << hparams
+                << "] with hparams_idx:[" << hparams_idx << "]" << std::endl;
+    }
+#endif
     meta_reg.emplace(unified_hparams, std::move(creator));
 
     // record all hparams registerd for this meta
@@ -169,15 +171,9 @@ class OpRegistry {
     gemm_hparams_[unified_meta].emplace(hparams_idx, std::move(unified_hparams));
   }
 
-  template <class... Ts>
-  void
-  register_dispatcher(Dispatcher &&dispatcher, GemmMeta<Ts...> meta) {
-    std::unique_lock<std::shared_mutex> lock(register_mutex_);
-    auto unified_meta = unify_type(meta);
-    FLUX_CHECK(dispatcher_registry_.find(unified_meta) == dispatcher_registry_.end())
-        << "duplicated registering dispatcher for meta:" << meta;
-    dispatcher_registry_.emplace(unified_meta, std::move(dispatcher));
-  }
+  // checkes if a combination is acceptable
+  static bool check_heuristic_rule(
+      UnifiedGemmMeta const &, UnifiedGemmHParams const &, RuntimeConfig const &);
 
   template <class... Ts>
   UnifiedGemmHParams
@@ -193,46 +189,44 @@ class OpRegistry {
     if (config_record != nullptr) {
       if (filter(*config_record)) {
 #if defined(FLUX_DEBUG)
-        std::cout << "get record for (" << unified_meta << " x " << runtime_config
-                  << ") from config reg: " << *config_record << std::endl;
+        if (get_int_from_env("RANK", 0) == 0) {
+          std::cout << "get record for (" << unified_meta << " x " << runtime_config
+                    << ") from config reg: " << *config_record << std::endl;
+        }
 #endif
         return *config_record;
       }
     }
 
-    // Fallback to user defined dispatcher if no tuned config matched
-    auto dispatcher_iter = dispatcher_registry_.find(unified_meta);
-    if (dispatcher_iter != dispatcher_registry_.end()) {
-      auto const &meta_reg = op_registry_[unified_meta];
-      auto hparams = dispatcher_iter->second(runtime_config);
-      if (filter(hparams) and (meta_reg.find(hparams) != meta_reg.end())) {
-#if defined(FLUX_DEBUG)
-        std::cout << "use dispatcher to get hparams for (" << unified_meta << " x "
-                  << runtime_config << "), hparams: " << hparams << std::endl;
-#endif
-        return hparams;
-      }
-    }
-
-    // Fallback to the first registered hparams if not dispatcher registered
+    // Fallback to the first registered hparams if no tuning config matched
     auto visit_iter = gemm_hparams_.find(unified_meta);
 
     FLUX_CHECK(visit_iter != gemm_hparams_.end())
         << "No registered hparams found for meta:" << unified_meta;
     const std::set<std::pair<int, UnifiedGemmHParams>> &registered_hparams = visit_iter->second;
     FLUX_CHECK(not registered_hparams.empty()) << "registered hparams empty for meta:" << meta;
+
+    UnifiedGemmHParams const *first_valid = nullptr;
     for (auto const &hparams_pair : registered_hparams) {
       auto const &hparams = hparams_pair.second;
       if (filter(hparams)) {
 #if defined(FLUX_DEBUG)
-        std::cout << "fallback to registered hparams for (" << unified_meta << " x "
-                  << runtime_config << "), hparams: " << hparams << std::endl;
+        if (get_int_from_env("RANK", 0) == 0) {
+          std::cout << "fallback to registered hparams for (" << unified_meta << " x "
+                    << runtime_config << "), hparams: " << hparams << std::endl;
+        }
 #endif
-        return hparams;
+        if (first_valid == nullptr) {
+          first_valid = &hparams;
+        }
+        if (check_heuristic_rule(unified_meta, hparams, runtime_config)) {
+          return hparams;
+        }
       }
     }
-    FLUX_CHECK(false) << "no registered hparams satisfying filter found for meta:" << meta;
-    return registered_hparams.cbegin()->second;  // this will never reach
+    FLUX_CHECK(first_valid != nullptr)
+        << "no registered hparams satisfying filter found for meta:" << meta;
+    return *first_valid;
   }
 
   template <class... Ts, class... Us>
