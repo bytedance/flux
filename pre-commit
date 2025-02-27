@@ -1,0 +1,7 @@
+#!/bin/bash
+
+if [ "$(./code-format.sh --show-only)" != "" ]; then
+  echo "code format check failed, please run the following command before commit: ./code-format.sh"
+  exit 1
+fi
+
