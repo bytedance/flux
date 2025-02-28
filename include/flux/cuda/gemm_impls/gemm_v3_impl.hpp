@@ -1,6 +1,6 @@
 //===- gemm_v3_impl.hpp ------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,20 +20,18 @@
 #pragma once
 #include "flux/flux.h"
 #include "flux/cuda/cutlass_v3_builder.hpp"
+#include "flux/gemm_hparams.h"
 #include "flux/gemm_operator_base.h"
 namespace bytedance {
 namespace flux {
 
-template <class GemmMetaT, class GemmHParamsT, class DerivedImpl>
-struct GemmV3Impl
-    : public GemmOperatorBaseDefaultImplMixin<GemmV3Impl<GemmMetaT, GemmHParamsT, DerivedImpl>> {
- public:
-  using Base = GemmOperatorBaseDefaultImplMixin<GemmV3Impl>;
-  FLUX_DEFINE_DEFAULT_SPECIAL_FUNCS(GemmV3Impl)
-
+template <class GemmMetaT, class GemmHParamsT>
+struct GemmV3BaseKernel {
   using ProblemShape = cute::tuple<int, int, int>;
   static constexpr auto meta = to_gemm_meta(GemmMetaT{});
   static constexpr auto hparams = to_gemm_hparams(GemmHParamsT{});
+  static constexpr auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
+  static constexpr bool is_s8_gemm = is_s8_dtype(dt_conf.a()) && is_s8_dtype(dt_conf.b());
 
   template <int EpiSmemSize = 0>
   auto
@@ -47,64 +45,127 @@ struct GemmV3Impl
     return cutlass_v3_builder::build_collective_mainloop(params);
   }
 
+  template <class... Ts>
+  auto
+  s8_gemm_evt_d(cutlass_v3_builder::Sm90EpilogueParams<Ts...> params) const {
+    constexpr auto RoundStyle = cutlass::FloatRoundStyle::round_to_nearest;
+
+    using ElementC = decltype(params.element_c());
+    using ElementCNonVoid = decltype(params.element_c_unvoid());
+    using ElementD = decltype(params.element_d());
+    using ElementAccumulator = decltype(params.element_accumulator());
+    using ElementScale = float;
+    using TileShape = decltype(params.tile_shape());
+
+    static constexpr int AlignmentScale = 128 / cute::sizeof_bits_v<ElementScale>;
+    static constexpr int AlignmentC = 128 / cute::sizeof_bits_v<ElementCNonVoid>;
+
+    auto select_evt_d = []() {
+      using Accum = cutlass::epilogue::fusion::Sm90AccFetch;
+      using ScaleA = cutlass::epilogue::fusion::Sm90ColBroadcast<
+          0,
+          TileShape,
+          ElementScale,
+          ElementScale,
+          cute::Stride<cute::Int<1>, cute::Int<0>, cute::Int<0>>,
+          AlignmentScale,
+          false>;
+      using ScaleB = cutlass::epilogue::fusion::Sm90RowBroadcast<
+          0,
+          TileShape,
+          ElementScale,
+          ElementScale,
+          cute::Stride<cute::Int<0>, cute::Int<1>, cute::Int<0>>,
+          AlignmentScale,
+          false>;
+
+      using Compute0 = cutlass::epilogue::fusion::
+          Sm90Compute<cutlass::multiplies, ElementScale, ElementScale, RoundStyle>;
+      using EVTCompute0 =
+          cutlass::epilogue::fusion::Sm90EVT<Compute0, ScaleA, ScaleB>;  // scale_a * scale_b
+
+      using Compute1 = cutlass::epilogue::fusion::
+          Sm90Compute<cutlass::multiplies, ElementCNonVoid, ElementScale, RoundStyle>;
+      // scale_a * scale_b * acc
+      using EVTCompute1 = cutlass::epilogue::fusion::Sm90EVT<Compute1, EVTCompute0, Accum>;
+
+      if constexpr (cute::is_void_v<ElementC>) {  // no bias
+        return make_declval<EVTCompute1>();
+      } else {
+        using C = cutlass::epilogue::fusion::Sm90RowBroadcast<
+            0,
+            TileShape,
+            ElementC,
+            ElementC,
+            cute::Stride<cute::Int<0>, cute::Int<1>, cute::Int<0>>,
+            AlignmentC,
+            false>;
+        using Compute2 = cutlass::epilogue::fusion::
+            Sm90Compute<cutlass::multiply_add, ElementD, ElementC, RoundStyle>;
+        using EVTCompute2 = cutlass::epilogue::fusion::Sm90EVT<
+            Compute2,
+            cutlass::epilogue::fusion::Sm90ScalarBroadcast<ElementC>,  // beta = 1.0
+            C,                                                         // C
+            EVTCompute1>;  // (ElementC)scale_a * scale_b * acc + beta * bias
+        return make_declval<EVTCompute2>();
+      }
+    };
+    return select_evt_d();
+  }
+
   auto
   default_collective_epilogue() const {
     auto params = cutlass_v3_builder::default_epilogue_params(meta, hparams);
-    return cutlass_v3_builder::build_collective_epilogue(params);
+    if constexpr (
+        this->is_s8_gemm &&
+        not cute::is_same_v<decltype(to_cutlass_element(dt_conf.d())), int32_t>) {
+      auto s8_gemm_callbacks = []() {
+        using ElementAccumulator = decltype(params.element_accumulator());
+        using EVTD = decltype(s8_gemm_evt_d(params));
+        using FusionCallbacks = typename cutlass::epilogue::collective::detail::CallbacksBuilder<
+            decltype(params.dispatch_policy()),
+            EVTD,
+            decltype(params.tile_shape()),
+            decltype(params.epilogue_tile_mn()),
+            ElementAccumulator>::Callbacks;
+        return make_declval<FusionCallbacks>();
+      };
+      using FusionCallbacks = decltype(s8_gemm_callbacks());
+      auto new_params = params.fusion_callbacks(TypeWrapper<FusionCallbacks>{});
+      return cutlass_v3_builder::build_collective_epilogue(new_params);
+    } else {
+      return cutlass_v3_builder::build_collective_epilogue(params);
+    }
   }
 
   auto
   default_tile_scheduler() const {
     return make_declval<cutlass::gemm::PersistentScheduler>();
   }
+};
+
+template <class GemmMetaT, class GemmHParamsT, class GemmKernelT, class DerivedImpl>
+class GemmV3BaseDevice : public GemmOperatorBaseDefaultImplMixin<
+                             GemmV3BaseDevice<GemmMetaT, GemmHParamsT, GemmKernelT, DerivedImpl>> {
+ public:
+  using Base = GemmOperatorBaseDefaultImplMixin<GemmV3BaseDevice>;
+  FLUX_DEFINE_DEFAULT_SPECIAL_FUNCS(GemmV3BaseDevice)
+
+  static constexpr auto hparams = to_gemm_hparams(GemmHParamsT{});
+  using KernelBuilder = GemmV3BaseKernel<GemmMetaT, GemmHParamsT>;
+  static constexpr bool is_s8_gemm = KernelBuilder::is_s8_gemm;
 
   //////////////////////////
   // CRTP functions
   //////////////////////////
   auto
   gemm_device() const {
-    using GemmKernel = decltype(static_cast<DerivedImpl const *>(this)->gemm_kernel());
-    return make_declval<cutlass::gemm::device::GemmUniversalAdapter<
-        FluxGemmKernel<GemmMetaT, GemmHParamsT, GemmKernel>>>();
+    return make_declval<cutlass::gemm::device::GemmUniversalAdapter<GemmKernelT>>();
   }
 
   auto
   to_gemm_args(std::any const &args, void *args_workspace) const {
     return static_cast<DerivedImpl const *>(this)->to_gemm_args(args);
-  }
-
-  template <class PtrC, class StrideC, class PtrD, class StrideD, class Alpha, class Beta>
-  auto
-  default_get_epilogue_args(
-      PtrC ptr_C, StrideC stride_C, PtrD ptr_D, StrideD stride_D, Alpha alpha, Beta beta) const {
-    using Epilogue = identity_t<decltype(this->default_collective_epilogue())>;
-    typename Epilogue::Arguments epilogue{{}, ptr_C, stride_C, ptr_D, stride_D};
-    if constexpr (meta.arch() == _Sm90{}) {
-      if constexpr (not cute::is_void_v<typename Epilogue::ElementC>) {
-        epilogue.thread = {
-            // ternary op : beta * C + (alpha * acc)
-            {{beta}},  // leaf op+args : beta
-            {},        // leaf op+args : C
-            {
-                // binary op : alpha * acc
-                {{alpha}},  // leaf op+args : alpha
-                {},         // leaf op+args : acc
-                {}          // binary args : multiplies
-            },              // end binary op
-            {}              // ternary args : multiply_add
-        };
-      } else {
-        epilogue.thread = {
-            {{alpha}},  // leaf op+args : alpha
-            {},         // leaf op+args : acc
-            {}          // binary args : multiplies
-        };
-      }
-    } else {
-      epilogue.ptr_D = ptr_D;
-      epilogue.thread = {alpha, beta};
-    }
-    return epilogue;
   }
 };
 }  // namespace flux

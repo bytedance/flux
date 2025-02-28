@@ -1,5 +1,5 @@
-include src/ths_op/*.cc.inc
-exclude pynvshmem/
-recursive-include src *
-recursive-include include *
-recursive-include python/flux_ths_pybind
+recursive-include python/flux/lib *
+recursive-include python/flux/include *
+recursive-include python/flux/share *
+include python/flux_triton/extra/cuda_extra.bc
+include python/flux_triton/extra/cuda_extra.ll

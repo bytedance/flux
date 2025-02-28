@@ -1,0 +1,26 @@
+# PyCache files
+build/
+.cache/
+tmp/
+report*.sqlite
+report*.nsys-rep
+
+# run files
+log/
+prof/
+workspace/
+
+# general things to ignore
+dist/
+*.egg-info/
+.eggs/
+*.egg
+*.py[cod]
+__pycache__/
+*.so
+*.so.*
+*~
+python/flux/version.py
+
+# due to using tox and pytest and clangd
+.tox

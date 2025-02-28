@@ -1,6 +1,6 @@
 //===- runtime_config.h ------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -58,6 +58,7 @@ inline AllGatherRuntimeConfig
 make_all_gather_runtime_config(int world_size = 1, int nnodes = 1, int ring_mode = 0) {
   return cute::make_tuple(world_size, nnodes, ring_mode);
 }
+
 
 using UnifiedCommRuntimeConfig =
     std::variant<None, ReduceScatterRuntimeConfig, AllGatherRuntimeConfig>;

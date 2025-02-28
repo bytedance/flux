@@ -1,0 +1,5 @@
+commit 68c00a0000fd021070b61edc14b7547325a1c6ff (HEAD -> master, tag: v2.19.4-1, origin/stable, origin/master, origin/HEAD)
+Author: Sylvain Jeaugey <sjeaugey@nvidia.com>
+Date:   Wed Nov 8 18:49:01 2023 -0800
+
+    NCCL 2.19.4-1

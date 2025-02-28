@@ -1,0 +1,6 @@
+NVSHMEM {
+  global: nvshmem_*;
+          nvshmemid_*;
+          nvshmemx_*;
+  local: *;
+};
