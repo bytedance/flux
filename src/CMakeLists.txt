@@ -67,7 +67,7 @@ if (WITH_TRITON_AOT)
 endif()
 
 add_subdirectory(comm_none)
-# add_subdirectory(coll)
+add_subdirectory(coll)
 add_subdirectory(ag_gemm)
 add_subdirectory(gemm_rs)
 if(ENABLE_NVSHMEM)
