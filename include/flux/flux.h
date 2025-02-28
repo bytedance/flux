@@ -469,10 +469,6 @@ enum class CommOpEnum : int8_t {
   GatherRS,                   // MoE tp, gemm + gather + rs
   AGKernel,                   // tp allgather + gemm, comm fused into gemm kernel
   AGScatter,                  // MoE tp, ag + scatter + gemm
-  PreAttnAllToAllTranspose,   // Ulysses SP, for qkv projection, gemm + all2all + transpose
-  PreAttnQKVPackAllToAll,     // Ulysses SP, for qkv_pack projection, qkv_gemm + qkv_all2all
-  PostAttnAllToAllTranspose,  // Ulysses SP, for output projection, all2all + transpose + gemm
-  PostAttnAllToAllOnly,       // Ulysses SP, for output projection, all2all + gemm
 };
 
 enum class GemmLayoutEnum : int8_t { RRR, RCR, RCC };
@@ -495,10 +491,6 @@ using _ReduceScatter = cute::C<CommOpEnum::ReduceScatter>;
 using _GatherRS = cute::C<CommOpEnum::GatherRS>;
 using _AGKernel = cute::C<CommOpEnum::AGKernel>;
 using _AGScatter = cute::C<CommOpEnum::AGScatter>;
-using _PreAttnAllToAllTranspose = cute::C<CommOpEnum::PreAttnAllToAllTranspose>;
-using _PreAttnQKVPackAllToAll = cute::C<CommOpEnum::PreAttnQKVPackAllToAll>;
-using _PostAttnAllToAllTranspose = cute::C<CommOpEnum::PostAttnAllToAllTranspose>;
-using _PostAttnAllToAllOnly = cute::C<CommOpEnum::PostAttnAllToAllOnly>;
 
 using _IntraNode = cute::C<CommKindEnum::IntraNode>;
 using _AcrossNode = cute::C<CommKindEnum::AcrossNode>;
@@ -702,10 +694,6 @@ enum_to_string(CommOpEnum comm_op) {
     case CommOpEnum::ReduceScatter: return "ReduceScatter";
     case CommOpEnum::GatherRS: return "GatherRS";
     case CommOpEnum::AGScatter: return "AGScatter";
-    case CommOpEnum::PreAttnAllToAllTranspose: return "PreAttnAllToAllTranspose";
-    case CommOpEnum::PreAttnQKVPackAllToAll: return "PreAttnQKVPackAllToAll";
-    case CommOpEnum::PostAttnAllToAllTranspose: return "PostAttnAllToAllTranspose";
-    case CommOpEnum::PostAttnAllToAllOnly: return "PostAttnAllToAllOnly";
     default: return "UNK";
   }
 }
