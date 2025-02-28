@@ -18,8 +18,6 @@
 #include "flux/ths_op/ths_op.h"
 #include "flux/ths_op/flux_shm.h"
 #include "flux/ths_op/ths_pybind.h"
-#include "a2a_transpose_gemm/ths_op/all_to_all_types.h"
-#include "gemm_a2a_transpose/ths_op/pre_attn_a2a_types.h"
 #include "coll/ths_op/all_gather_types.h"
 #include "coll/ths_op/reduce_scatter_op.h"
 #include <c10/cuda/CUDAStream.h>
@@ -170,28 +168,6 @@ init_coll_arguments(py::module &m) {
   m.def("get_default_rs_ring_mode", []() -> RingMode { return get_default_rs_ring_mode(); });
 }
 
-void
-init_a2agemm_arguments(py::module &m) {
-  py::enum_<A2ARingMode>(m, "A2ARingMode", py::arithmetic())
-      .value("All2All", A2ARingMode::All2All)
-      .value("Ring1D", A2ARingMode::Ring1D)
-      .value("Ring2D", A2ARingMode::Ring2D);
-  py::class_<AllToAllOptionWithOptional>(m, "AllToAllOption")
-      .def(py::init([]() { return new AllToAllOptionWithOptional(); }))
-      .def_readwrite("input_buffer_copied", &AllToAllOptionWithOptional::input_buffer_copied)
-      .def_readwrite("use_cuda_core", &AllToAllOptionWithOptional::use_cuda_core)
-      .def_readwrite("fuse_sync", &AllToAllOptionWithOptional::fuse_sync)
-      .def_readwrite("use_read", &AllToAllOptionWithOptional::use_read)
-      .def_readwrite("mode", &AllToAllOptionWithOptional::mode);
-  m.def("get_default_a2a_ring_mode", []() -> A2ARingMode { return get_default_a2a_ring_mode(); });
-}
-
-void
-init_gemm_a2a_arguments(py::module &m) {
-  py::enum_<PreAttnAllToAllCommOp>(m, "PreAttnAllToAllCommOp", py::arithmetic())
-      .value("A2ATranspose", PreAttnAllToAllCommOp::A2ATranspose)
-      .value("QKVPackA2A", PreAttnAllToAllCommOp::QKVPackA2A);
-}
 
 PYBIND11_MODULE(FLUX_TORCH_EXTENSION_NAME, m) {
   m.def("bitwise_check", &bitwise_check);
@@ -235,8 +211,6 @@ PYBIND11_MODULE(FLUX_TORCH_EXTENSION_NAME, m) {
   init_dist_env_tp_with_ep(m);
   init_moe_arguments(m);
   init_coll_arguments(m);
-  init_a2agemm_arguments(m);
-  init_gemm_a2a_arguments(m);
 
   // Initialize ops in registry
   ThsOpsInitRegistry::instance().initialize_all(m);

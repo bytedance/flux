@@ -13,6 +13,7 @@ from torch.utils.cpp_extension import BuildExtension
 # Project directory root
 root_path: Path = Path(__file__).resolve().parent
 enable_nvshmem = int(os.getenv("FLUX_SHM_USE_NVSHMEM", 0))
+with_triton_aot = int(os.getenv("FLUX_WITH_TRITON_AOT", 0))
 PACKAGE_NAME = "flux"
 USE_LOCAL_VERSION = int(os.getenv("FLUX_USE_LOCAL_VERSION", 0))
 
@@ -144,6 +145,14 @@ def nccl_deps():
     return include_dirs, library_dirs, libraries
 
 
+@pathlib_wrapper
+def triton_aot_deps():
+    include_dirs = [root_path / "src" / "triton_aot_generated"]
+    library_dirs = [root_path / "build" / "lib"]
+    libraries = ["flux_triton_aot"]
+    return include_dirs, library_dirs, libraries
+
+
 def setup_pytorch_extension() -> setuptools.Extension:
     """Setup CppExtension for PyTorch support"""
     include_dirs, library_dirs, libraries = [], [], []
@@ -151,6 +160,8 @@ def setup_pytorch_extension() -> setuptools.Extension:
     deps = [nccl_deps(), cutlass_deps(), flux_cuda_deps(), cuda_deps()]
     if enable_nvshmem:
         deps.append(nvshmem_deps())
+    if with_triton_aot:
+        deps.append(triton_aot_deps())
     for include_dir, library_dir, library in deps:
         include_dirs += include_dir
         library_dirs += library_dir
@@ -167,6 +178,8 @@ def setup_pytorch_extension() -> setuptools.Extension:
     ]
     if enable_nvshmem:
         cxx_flags.append("-DFLUX_SHM_USE_NVSHMEM")
+    if with_triton_aot:
+        cxx_flags.append("-DFLUX_WITH_TRITON_AOT")
     ld_flags = ["-Wl,--exclude-libs=libnccl_static"]
     flux_ths_targets = [
         str(x.relative_to(root_path))  # relative path for include_package_data
@@ -194,6 +207,13 @@ def main():
         include=[
             "flux",
             "flux.testing",
+            "flux.triton",
+            "flux_triton",
+            "flux_triton.extra",
+            "flux_triton.kernels",
+            "flux_triton.tools",
+            "flux_triton.tools.runtime",
+            "flux_triton.tools.compile",
         ],
     )
     data_file_list = ["python/lib/libflux_cuda.so"]
@@ -220,6 +240,7 @@ def main():
             "python/flux/lib": ["*.so"],
             "python/flux/include": ["*.h"],
             "python/flux/share": ["*.cmake"],
+            "python/flux_triton/extra": ["*.bc", "*.ll"],
         },  # only works for bdist_wheel under package
         python_requires=">=3.8",
         include_package_data=True,

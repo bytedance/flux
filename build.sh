@@ -12,12 +12,11 @@ BDIST_WHEEL="OFF"
 WITH_PROTOBUF="OFF"
 FLUX_DEBUG="OFF"
 ENABLE_NVSHMEM="OFF"
-WITH_TRITON_AOT="OFF"
 
 function clean_py() {
     rm -rf build/lib.*
     rm -rf python/lib
-    rm -rf .egg/
+    rm -rf .eggs/
     rm -rf python/flux.egg-info
     rm -rf python/flux_ths_pybind.*
 }
@@ -73,10 +72,6 @@ while [[ $# -gt 0 ]]; do
         ;;
     --nvshmem)
         ENABLE_NVSHMEM="ON"
-        shift
-        ;;
-    --triton-aot)
-        WITH_TRITON_AOT="ON"
         shift
         ;;
     *)
@@ -170,12 +165,6 @@ function build_flux_cuda() {
             CMAKE_ARGS+=(
                 -DFLUX_DEBUG=ON
             )
-        fi
-        if [ $WITH_TRITON_AOT == "ON" ]; then
-            CMAKE_ARGS+=(
-                -DWITH_TRITON_AOT=ON
-            )
-            export PYTHONPATH=$PYTHONPATH:$PROJECT_ROOT/python
         fi
         ${CMAKE} .. ${CMAKE_ARGS[@]}
     fi
