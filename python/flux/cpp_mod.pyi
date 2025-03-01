@@ -573,23 +573,6 @@ class GemmGroupedV2AGScatterOp:
     for FP8  mode: output_BF16 = [[input_FP8 * weights_FP8]_FP32 * output_scale_FP32]_FP32.to(BF16)
 
     """
-    def forward_triton_aot(
-        self,
-        inputs_shard: torch.Tensor,
-        weights: torch.Tensor,
-        splits_gpu: torch.Tensor,
-        scatter_index: torch.Tensor,
-        input_scale: Optional[torch.Tensor] = None,
-        weight_scale: Optional[torch.Tensor] = None,
-        output_scale: Optional[torch.Tensor] = None,
-        outputs_buf: Optional[torch.Tensor] = None,
-        allgather_output: Optional[torch.Tensor] = None,
-        fast_accum: bool = False,
-        sm_margin: int = 0,
-        ag_option: AllGatherOption = AllGatherOption(),
-    ) -> torch.Tensor:
-        """as forward"""
-        ...
 
     def forward_multiple_weights(
         self,
@@ -754,19 +737,6 @@ class GemmGroupedV2GatherRSOp:
         sm_margin: int = 0,
         with_stream_sync: bool = False,
     ) -> torch.Tensor: ...
-    def forward_gather_rs_triton_aot(
-        self,
-        input: torch.Tensor,
-        weight: torch.Tensor,
-        splits_cpu: torch.Tensor,
-        routing_idx: torch.Tensor,
-        input_scale: torch.Tensor | None = None,
-        weight_scale: torch.Tensor | None = None,
-        output_vec_scale: torch.Tensor | None = None,
-        fast_accum: bool = False,
-        sm_margin: int = 0,
-        with_stream_sync: bool = False,
-    ) -> torch.Tensor: ...
     def profiling(
         self,
         input: torch.Tensor,
@@ -858,11 +828,3 @@ def calc_scatter_index(
     splits_gpu: torch.Tensor,
     num_expert: int,
 ) -> torch.Tensor: ...
-def calc_moe_triton_blocked_gather_a(
-    splits: torch.Tensor,
-    ep_start: int,
-    ep_nexperts: int,
-    gather_a_index: torch.Tensor,
-    expert_index: int,
-    stream: torch.cuda.Stream,
-): ...

@@ -43,10 +43,6 @@ def _load_deps():
     except Exception as e:
         logging.warning("Failed to load NVSHMEM libs")
     _preload_libs("libflux_cuda.so")
-    try:
-        _preload_libs("libflux_triton_aot.so")
-    except Exception as e:
-        logging.debug("Failed to load triton_aot libs")
     _preload_libs("libflux_cuda_ths_op.so")
 
 
@@ -132,9 +128,6 @@ prepare_moe_ag_scatter_args = _get_flux_member("prepare_moe_ag_scatter_args")
 # MOE gather-rs
 GemmGroupedV2GatherRSOp = _get_flux_member("GemmGroupedV2GatherRSOp")
 TopkReduceScatterOp = _get_flux_member("TopkReduceScatterOp")
-calc_moe_triton_blocked_gather_a = getattr(
-    flux_mod, "calc_moe_triton_blocked_gather_a", NotCompiled()
-)
 GemmGroupedV3GatherRS = _get_flux_member("GemmGroupedV3GatherRS")
 topk_scatter_reduce = _get_flux_member("topk_scatter_reduce")
 All2AllOp = _get_flux_member("All2AllOp")

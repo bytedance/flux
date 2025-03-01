@@ -96,77 +96,6 @@ def take_first_or_none(x: Optional[List[Any]]):
 
 
 @torch.no_grad()
-def perf_lego(ctx: MoeMlp1Ctx, warmup_iters: int, iters: int, gather_input: bool = True):
-
-    import lego_ops
-
-    lego_ops.load_ft_torch()
-    token_cnt = ctx.splits_gpu.to("cpu")[
-        ctx.nexperts_ep * ctx.ep_rank : ctx.nexperts_ep * ctx.ep_rank + ctx.nexperts_ep
-    ]
-
-    total_iters = warmup_iters + iters
-    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
-    comm_end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
-    scatter_end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
-    gemm_end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
-    ctx.clear_outputs()
-    torch.cuda.synchronize()
-    torch.distributed.barrier()
-    inp_scal_inv = torch.ones(1, dtype=torch.float32, device=torch.cuda.current_device())
-    weight_fp8 = ctx.weights[0]
-    weight_scal_inv = ctx.output_scale[0]
-    _2X_ACC_FPROP = not ctx.fast_accum
-    output_base = ctx.outputs[0]
-    row_start = int(ctx.splits_cpu[: ctx.nexperts_ep * ctx.ep_rank].sum())
-    row_end = int(ctx.splits_cpu[: ctx.nexperts_ep * (ctx.ep_rank + 1)].sum())
-    for i in range(total_iters):
-        ctx.clear_outputs()
-        start_events[i].record()
-        all_gather_into_tensor_with_fp8(ctx.inputs, ctx.inputs_shard, group=TP_GROUP)
-        comm_end_events[i].record()
-        MoeAgScatterWithTorch.scatter_impl(ctx)
-        scatter_end_events[i].record()
-        input_fp8 = ctx.scatter_inputs[row_start:row_end]
-        output = torch.ops.FP8.moe_linear_fp8_fwd_v2(
-            input_fp8,
-            weight_fp8,
-            None,  # bias
-            token_cnt,
-            inp_scal_inv,
-            weight_scal_inv,
-            None,  # output scale
-            not _2X_ACC_FPROP,
-            output_base,
-        )
-        gemm_end_events[i].record()
-
-    comm_times = []
-    scatter_times = []
-    gemm_times = []
-    for i in range(total_iters):
-        comm_end_events[i].synchronize()
-        scatter_end_events[i].synchronize()
-        gemm_end_events[i].synchronize()
-        if i >= warmup_iters:
-            comm_times.append(start_events[i].elapsed_time(comm_end_events[i]))
-            scatter_times.append(comm_end_events[i].elapsed_time(scatter_end_events[i]))
-            gemm_times.append(scatter_end_events[i].elapsed_time(gemm_end_events[i]))
-    comm_time = sum(comm_times) / iters
-    scatter_time = sum(scatter_times) / iters
-    gemm_time = sum(gemm_times) / iters
-
-    return PerfResult(
-        name=f"lego   #{TP_GROUP.rank()}",
-        outputs=[output],
-        gathered_input=flux.testing.clone_with_fp8(ctx.inputs),
-        gemm_time_ms=gemm_time,
-        scatter_time_ms=scatter_time,
-        comm_time_ms=comm_time,
-    )
-
-
-@torch.no_grad()
 def perf_torch(ctx: MoeMlp1Ctx, warmup_iters: int, iters: int, gather_input: bool = True):
     gemm_only_op = flux.GemmOnly(
         ctx.inputs.dtype,
@@ -213,69 +142,6 @@ def perf_torch(ctx: MoeMlp1Ctx, warmup_iters: int, iters: int, gather_input: boo
         gemm_time_ms=gemm_time,
         scatter_time_ms=scatter_time,
         comm_time_ms=comm_time,
-    )
-
-
-@torch.no_grad()
-def perf_triton(
-    ctx: MoeMlp1Ctx,
-    warmup_iters: int,
-    iters: int,
-    gather_input: bool = True,
-    ag_option=flux.AllGatherOption(),
-):
-    op = MoeAgScatterOp(
-        tp_group=TP_GROUP,
-        ep_group=EP_GROUP,
-        max_ntokens=ctx.b * ctx.s,
-        hidden=ctx.h,
-        ffn_hidden=ctx.ffn_size,
-        nexperts=ctx.nexperts,
-        topk=ctx.topk,
-        input_dtype=ctx.inputs_shard.dtype,
-    )
-
-    total_iters = warmup_iters + iters
-    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
-    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
-    gathered_input = torch.empty_like(ctx.inputs) if gather_input else None
-    ctx.clear_outputs()
-    torch.cuda.synchronize()
-    torch.distributed.barrier()
-    for i in range(total_iters):
-        ctx.clear_outputs()
-        start_events[i].record()
-        op.forward(
-            input=ctx.inputs_shard,
-            weights=ctx.weights[0],
-            bias=ctx.bias[0] if ctx.bias is not None else None,
-            input_scale=ctx.input_scale[0] if ctx.input_scale is not None else None,
-            weight_scale=ctx.weight_scale[0] if ctx.weight_scale is not None else None,
-            output_scale=ctx.output_scale[0] if ctx.output_scale is not None else None,
-            splits_gpu=ctx.splits_gpu,
-            scatter_index=ctx.scatter_index,
-            outputs_buf=ctx.outputs[0],
-            fast_accum=ctx.fast_accum,
-            gathered_input=gathered_input,
-            ag_option=ag_option,
-        )
-        end_events[i].record()
-
-    gemm_times = []
-    for i in range(total_iters):
-        end_events[i].synchronize()
-        if i >= warmup_iters:
-            gemm_times.append(start_events[i].elapsed_time(end_events[i]))
-
-    gemm_time_ms = sum(gemm_times) / iters
-
-    return PerfResult(
-        name=f"triton #{TP_GROUP.rank()}",
-        outputs=ctx.get_outputs_clone(),
-        gathered_input=gathered_input,
-        gemm_time_ms=gemm_time_ms,
-        scatter_time_ms=0.0,
-        comm_time_ms=0.0,
     )
 
 
@@ -422,11 +288,11 @@ def parse_args():
         default="random",
         choices=["uniform", "random_uniform", "random", "random_with_first_k_experts"],
     )
-    parser.add_argument("--B", type=int, default=2)
-    parser.add_argument("--S", type=int, default=4096)
+    parser.add_argument("--B", type=int, default=1)
+    parser.add_argument("--S", type=int, default=8192)
     parser.add_argument("--H", type=int, default=8192)
     parser.add_argument("--ffn_hidden_size", type=int, default=8192)
-    parser.add_argument("--topk", type=int, default=5)
+    parser.add_argument("--topk", type=int, default=4)
     parser.add_argument("--G", type=int, default=32)
     parser.add_argument("--iters", default=10, type=int, help="perf iterations")
     parser.add_argument("--warmup_iters", default=10, type=int, help="warmup iterations")

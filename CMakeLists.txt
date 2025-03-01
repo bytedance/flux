@@ -11,7 +11,6 @@ set(ENABLE_NVSHMEM ON CACHE INTERNAL "Use NVSHMEM to transfer data")
 set(CUTLASS_TRACE OFF CACHE INTERNAL "Print CUTLASS Host Trace info")
 set(FLUX_DEBUG OFF CACHE INTERNAL "Define FLUX_DEBUG")
 OPTION(WITH_PROTOBUF "build with protobuf" OFF)
-OPTION(WITH_TRITON_AOT "build with triton Ahead-of-Time" OFF)
 message("PYTHONPATH: ${PYTHONPATH}")
 message("NVShmem Support: ${ENABLE_NVSHMEM}")
 

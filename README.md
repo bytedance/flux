@@ -30,7 +30,8 @@ If you want to build a wheel package, add `--package` to the build command. find
 ```bash
 # Ampere
 ./build.sh --arch 80 --package
-
+# Ada Lovelace
+./build.sh --arch 89 --package
 # Hopper
 ./build.sh --arch 90 --package
 ```
@@ -57,14 +58,22 @@ Managed by git submodule automatically.
 ## Run Demo
 ```bash
 # gemm only
-PYTHONPATH=./python:$PYTHONPATH python3 test/test_gemm_only.py 4096 12288 6144 --dtype=float16
+python3 test/python/gemm_only/test_gemm_only.py 4096 12288 6144 --dtype=float16
 
-# gemm fused with reduce-scatter
-./scripts/launch.sh test/test_gemm_rs.py 4096 12288 49152 --dtype=float16 --iters=10
+# all-gather fused with gemm (dense MLP layer0)
+./launch.sh test/python/ag_gemm/test_ag_kernel.py 4096 49152 12288 --dtype=float16 --iters=10
 
-# all-gather fused with gemm
-./scripts/launch.sh test/test_ag_kernel.py 4096 49152 12288 --dtype=float16 --iters=10
+# gemm fused with reduce-scatter (dense MLP layer1)
+./launch.sh test/python/gemm_rs/test_gemm_rs.py 4096 12288 49152 --dtype=float16 --iters=10
+
+# all-gather fused with grouped gemm (MoE MLP layer0)
+./launch.sh test/python/moe_ag_scatter/test_moe_ag.py
+
+# grouped gemm fused with reduce-scatter (MoE MLP layer1)
+./launch.sh test/python/moe_gather_rs/test_moe_gather_rs.py
 ```
+
+The performance results are reported in /docs/performance_report.md.
 
 
 
@@ -95,7 +104,8 @@ to the related papers:
 
 ## Reference
 
-* [ArXiv Paper](http://arxiv.org/abs/2406.06858)
+* [ArXiv Paper (Flux)](http://arxiv.org/abs/2406.06858)
+* [ArXiv Paper (Comet)](https://arxiv.org/abs/2502.19811)
 
 ## [License](./LICENSE)
 
