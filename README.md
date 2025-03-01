@@ -5,7 +5,7 @@ Flux is a fast communication-overlapping library for dense/MoE models on GPUs, p
 ## Installation
 Install Flux either from PyPI or from source.
 
-### PyPI
+### Install from PyPI
 
 ```
 # Make sure that PyTorch is installed.
@@ -15,17 +15,42 @@ pip install byte-flux
 
 ### Build from source
 ```bash
-git clone https://github.com/bytedance/flux.git
-git submodule update --init --recursive
+git clone --recursive https://github.com/bytedance/flux.git
+git checkout comet
+
+# Patch CUTLASS
+cd 3rdparty/cutlass
+git checkout v3.7.0
+cd ..
+patch -p1 < ./cutlass3.7.patch
+
 # Ampere
-./build.sh --arch 80 
+./build.sh --arch 80 --nvshmem
+# Ada Lovelace
+./build.sh --arch 89 --nvshmem
 # Hopper
-./build.sh --arch 90 
+./build.sh --arch 90 --nvshmem
 ```
 
-If you are tired of the cmake process, you can set environment variable `FLUX_BUILD_SKIP_CMAKE` to 1 to skip cmake if `build/CMakeCache.txt` already exists.
+#### Build in a virtual environment
+Here is a snippet to install Flux in a virtual environment. Let's finish the installation in an virtual environment with CUDA 12.4, torch 2.5.0 and python 3.11.
 
-If you want to build a wheel package, add `--package` to the build command. find the output wheel file under dist/
+```bash
+conda create -n flux python=3.11
+conda activate flux
+pip3 install packaging
+pip3 install torch==2.5.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+./build.sh --clean-all
+./build.sh --arch "80;89;90" --nvshmem --package
+```
+
+
+#### Build options
+
+1. Add `--nvshmem` to build Flux with NVSHMEM support. It is essential for the MoE kernels.
+2. If you are tired of the cmake process, you can set environment variable `FLUX_BUILD_SKIP_CMAKE` to 1 to skip cmake if `build/CMakeCache.txt` already exists.
+3. If you want to build a wheel package, add `--package` to the build command. find the output wheel file under dist/
 
 ```bash
 # Ampere
@@ -36,26 +61,18 @@ If you want to build a wheel package, add `--package` to the build command. find
 ./build.sh --arch 90 --package
 ```
 
-### Dependencies
-
-#### NVSHMEM
-The current nvshmem folder under flux/3rdparty is extracted from the nvshmem_src_3.1.7-1.txz downloaded from https://developer.nvidia.com/nvshmem. Users can also try other newer versions of nvshmem.
-
-#### CUTLASS
-Flux leverages CUTLASS to generate high-performance GEMM kernels. We currently use CUTLASS 3.7.0 and a tiny patch should be applied to CUTLASS.
-
-```
-cd 3rdparty
-git clone https://github.com/NVIDIA/cutlass
-git checkout v3.7.0
-patch -p1 < ../cutlass3.7.patch
-```
-
-#### NCCL
-Managed by git submodule automatically.
+#### Dependencies
+The core dependencies of Flux are NCCL, CUTLASS, and NVSHMEM, which are located under the 3rdparty folder.
+1. NCCL: Managed by git submodule automatically.
+2. NVSHMEM: The current nvshmem folder under flux/3rdparty is extracted from the nvshmem_src_3.1.7-1.txz downloaded from https://developer.nvidia.com/nvshmem. Users can also try other newer versions of nvshmem.
+3. CUTLASS: Flux leverages CUTLASS to generate high-performance GEMM kernels. We currently use CUTLASS 3.7.0 and a tiny patch should be applied to CUTLASS.
 
 
-## Run Demo
+---
+
+## Quick Start
+
+Below are commands to run some basic demos once you have installed Flux successfully.
 ```bash
 # gemm only
 python3 test/python/gemm_only/test_gemm_only.py 4096 12288 6144 --dtype=float16
@@ -73,9 +90,9 @@ python3 test/python/gemm_only/test_gemm_only.py 4096 12288 6144 --dtype=float16
 ./launch.sh test/python/moe_gather_rs/test_moe_gather_rs.py
 ```
 
-The performance results are reported in /docs/performance_report.md.
+The detailed performance results are reported in /docs/performance_report.md.
 
-
+---
 
 ## Citing
 
