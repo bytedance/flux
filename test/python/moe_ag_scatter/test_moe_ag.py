@@ -29,10 +29,6 @@ from flux.testing import DTYPE_MAP, RING_MODE_MAP, MoeAgScatterWithTorch, MoeMlp
 from flux.testing.perf_db_helper import log_perf, set_global_args, should_log_to_rds
 from flux.testing.utils import all_gather_into_tensor_with_fp8
 
-try:
-    from flux.triton.moe_ag_scatter import MoeAgScatterOp
-except Exception as e:
-    pass
 
 DIST_ENV = flux.get_dist_env()
 TP_GROUP = DIST_ENV.get_world()
@@ -305,14 +301,6 @@ def parse_args():
     parser.add_argument(
         "--fast_accum", default=False, action="store_true", help="fp8 use fast accum"
     )
-    parser.add_argument("--triton", default=False, action="store_true", help="use triton")
-    parser.add_argument("--lego", default=False, action="store_true", help="use triton")
-    parser.add_argument(
-        "--triton-only",
-        default=False,
-        action="store_true",
-        help="run triton only. don't rn flux. maybe flux is not implemented yet",
-    )
     parser.add_argument(
         "--profile", default=False, action="store_true", help="dump torch.profiler.profile"
     )
@@ -418,14 +406,6 @@ if __name__ == "__main__":
 
         flux.load_tuning_record(prof_ctx.get_latest_record())
 
-    if args.triton_only:
-        if not args.triton:
-            print("WARNING: force set --triton with --triton-only set.")
-            args.triton = True
-
-    if args.triton:
-        assert args.weight_groups == 1, f"triton implementation does not support multiple group yet"
-
     ag_option = flux.AllGatherOption()
     ag_option.use_cuda_core_local = args.use_cuda_core_local
     ag_option.use_cuda_core_ag = args.use_cuda_core_ag
@@ -438,17 +418,10 @@ if __name__ == "__main__":
         do_prof=args.profile,
         group=TP_GROUP,
     ):
-        if args.lego:
-            perf_result_lego = perf_lego(moe_ctx, args.warmup_iters, args.iters, args.gather_input)
-        if not args.triton_only:
-            perf_result_flux = perf_flux(
-                moe_ctx, args.warmup_iters, args.iters, args.gather_input, ag_option
-            )
+        perf_result_flux = perf_flux(
+            moe_ctx, args.warmup_iters, args.iters, args.gather_input, ag_option
+        )
         perf_result_torch = perf_torch(moe_ctx, args.warmup_iters, args.iters, args.gather_input)
-        if args.triton:
-            perf_result_triton = perf_triton(
-                moe_ctx, args.warmup_iters, args.iters, args.gather_input, ag_option=ag_option
-            )
 
     if TP_GROUP.rank() == 0:
         flux.testing.print_grouped_gemm_sol_time_ms(
@@ -461,12 +434,7 @@ if __name__ == "__main__":
     if should_log_to_rds():
         set_global_args("moe_ag_scatter", args)
     flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_torch))
-    if not args.triton_only:
-        flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_flux))
-    if args.triton:
-        flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_triton))
-    if args.lego:
-        flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_lego))
+    flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_flux))
 
     if input_dtype == torch.float16:
         atol, rtol = 1e-2, 1e-3
@@ -503,18 +471,9 @@ if __name__ == "__main__":
             else:
                 print(f"✅ {name_x} check passed")
 
-    if args.lego:
-        flux.exec_in_rank_order(
-            TP_GROUP, lambda: check_result(perf_result_lego, perf_result_torch, "lego", "torch")
-        )
-    if not args.triton_only:
-        flux.exec_in_rank_order(
-            TP_GROUP, lambda: check_result(perf_result_flux, perf_result_torch, "flux", "torch")
-        )
-    if args.triton:
-        flux.exec_in_rank_order(
-            TP_GROUP, lambda: check_result(perf_result_triton, perf_result_torch, "triton", "torch")
-        )
+    flux.exec_in_rank_order(
+        TP_GROUP, lambda: check_result(perf_result_flux, perf_result_torch, "flux", "torch")
+    )
 
     TP_GROUP.barrier()
     torch.cuda.synchronize()

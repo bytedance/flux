@@ -35,11 +35,6 @@ from flux.testing import (
 from flux.testing.perf_db_helper import log_perf, set_global_args, should_log_to_rds
 from flux.util import get_arch
 
-try:
-    from flux.triton.moe_gather_rs import MoeGatherRsOp
-except Exception as e:
-    pass
-
 
 class PerfResult:
     def __init__(self, name: str, output: torch.Tensor, gemm_time_ms: float) -> None:
@@ -250,14 +245,6 @@ def parse_args():
         default="random",
         choices=["uniform", "random", "random_with_first_k_experts"],
     )
-    parser.add_argument("--triton", default=False, action="store_true", help="use triton")
-    parser.add_argument("--triton-only", default=False, action="store_true", help="use triton")
-    parser.add_argument(
-        "--lego",
-        default=False,
-        action="store_true",
-        help="whether to use lego to perform the fp8 computation",
-    )
     parser.add_argument("--profile", action="store_true", default=False)
     parser.add_argument("--tune", action="store_true", default=False)
     parser.add_argument("--input_groups", type=int, default=1, help="The number of input groups")
@@ -302,10 +289,6 @@ if __name__ == "__main__":
     RANK, WORLD_SIZE, NNODES = TP_GROUP.rank(), TP_GROUP.size(), flux.testing.NNODES()
 
     args = parse_args()
-    if args.triton_only:
-        if not args.triton:
-            print("WARNING: force set --triton with --triton-only set.")
-            args.triton = True
 
     assert args.M % TP_GROUP.size() == 0
     assert args.K % TP_GROUP.size() == 0
@@ -426,22 +409,21 @@ if __name__ == "__main__":
         do_prof=args.profile,
         group=TP_GROUP,
     ):
-        if not args.triton_only:
-            perf_result_flux = perf_flux(
-                inputs,
-                weights,
-                split_cpu,
-                args.iters,
-                args.warmup_iters,
-                args.M,
-                args.topk,
-                routing_idx,
-                input_scales,
-                weight_scales,
-                output_vec_scales,
-                args.all_reduce,
-                args.use_read_mode,
-            )
+        perf_result_flux = perf_flux(
+            inputs,
+            weights,
+            split_cpu,
+            args.iters,
+            args.warmup_iters,
+            args.M,
+            args.topk,
+            routing_idx,
+            input_scales,
+            weight_scales,
+            output_vec_scales,
+            args.all_reduce,
+            args.use_read_mode,
+        )
 
         perf_result_torch = perf_torch(
             inputs,
@@ -471,8 +453,7 @@ if __name__ == "__main__":
     if should_log_to_rds():
         set_global_args("moe_gather_rs", args)
     flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_torch))
-    if not args.triton_only:
-        flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_flux))
+    flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_flux))
     atol, rtol = ABSOLUTE_THRESHOLD_MAP[input_dtype], RELATIVE_THRESHOLD_MAP[input_dtype]
     TP_GROUP.barrier()
 
@@ -493,6 +474,5 @@ if __name__ == "__main__":
 
 
     torch_output = perf_result_torch.output
-    if not args.triton_only:
-        flux_output = perf_result_flux.output
-        flux.exec_in_rank_order(TP_GROUP, check_result)
+    flux_output = perf_result_flux.output
+    flux.exec_in_rank_order(TP_GROUP, check_result)
