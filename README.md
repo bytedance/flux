@@ -2,6 +2,7 @@
 
 Flux is a fast communication-overlapping library for dense/MoE models on GPUs, providing high-performance and pluggable kernels to support various parallelisms in model training/inference.
 
+---
 ## Installation
 Install Flux either from PyPI or from source.
 
@@ -90,7 +91,8 @@ python3 test/python/gemm_only/test_gemm_only.py 4096 12288 6144 --dtype=float16
 ./launch.sh test/python/moe_gather_rs/test_moe_gather_rs.py
 ```
 
-The detailed performance results are reported in /docs/performance_report.md.
+The detailed performance results are reported in 
+For a more detailed usage on MoE kernels, please refer to [Flux MoE](https://github.com/ZSL98/flux/blob/comet_clean/docs/mlsys_comet_ae.md).
 
 ---
 
