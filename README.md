@@ -1,8 +1,9 @@
 # Flux
 
-Flux is a fast communication-overlapping library for dense/MoE models on GPUs, providing high-performance and pluggable kernels to support various parallelisms in model training/inference.
+Flux is a communication-overlapping library for dense/MoE models on GPUs, providing high-performance and pluggable kernels to support various parallelisms in model training/inference.
 
----
+Flux's efficient kernels are compatible with Pytorch and can be integrated into existing frameworks easily, supporting various Nvidia GPU architectures and data types.
+
 ## Installation
 Install Flux either from PyPI or from source.
 
@@ -69,8 +70,6 @@ The core dependencies of Flux are NCCL, CUTLASS, and NVSHMEM, which are located 
 3. CUTLASS: Flux leverages CUTLASS to generate high-performance GEMM kernels. We currently use CUTLASS 3.7.0 and a tiny patch should be applied to CUTLASS.
 
 
----
-
 ## Quick Start
 
 Below are commands to run some basic demos once you have installed Flux successfully.
@@ -91,12 +90,11 @@ python3 test/python/gemm_only/test_gemm_only.py 4096 12288 6144 --dtype=float16
 ./launch.sh test/python/moe_gather_rs/test_moe_gather_rs.py
 ```
 
-The detailed performance results are reported in 
-For a more detailed usage on MoE kernels, please refer to [Flux MoE](https://github.com/ZSL98/flux/blob/comet_clean/docs/mlsys_comet_ae.md).
+You can check out the documentations for more details!
+* For a more detailed usage on MoE kernels, please refer to [Flux MoE Doc](https://github.com/ZSL98/flux/blob/comet_clean/docs/mlsys_comet_ae.md).
 
----
 
-## Citing
+## Citations
 
 If you use Flux in a scientific publication, we encourage you to add the following reference
 to the related papers:
