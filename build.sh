@@ -16,6 +16,7 @@ ENABLE_NVSHMEM="OFF"
 function clean_py() {
     rm -rf build/lib.*
     rm -rf python/lib
+    rm -rf python/flux/lib
     rm -rf .eggs/
     rm -rf python/flux.egg-info
     rm -rf python/flux_ths_pybind.*

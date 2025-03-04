@@ -1,27 +1,19 @@
-import glob
-import os
-import shutil
-import sys
-import re
 import ast
+import os
+import re
+import shutil
+import subprocess
 from pathlib import Path
-import urllib
-import urllib.request
-import urllib.error
+from typing import Optional, Tuple
+
 import setuptools
 import torch
-import subprocess
 from torch.utils.cpp_extension import BuildExtension
-from packaging.version import parse, Version
-from typing import Optional, Tuple
-from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 # Project directory root
 root_path: Path = Path(__file__).resolve().parent
 enable_nvshmem = int(os.getenv("FLUX_SHM_USE_NVSHMEM", 0))
 PACKAGE_NAME = "byte_flux"
-BASE_WHEEL_URL = "https://github.com/bytedance/flux/releases/download/{tag_name}/{wheel_name}"
-FORCE_BUILD = os.getenv("FLASH_ATTENTION_FORCE_BUILD", "FALSE") == "TRUE"
 USE_LOCAL_VERSION = int(os.getenv("FLUX_USE_LOCAL_VERSION", 0))
 
 
@@ -108,9 +100,6 @@ def cutlass_deps():
 def read_flux_ths_targets():
     file_path = root_path / "build/src/ths_op/flux_ths_targets.txt"
     variables = {}
-    if not os.path.exists(file_path):
-        # flux is installed through pip3, the flux_ths_files.txt is not generated
-        return []
     with open(file_path, "r") as file:
         for line in file:
             if "=" in line:
@@ -197,50 +186,6 @@ def setup_pytorch_extension() -> setuptools.Extension:
         extra_link_args=ld_flags,
     )
 
-def get_wheel_url():
-    flux_tag_version = get_public_version()
-    python_version = f"cp{sys.version_info.major}{sys.version_info.minor}"
-    torch_version_raw = parse(torch.__version__)
-    torch_version = f"{torch_version_raw.major}.{torch_version_raw.minor}"
-    torch_cuda_version = parse(torch.version.cuda)
-    torch_cuda_version = parse("11.8") if torch_cuda_version.major == 11 else parse("12.4")
-    cuda_version = f"{torch_cuda_version.major}{torch_cuda_version.minor}"
-    wheel_filename = f"{PACKAGE_NAME}-{flux_tag_version}+cu{cuda_version}torch{torch_version}-{python_version}-{python_version}-linux_x86_64.whl"
-    wheel_url = BASE_WHEEL_URL.format(tag_name=f"v{flux_tag_version}", wheel_name=wheel_filename)
-    return wheel_url, wheel_filename
-
-class CachedWheelsCommand(_bdist_wheel):
-    """
-    The CachedWheelsCommand plugs into the default bdist wheel, which is ran by pip when it cannot
-    find an existing wheel (which is currently the case for all flash attention installs). We use
-    the environment parameters to detect whether there is already a pre-built version of a compatible
-    wheel available and short-circuits the standard full build pipeline.
-    """
-
-    def run(self):
-        if FORCE_BUILD:
-            return super().run()
-
-        wheel_url, wheel_filename = get_wheel_url()
-        try:
-            urllib.request.urlretrieve(wheel_url, wheel_filename)
-
-            # Make the archive
-            # Lifted from the root wheel processing command
-            # https://github.com/pypa/wheel/blob/cf71108ff9f6ffc36978069acb28824b44ae028e/src/wheel/bdist_wheel.py#LL381C9-L381C85
-            if not os.path.exists(self.dist_dir):
-                os.makedirs(self.dist_dir)
-
-            impl_tag, abi_tag, plat_tag = self.get_tag()
-            archive_basename = f"{self.wheel_dist_name}-{impl_tag}-{abi_tag}-{plat_tag}"
-
-            wheel_path = os.path.join(self.dist_dir, archive_basename + ".whl")
-            print("Raw wheel path", wheel_path)
-            shutil.move(wheel_filename, wheel_path)
-        except (urllib.error.HTTPError, urllib.error.URLError):
-            print("Precompiled wheel not found. Building from source...")
-            # If the wheel could not be downloaded, build from source
-            super().run()
 
 def main():
     flux_version = get_package_version()
@@ -266,20 +211,18 @@ def main():
         packages=packages,
         description="Flux library",
         ext_modules=[setup_pytorch_extension()],
-        cmdclass={"bdist_wheel": CachedWheelsCommand, "build_ext": BuildExtension},
+        cmdclass={"build_ext": BuildExtension},
         setup_requires=["torch", "cmake", "packaging"],
         install_requires=["torch"],
         extras_require={"test": ["torch", "numpy"]},
         license_files=("LICENSE",),
-        package_data={"python/lib": ["*.so"]},  # only works for sdist
+        package_data={
+            "python/flux/lib": ["*.so"],
+            "python/flux/include": ["*.h"],
+            "python/flux/share": ["*.cmake"],
+        },  # only works for bdist_wheel under package
         python_requires=">=3.8",
-        # include_package_data=True,
-        data_files=[
-            (
-                "lib",  # installed directory
-                data_file_list,  # to installed shared libraries. only works for setup.py install/bdist_wheels
-            )
-        ],
+        include_package_data=True,
     )
 
 

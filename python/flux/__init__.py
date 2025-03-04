@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 ################################################################################
-__version__ = "1.0.3"
+__version__ = "1.1.1"
 from .cpp_mod import *
 
 if not isinstance(cpp_mod.AGRingMode, cpp_mod.NotCompiled):
