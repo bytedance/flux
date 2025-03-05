@@ -1,7 +1,7 @@
 
 //===- nvml_stub.cc --------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -138,6 +138,9 @@ NVML_STUB4(
 _STUB_1(NVML, nvmlErrorString, const char *, nvmlReturn_t);
 NVML_STUB0(nvmlInit);
 NVML_STUB0(nvmlShutdown);
+
+NVML_STUB4(
+    nvmlDeviceGetMemoryAffinity, nvmlDevice_t, unsigned int, unsigned long *, nvmlAffinityScope_t);
 
 NVML nvml_stub_ = {
 #define _REFERENCE_MEMBER(name) _stubs::name,

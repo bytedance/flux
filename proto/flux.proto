@@ -1,0 +1,153 @@
+syntax = "proto2";  // proto3 is evil: no default value or optional value.
+                    // proto2 is easier for future extension
+package bytedance.flux.proto;
+
+enum DataType {
+  Void = 0;
+  FP16 = 1;
+  BF16 = 2;
+  FP32 = 3;
+  E4M3 = 4;
+  E5M2 = 5;
+};
+enum Arch {
+  Sm80 = 80;
+  Sm89 = 89;
+  Sm90 = 90;
+};
+enum CommOp {
+  CommNone = 0;       // gemm only, wo/ communication
+  AllGather = 1;      // tp allgather + gemm, comm not fused into gemm kernel
+  ReduceScatter = 2;  // gemm + tp reduce-scatter
+  Gather = 3;         // MoE tp, gemm + gather
+  GatherStore = 4;    // MoE tp, gemm + gather + store rs intermediates
+  GatherRS = 5;       // MoE tp, gemm + gather + rs
+  AGKernel = 6;       // tp allgather + gemm, comm fused into gemm kernel
+  AGScatter = 7;      // MoE tp, ag + scatter + gemm
+};
+enum GemmLayout {
+  RRR = 0;
+  RCR = 1;
+  RCC = 2;
+};
+enum Impl {
+  GemmV2 = 0;
+  GemmV3 = 1;
+  GemmGroupedV2 = 2;
+  GemmGroupedV3 = 3;
+};
+
+enum GemmKind {
+  GemmDefault = 0;
+  GemmStreamK = 1;
+};
+enum CommKind {
+  IntraNode = 0;
+  AcrossNode = 1;
+  IntraNodePcie = 2;
+};
+enum GemmStreamkMode {
+  SK = 0;
+  DP = 1;
+};
+enum GemmRasterOrder {
+  Heuristic = 0;
+  AlongM = 1;
+  AlongN = 2;
+};
+enum GemmKernelSchedule {
+  Cooperative = 0;
+  PingPong = 1;
+};
+
+message GemmMeta {
+  message DataTypeConfig {
+    required DataType A = 1;
+    required DataType B = 2;
+    required DataType C = 3;
+    required DataType D = 4;
+    optional DataType Acc = 5 [ default = FP32 ];
+  }
+  message GemmV2Meta {
+    required bool fast_accum = 1;
+  }
+  message GemmV3Meta {
+    required bool fast_accum = 1;
+  }
+  message ReduceScatterMeta {
+    required bool fuse_reduction = 1;
+    required CommKind comm_kind = 2;
+  }
+  message GatherRSMeta {
+    required int32 topk = 1;
+  }
+  required DataTypeConfig dtype = 1;
+  required Arch arch = 2;
+  required CommOp comm_op = 3;
+  required GemmLayout gemm_layout = 4;
+  required Impl impl = 5;
+  oneof impl_spec {
+    GemmV2Meta gemm_v2_meta = 6;
+    GemmV3Meta gemm_v3_meta = 7;
+  }
+  oneof comm_spec {
+    ReduceScatterMeta reduce_scatter_meta = 8;
+    GatherRSMeta gather_rs_meta = 9;
+  }
+}
+
+message RuntimeConfig {
+  required int32 m = 1;
+  required int32 n = 2;
+  required int32 k = 3;
+  message ReduceScatterRuntimeConfig {
+    optional int32 world_size = 1 [default = 1];
+    optional int32 nnodes = 2 [default = 1];
+  }
+  message AllGatherRuntimeConfig {
+    optional int32 world_size = 1 [default = 1];
+    optional int32 nnodes = 2 [default = 1];
+    optional int32 ring_mode = 3 [default = 0];
+  }
+  oneof comm_spec {
+    ReduceScatterRuntimeConfig reduce_scatter_rt_conf = 4;
+    AllGatherRuntimeConfig all_gather_rt_conf = 5;
+  }
+}
+
+message GemmHparams {
+  message GemmV2HParams {
+    repeated int64 warp_shape = 1;
+    repeated int64 instruction_shape = 2;
+    optional GemmStreamkMode streamk_mode = 3 [default = SK];
+  }
+  message GemmV3HParams {
+    repeated int32 cluster_shape = 1;
+    optional GemmKernelSchedule kernel_schedule = 2 [default = Cooperative];
+  }
+  message GatherRSHParams {
+    optional int32 gather_rs_ctas = 1 [default = 20];
+    optional int32 n_dim_per_split = 2 [default = 1024];
+  }
+  oneof impl_spec {
+    GemmV2HParams gemm_v2_hparams = 1;
+    GemmV3HParams gemm_v3_hparams = 2;
+  }
+  oneof comm_spec {
+    GatherRSHParams gather_rs_hparams = 3;
+  }
+  repeated int32 tile_shape = 4;
+  required GemmKind gemm_kind = 5;
+  required int32 mainloop_stage = 6;
+  optional GemmRasterOrder raster_order = 7 [default = Heuristic];
+}
+
+message TuneConfig {
+  required GemmMeta meta = 1;
+  required RuntimeConfig rt_conf = 2;
+  required GemmHparams best_hparams = 3;
+}
+
+message TuneConfigList {
+  repeated TuneConfig tune_configs = 1;
+}

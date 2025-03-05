@@ -24,6 +24,7 @@ BASE_WHEEL_URL = "https://github.com/bytedance/flux/releases/download/{tag_name}
 FORCE_BUILD = os.getenv("FLASH_ATTENTION_FORCE_BUILD", "FALSE") == "TRUE"
 USE_LOCAL_VERSION = int(os.getenv("FLUX_USE_LOCAL_VERSION", 0))
 
+
 def cuda_version() -> Tuple[int, ...]:
     """CUDA Toolkit version as a (major, minor) by nvcc --version"""
 
@@ -61,8 +62,11 @@ def get_local_version(public_version):
     cuda_version_major, cuda_version_minor = cuda_version()
     torch_version_splits = torch.__version__.split(".")
     torch_version = f"{torch_version_splits[0]}.{torch_version_splits[1]}"
-    version = public_version + f"+cu{cuda_version_major}{cuda_version_minor}" + f"torch{torch_version}"
+    version = (
+        public_version + f"+cu{cuda_version_major}{cuda_version_minor}" + f"torch{torch_version}"
+    )
     return version
+
 
 def get_public_version():
     with open(Path(root_path) / "python" / "flux" / "__init__.py", "r") as f:
@@ -70,12 +74,14 @@ def get_public_version():
     public_version = ast.literal_eval(version_match.group(1))
     return public_version
 
+
 def get_package_version():
     global USE_LOCAL_VERSION
     public_version = get_public_version()
     if USE_LOCAL_VERSION:
         return get_local_version(public_version)
     return public_version
+
 
 def pathlib_wrapper(func):
     def wrapper(*kargs, **kwargs):
@@ -99,8 +105,8 @@ def cutlass_deps():
     return include_dirs, library_dirs, libraries
 
 
-def read_flux_ths_files():
-    file_path = root_path / "build/src/ths_op/flux_ths_files.txt"
+def read_flux_ths_targets():
+    file_path = root_path / "build/src/ths_op/flux_ths_targets.txt"
     variables = {}
     if not os.path.exists(file_path):
         # flux is installed through pip3, the flux_ths_files.txt is not generated
@@ -110,7 +116,7 @@ def read_flux_ths_files():
             if "=" in line:
                 key, value = line.strip().split("=", 1)
                 variables[key] = value
-    return variables["FLUX_THS_FILES"].split(";")
+    return [x for x in variables["FLUX_THS_TARGETS"].split(";") if x]
 
 
 @pathlib_wrapper
@@ -127,7 +133,7 @@ def nvshmem_deps():
 def flux_cuda_deps():
     include_dirs = [root_path / "include", root_path / "src"]
     library_dirs = [root_path / "build" / "lib"]
-    libraries = ["flux_cuda"]
+    libraries = ["flux_cuda", "flux_cuda_ths_op"]
     return include_dirs, library_dirs, libraries
 
 
@@ -173,12 +179,17 @@ def setup_pytorch_extension() -> setuptools.Extension:
     if enable_nvshmem:
         cxx_flags.append("-DFLUX_SHM_USE_NVSHMEM")
     ld_flags = ["-Wl,--exclude-libs=libnccl_static"]
-    flux_ths_files = read_flux_ths_files()
+    flux_ths_targets = [
+        str(x.relative_to(root_path))  # relative path for include_package_data
+        for x in Path(root_path / "src" / "pybind").glob("*.cc")
+        if x.stem in read_flux_ths_targets()
+    ]
+
     from torch.utils.cpp_extension import CppExtension
 
     return CppExtension(
         name="flux_ths_pybind",
-        sources=flux_ths_files,
+        sources=flux_ths_targets,
         include_dirs=include_dirs,
         library_dirs=library_dirs,
         libraries=libraries,
@@ -186,19 +197,17 @@ def setup_pytorch_extension() -> setuptools.Extension:
         extra_link_args=ld_flags,
     )
 
-
 def get_wheel_url():
     flux_tag_version = get_public_version()
     python_version = f"cp{sys.version_info.major}{sys.version_info.minor}"
     torch_version_raw = parse(torch.__version__)
     torch_version = f"{torch_version_raw.major}.{torch_version_raw.minor}"
     torch_cuda_version = parse(torch.version.cuda)
-    torch_cuda_version = parse("11.8") if torch_cuda_version.major == 11 else parse("12.3")
+    torch_cuda_version = parse("11.8") if torch_cuda_version.major == 11 else parse("12.4")
     cuda_version = f"{torch_cuda_version.major}{torch_cuda_version.minor}"
     wheel_filename = f"{PACKAGE_NAME}-{flux_tag_version}+cu{cuda_version}torch{torch_version}-{python_version}-{python_version}-linux_x86_64.whl"
     wheel_url = BASE_WHEEL_URL.format(tag_name=f"v{flux_tag_version}", wheel_name=wheel_filename)
     return wheel_url, wheel_filename
-
 
 class CachedWheelsCommand(_bdist_wheel):
     """
@@ -233,19 +242,22 @@ class CachedWheelsCommand(_bdist_wheel):
             # If the wheel could not be downloaded, build from source
             super().run()
 
-
 def main():
     flux_version = get_package_version()
     packages = setuptools.find_packages(
         where="python",
-        include=["flux", "flux.pynvshmem", "flux_ths_pybind"],
+        include=[
+            "flux",
+            "flux.testing",
+        ],
     )
-    data_file_list = ["python/lib/libflux_cuda.so"]
+    data_file_list = ["python/flux/lib/libflux_cuda.so"]
+    data_file_list += ["python/flux/lib/libflux_cuda_ths_op.so"]
     if enable_nvshmem:
         data_file_list += [
-            "python/lib/nvshmem_bootstrap_torch.so",
-            "python/lib/nvshmem_transport_ibrc.so.2",
-            "python/lib/libnvshmem_host.so.2",
+            "python/flux/lib/nvshmem_bootstrap_uid.so",
+            "python/flux/lib/nvshmem_transport_ibrc.so.3",
+            "python/flux/lib/libnvshmem_host.so.3",
         ]
     # Configure package
     setuptools.setup(
@@ -260,9 +272,13 @@ def main():
         install_requires=["torch"],
         extras_require={"test": ["torch", "numpy"]},
         license_files=("LICENSE",),
-        package_data={"python/lib": ["*.so"]},  # only works for sdist
+        package_data={
+            "python/flux/lib": ["*.so"],
+            "python/flux/include": ["*.h"],
+            "python/flux/share": ["*.cmake"],
+        },  # only works for bdist_wheel under package
         python_requires=">=3.8",
-        # include_package_data=True,
+        include_package_data=True,
         data_files=[
             (
                 "lib",  # installed directory

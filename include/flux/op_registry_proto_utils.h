@@ -1,6 +1,6 @@
 //===- op_registry_proto_utils.h --------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,8 +16,7 @@
 //===----------------------------------------------------------------------===//
 #pragma once
 #include "flux/op_registry.h"
-#include <string>
 namespace bytedance::flux {
 __attribute__((visibility("default"))) void load_tune_config_from_file(
-    TuningConfigRegistry &registry, const std::string &file_name);
+    TuningConfigRegistry &registry, const char *file_name);
 }

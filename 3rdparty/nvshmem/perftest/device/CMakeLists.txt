@@ -1,0 +1,6 @@
+set(NVSHMEM_TEST_PREFIX "perf_device_")
+macro(nvshmem_add_perftest SOURCE)
+  nvshmem_add_perftest_prefix(${SOURCE} ${NVSHMEM_TEST_PREFIX})
+endmacro()
+add_subdirectory(coll)
+add_subdirectory(pt-to-pt)

@@ -1,0 +1,411 @@
+cmake_minimum_required(VERSION 3.19)
+
+enable_testing()
+
+set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
+
+if (DEFINED ENV{NVSHMEM_USE_GDRCOPY})
+  set(NVSHMEM_USE_GDRCOPY_DEFAULT $ENV{NVSHMEM_USE_GDRCOPY})
+else()
+  set(NVSHMEM_USE_GDRCOPY_DEFAULT ON)
+endif()
+
+if (DEFINED ENV{NVSHMEM_DISABLE_COLL_POLL})
+  set(NVSHMEM_DISABLE_COLL_POLL_DEFAULT $ENV{NVSHMEM_DISABLE_COLL_POLL})
+else()
+  set(NVSHMEM_DISABLE_COLL_POLL_DEFAULT ON)
+endif()
+
+# only use TGZ if NVSHMEM_BUILD_TGZ_PACKAGE is set to ON
+if (DEFINED ENV{NVSHMEM_BUILD_TGZ_PACKAGE})
+  set(NVSHMEM_BUILD_TGZ_PACKAGE_DEFAULT $ENV{NVSHMEM_BUILD_TGZ_PACKAGE})
+else()
+  set(NVSHMEM_BUILD_TGZ_PACKAGE_DEFAULT OFF)
+endif()
+
+if (DEFINED ENV{NVSHMEM_BUILD_TXZ_PACKAGE})
+  set(NVSHMEM_BUILD_TXZ_PACKAGE_DEFAULT $ENV{NVSHMEM_BUILD_TXZ_PACKAGE})
+else()
+  set(NVSHMEM_BUILD_TXZ_PACKAGE_DEFAULT ON)
+endif()
+
+if (DEFINED ENV{NVSHMEM_BUILD_RPM_PACKAGE})
+  set(NVSHMEM_BUILD_RPM_PACKAGE_DEFAULT $ENV{NVSHMEM_BUILD_RPM_PACKAGE})
+else()
+  set(NVSHMEM_BUILD_RPM_PACKAGE_DEFAULT ON)
+endif()
+
+if (DEFINED ENV{NVSHMEM_BUILD_DEB_PACKAGE})
+  set(NVSHMEM_BUILD_DEB_PACKAGE_DEFAULT $ENV{NVSHMEM_BUILD_DEB_PACKAGE})
+else()
+  set(NVSHMEM_BUILD_DEB_PACKAGE_DEFAULT ON)
+endif()
+
+if (DEFINED ENV{NVSHMEM_IBRC_SUPPORT})
+  set(NVSHMEM_IBRC_SUPPORT_DEFAULT $ENV{NVSHMEM_IBRC_SUPPORT})
+else()
+  set(NVSHMEM_IBRC_SUPPORT_DEFAULT ON)
+endif()
+
+if (DEFINED ENV{NVSHMEM_MPI_SUPPORT})
+  set(NVSHMEM_MPI_SUPPORT_DEFAULT $ENV{NVSHMEM_MPI_SUPPORT})
+else()
+  set(NVSHMEM_MPI_SUPPORT_DEFAULT ON)
+endif()
+
+if (DEFINED ENV{NVSHMEM_NVTX})
+  set(NVSHMEM_NVTX_DEFAULT $ENV{NVSHMEM_NVTX})
+else()
+  set(NVSHMEM_NVTX_DEFAULT ON)
+endif()
+
+if (DEFINED ENV{NVSHMEM_DEVICELIB_CUDA_HOME})
+  set(NVSHMEM_DEVICELIB_CUDA_HOME_DEFAULT $ENV{NVSHMEM_DEVICELIB_CUDA_HOME})
+elseif(DEFINED ENV{CUDA_HOME})
+  set(NVSHMEM_DEVICELIB_CUDA_HOME_DEFAULT $ENV{CUDA_HOME})
+else()
+  set(NVSHMEM_DEVICELIB_CUDA_HOME_DEFAULT "/usr/local/cuda")
+endif()
+
+if (DEFINED ENV{CUDA_HOME})
+  set(CUDA_HOME_DEFAULT $ENV{CUDA_HOME})
+else()
+  set(CUDA_HOME_DEFAULT "/usr/local/cuda")
+endif()
+
+if (DEFINED ENV{GDRCOPY_HOME})
+  set(GDRCOPY_HOME_DEFAULT $ENV{GDRCOPY_HOME})
+else()
+  set(GDRCOPY_HOME_DEFAULT "/usr/local/gdrdrv")
+endif()
+
+if (DEFINED ENV{LIBFABRIC_HOME})
+  set(LIBFABRIC_HOME_DEFAULT $ENV{LIBFABRIC_HOME})
+else()
+  set(LIBFABRIC_HOME_DEFAULT "/usr/local/libfabric")
+endif()
+
+if (DEFINED ENV{NVSHMEM_PREFIX})
+  set(NVSHMEM_PREFIX_DEFAULT $ENV{NVSHMEM_PREFIX})
+else()
+  set(NVSHMEM_PREFIX_DEFAULT "/usr/local/nvshmem")
+endif()
+
+if (DEFINED ENV{MPI_HOME})
+  set(MPI_HOME_DEFAULT $ENV{MPI_HOME})
+else()
+  set(MPI_HOME_DEFAULT "/usr/local/ompi")
+endif()
+
+if (DEFINED ENV{LIBFABRIC_HOME})
+  set(LIBFABRIC_HOME_DEFAULT $ENV{LIBFABRIC_HOME})
+else()
+  set(LIBFABRIC_HOME_DEFAULT "/usr/local/libfabric")
+endif()
+
+if (DEFINED ENV{NCCL_HOME})
+  set(NCCL_HOME_DEFAULT $ENV{NCCL_HOME})
+else()
+  set(NCCL_HOME_DEFAULT "/usr/local/nccl")
+endif()
+
+if (DEFINED ENV{PMIX_HOME})
+  set(PMIX_HOME_DEFAULT $ENV{PMIX_HOME})
+else()
+  set(PMIX_HOME_DEFAULT "/usr")
+endif()
+
+if (DEFINED ENV{UCX_HOME})
+  set(UCX_HOME_DEFAULT $ENV{UCX_HOME})
+else()
+  set(UCX_HOME_DEFAULT "/usr/local/ucx")
+endif()
+
+option(NVSHMEM_DEBUG "Toggles NVSHMEM debug compilation settings" $ENV{NVSHMEM_DEBUG})
+option(NVSHMEM_DEVEL "Toggles NVSHMEM devel compilation settings" $ENV{NVSHMEM_DEVEL})
+option(NVSHMEM_DEFAULT_PMI2 "Sets PMI2 as the default bootstrap" $ENV{NVSHMEM_DEFAULT_PMI2})
+option(NVSHMEM_DEFAULT_PMIX "Sets PMIX as the default bootstrap" $ENV{NVSHMEM_DEFAULT_PMIX})
+option(NVSHMEM_DEFAULT_UCX "Sets UCX as the default remote transport" $ENV{NVSHMEM_DEFAULT_UCX})
+option(NVSHMEM_DISABLE_COLL_POLL "Disables polling in NVSHMEM collective operations" ${NVSHMEM_DISABLE_COLL_POLL_DEFAULT})
+option(NVSHMEM_ENABLE_ALL_DEVICE_INLINING "Inline all device library code" $ENV{NVSHMEM_ENABLE_ALL_DEVICE_INLINING})
+option(NVSHMEM_ENV_ALL "Enables all environment variables, regardless of build settings" $ENV{NVSHMEM_ENV_ALL})
+option(NVSHMEM_GPU_COLL_USE_LDST "Enables Load/Store in NVSHMEM collective operations" $ENV{NVSHMEM_GPU_COLL_USE_LDST})
+option(NVSHMEM_IBGDA_SUPPORT "Enable compilation of the IBGDA remote transport" $ENV{NVSHMEM_IBGDA_SUPPORT})
+option(NVSHMEM_IBGDA_SUPPORT_GPUMEM_ONLY "Force the IBGDA remote transport to only use GPUMEM." $ENV{NVSHMEM_IBGDA_SUPPORT_GPUMEM_ONLY})
+option(NVSHMEM_IBDEVX_SUPPORT "Enable compilation of the IBDevX remote transport" $ENV{NVSHMEM_IBDEVX_SUPPORT})
+option(NVSHMEM_IBRC_SUPPORT "Enable compilation of the IBRC remote transport" ${NVSHMEM_IBRC_SUPPORT_DEFAULT})
+option(NVSHMEM_LIBFABRIC_SUPPORT "Enable compilation of the libfabric remote transport" $ENV{NVSHMEM_LIBFABRIC_SUPPORT})
+option(NVSHMEM_MPI_SUPPORT "Enable compilation of the MPI bootstrap and MPI-specific code" ${NVSHMEM_MPI_SUPPORT_DEFAULT})
+option(NVSHMEM_NVTX "Enable NVSHMEM NVTX support" ${NVSHMEM_NVTX_DEFAULT})
+option(NVSHMEM_PMIX_SUPPORT "Enable Compilation of the PMIX bootstrap and PMIX specific code" $ENV{NVSHMEM_PMIX_SUPPORT})
+option(NVSHMEM_SHMEM_SUPPORT "Enable Compilation of the SHMEM bootstrap and SHMEM specific code" $ENV{NVSHMEM_SHMEM_SUPPORT})
+option(NVSHMEM_TEST_STATIC_LIB "Force tests to link only against the combined nvshmem.a binary" $ENV{NVSHMEM_TEST_STATIC_LIB})
+option(NVSHMEM_TIMEOUT_DEVICE_POLLING "Enable timeouts for NVSHMEM device-side polling functions (e.g. wait_until)" $ENV{NVSHMEM_TIMEOUT_DEVICE_POLLING})
+option(NVSHMEM_TRACE "Enable NVSHMEM trace print events" $ENV{NVSHMEM_TRACE})
+option(NVSHMEM_UCX_SUPPORT "Enable compilation of the UCX remote transport" $ENV{NVSHMEM_UCX_SUPPORT})
+option(NVSHMEM_USE_DLMALLOC "Set dlmalloc as the NVSHMEM heap allocation method" $ENV{NVSHMEM_USE_DLMALLOC})
+option(NVSHMEM_USE_NCCL "Enable compilation of NVSHMEM NCCL dependent code" $ENV{NVSHMEM_USE_NCCL})
+option(NVSHMEM_USE_GDRCOPY "Enable compilation of GDRCopy offload paths for atomics in remote transports" ${NVSHMEM_USE_GDRCOPY_DEFAULT})
+option(NVSHMEM_VERBOSE "Enable the ptxas verbose compilation option" $ENV{NVSHMEM_VERBOSE})
+option(NVSHMEM_BUILD_TESTS "Build tests" ON)
+option(NVSHMEM_INSTALL_FUNCTIONAL_TESTS "Install functional tests" OFF)
+option(NVSHMEM_BUILD_EXAMPLES "Build examples" ON)
+option(NVSHMEM_BUILD_PACKAGES "Build package dependencies" $ENV{NVSHMEM_BUILD_PACKAGES})
+option(NVSHMEM_BUILD_TGZ_PACKAGE "Build package dependencies" ${NVSHMEM_BUILD_TGZ_PACKAGE_DEFAULT})
+option(NVSHMEM_BUILD_TXZ_PACKAGE "Build package dependencies" ${NVSHMEM_BUILD_TXZ_PACKAGE_DEFAULT})
+option(NVSHMEM_BUILD_RPM_PACKAGE "Build package dependencies" ${NVSHMEM_BUILD_RPM_PACKAGE_DEFAULT})
+option(NVSHMEM_BUILD_DEB_PACKAGE "Build package dependencies" ${NVSHMEM_BUILD_DEB_PACKAGE_DEFAULT})
+set(NVSHMEM_DEVICELIB_CUDA_HOME ${NVSHMEM_DEVICELIB_CUDA_HOME_DEFAULT} CACHE PATH "path to CUDA installation")
+set(CUDA_HOME ${CUDA_HOME_DEFAULT} CACHE PATH "path to CUDA installation")
+set(GDRCOPY_HOME ${GDRCOPY_HOME_DEFAULT} CACHE PATH "path to GDRCOPY installation")
+set(LIBFABRIC_HOME ${LIBFABRIC_HOME_DEFAULT} CACHE PATH "path to libfabric installation")
+set(MPI_HOME ${MPI_HOME_DEFAULT} CACHE PATH "path to MPI installation")
+set(NCCL_HOME ${NCCL_HOME_DEFAULT} CACHE PATH "path to NCCL installation")
+set(NVSHMEM_PREFIX ${NVSHMEM_PREFIX_DEFAULT} CACHE PATH "path to NVSHMEM install directory.")
+set(PMIX_HOME ${PMIX_HOME_DEFAULT} CACHE PATH "path to PMIX installation")
+set(SHMEM_HOME ${MPI_HOME} CACHE PATH "path to SHMEM installation")
+set(UCX_HOME ${UCX_HOME_DEFAULT} CACHE PATH "path to UCX installation")
+
+message(STATUS "NVSHMEM_PREFIX: ${NVSHMEM_PREFIX}")
+message(STATUS "NVSHMEM_DEVEL: ${NVSHMEM_DEVEL}")
+message(STATUS "NVSHMEM_DEBUG: ${NVSHMEM_DEBUG}")
+message(STATUS "NVSHMEM_DEFAULT_PMI2: ${NVSHMEM_DEFAULT_PMI2}")
+message(STATUS "NVSHMEM_DEFAULT_PMIX: ${NVSHMEM_DEFAULT_PMIX}")
+message(STATUS "NVSHMEM_DEFAULT_UCX: ${NVSHMEM_DEFAULT_UCX}")
+message(STATUS "NVSHMEM_DISABLE_COLL_POLL: ${NVSHMEM_DISABLE_COLL_POLL}")
+message(STATUS "NVSHMEM_ENABLE_ALL_DEVICE_INLINING: ${NVSHMEM_ENABLE_ALL_DEVICE_INLINING}")
+message(STATUS "NVSHMEM_ENV_ALL: ${NVSHMEM_ENV_ALL}")
+message(STATUS "NVSHMEM_GPU_COLL_USE_LDST: ${NVSHMEM_GPU_COLL_USE_LDST}")
+message(STATUS "NVSHMEM_IBGDA_SUPPORT: ${NVSHMEM_IBGDA_SUPPORT}")
+message(STATUS "NVSHMEM_IBDEVX_SUPPORT: ${NVSHMEM_IBDEVX_SUPPORT}")
+message(STATUS "NVSHMEM_IBRC_SUPPORT: ${NVSHMEM_IBRC_SUPPORT}")
+message(STATUS "NVSHMEM_LIBFABRIC_SUPPORT: ${NVSHMEM_LIBFABRIC_SUPPORT}")
+if (NVSHMEM_LIBFABRIC_SUPPORT)
+  message(STATUS "LIBFABRIC_HOME: ${LIBFABRIC_HOME}")
+endif()
+message(STATUS "NVSHMEM_MPI_SUPPORT: ${NVSHMEM_MPI_SUPPORT}")
+if (NVSHMEM_MPI_SUPPORT)
+  message(STATUS "MPI_HOME: ${MPI_HOME}")
+endif()
+message(STATUS "NVSHMEM_NVTX: ${NVSHMEM_NVTX}")
+message(STATUS "NVSHMEM_PMIX_SUPPORT: ${NVSHMEM_PMIX_SUPPORT}")
+if (NVSHMEM_PMIX_SUPPORT)
+  message(STATUS "PMIX_HOME: ${PMIX_HOME}")
+endif()
+message(STATUS "NVSHMEM_SHMEM_SUPPORT: ${NVSHMEM_SHMEM_SUPPORT}")
+if (NVSHMEM_SHMEM_SUPPORT)
+  message(STATUS "SHMEM_HOME: ${SHMEM_HOME}")
+endif()
+message(STATUS "NVSHMEM_TEST_STATIC_LIB: ${NVSHMEM_TEST_STATIC_LIB}")
+message(STATUS "NVSHMEM_TIMEOUT_DEVICE_POLLING: ${NVSHMEM_TIMEOUT_DEVICE_POLLING}")
+message(STATUS "NVSHMEM_TRACE: ${NVSHMEM_TRACE}")
+message(STATUS "NVSHMEM_UCX_SUPPORT: ${NVSHMEM_UCX_SUPPORT}")
+if (NVSHMEM_UCX_SUPPORT)
+  find_package(UCX PATHS ${UCX_HOME} REQUIRED)
+endif()
+message(STATUS "NVSHMEM_USE_DLMALLOC: ${NVSHMEM_USE_DLMALLOC}")
+message(STATUS "NVSHMEM_USE_NCCL: ${NVSHMEM_USE_NCCL}")
+if (NVSHMEM_USE_NCCL)
+  message(STATUS "NCCL_HOME: ${NCCL_HOME}")
+endif()
+message(STATUS "NVSHMEM_USE_GDRCOPY: ${NVSHMEM_USE_GDRCOPY}")
+if (NVSHMEM_USE_GDRCOPY)
+  message(STATUS "GDRCOPY_HOME: ${GDRCOPY_HOME}")
+endif()
+message(STATUS "NVSHMEM_VERBOSE: ${NVSHMEM_VERBOSE}")
+
+if (NVSHMEM_DEBUG)
+	message(STATUS "Setting build type to Debug as requested by the environment.")
+  set(CMAKE_BUILD_TYPE "debug" CACHE STRING "Choose the type of build." FORCE)
+endif()
+
+set(default_build_type "release")
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  message(STATUS "Setting build type to '${default_build_type}' as none was specified.")
+  set(CMAKE_BUILD_TYPE "${default_build_type}" CACHE STRING "Choose the type of build." FORCE)
+endif()
+
+# Set the possible values of build type
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "debug" "release"
+             "MinSizeRel" "RelWithDebInfo")
+
+# Allow users to set the CUDA toolkit through the env.
+if(NOT CUDAToolkit_Root AND NOT CMAKE_CUDA_COMPILER)
+  message(STATUS "CUDA_HOME: ${CUDA_HOME}")
+  set(CUDAToolkit_Root ${CUDA_HOME} CACHE PATH "Root of Cuda Toolkit." FORCE)
+  set(CMAKE_CUDA_COMPILER "${CUDA_HOME}/bin/nvcc" CACHE PATH "Root of Cuda Toolkit." FORCE)
+endif()
+
+# set these flags to add a RUNPATH entry to the libraries that points at the lib dir in a portable way.
+set(CMAKE_SKIP_BUILD_RPATH  FALSE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+set(CMAKE_INSTALL_RPATH "$\{ORIGIN\}")
+set(CMAKE_EXE_LINKER_FLAGS "-Wl,--enable-new-dtags")
+
+# Save value of CMAKE_CUDA_ARCHITECTURES before calling project()
+# This is to solve a chicken-egg problem. It seems FIND_CUDA doesn't
+# work without project(), but project() overwrites CMAKE_CUDA_ARCHITECTURES.
+# We need to know the version of the CUDA Toolkit before we can set the project
+# defaults. So this lets us know beforehand if the user has specified a preference.
+if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+  set(CMAKE_CUDA_ARCHITECTURES_UNDEFINED 1)
+endif()
+
+if (NOT DEFINED CUDA_ARCHITECTURES)
+  set(CUDA_ARCHITECTURES_UNDEFINED 1)
+endif()
+
+project(
+  NVSHMEM
+  LANGUAGES CUDA CXX C
+  VERSION 3.1.7.0
+)
+
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+  set_property(CACHE CMAKE_INSTALL_PREFIX PROPERTY VALUE "${NVSHMEM_PREFIX}")
+endif()
+
+find_package(CUDAToolkit)
+
+if(DEFINED CMAKE_CUDA_ARCHITECTURES_UNDEFINED)
+  if(NOT DEFINED CUDA_ARCHITECTURES_UNDEFINED)
+    set(CMAKE_CUDA_ARCHITECTURES ${CUDA_ARCHITECTURES} CACHE STRING "CUDA ARCHITECTURES" FORCE)
+  else()
+    if(CUDAToolkit_VERSION_MAJOR LESS 11)
+      set(CMAKE_CUDA_ARCHITECTURES "70" CACHE STRING "CUDA ARCHITECTURES" FORCE)
+    elseif(CUDAToolkit_VERSION_MAJOR EQUAL 11 AND CUDAToolkit_VERSION_MINOR LESS 8)
+      set(CMAKE_CUDA_ARCHITECTURES "70;80" CACHE STRING "CUDA ARCHITECTURES" FORCE)
+    else()
+      set(CMAKE_CUDA_ARCHITECTURES "70;80;90" CACHE STRING "CUDA ARCHITECTURES" FORCE)
+    endif()
+  endif()
+endif()
+foreach(ARCH ${CMAKE_CUDA_ARCHITECTURES})
+  set(NVCC_GENCODE "${NVCC_GENCODE}" "-gencode=arch=compute_${ARCH},code=sm_${ARCH};-gencode=arch=compute_${ARCH},code=compute_${ARCH}")
+endforeach()
+mark_as_advanced(NVCC_GENCODE CMAKE_CUDA_ARCHITECTURES_UNDEFINED CUDA_ARCHITECTURES_UNDEFINED)
+
+message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+
+if(NVSHMEM_MPI_SUPPORT)
+  find_package(MPI REQUIRED)
+endif()
+
+# Set a variable for the nvshmem build information in NVSHMEM
+# TODO actually fill this variable with useful information.
+set(INFO_BUILD_VARS
+  "\"NVSHMEM_DEBUG=${NVSHMEM_DEBUG} \
+NVSHMEM_DEVEL=${NVSHMEM_DEVEL} \
+NVSHMEM_DEFAULT_PMI2=${NVSHMEM_DEFAULT_PMI2} \
+NVSHMEM_DEFAULT_PMIX=${NVSHMEM_DEFAULT_PMIX} \
+NVSHMEM_DEFAULT_UCX=${NVSHMEM_DEFAULT_UCX} \
+NVSHMEM_DISABLE_COLL_POLL=${NVSHMEM_DISABLE_COLL_POLL} \
+NVSHMEM_ENABLE_ALL_DEVICE_INLINING=${NVSHMEM_ENABLE_ALL_DEVICE_INLINING} \
+NVSHMEM_GPU_COLL_USE_LDST=${NVSHMEM_GPU_COLL_USE_LDST} \
+NVSHMEM_IBGDA_SUPPORT=${NVSHMEM_IBGDA_SUPPORT} \
+NVSHMEM_IBGDA_SUPPORT_GPUMEM_ONLY=${NVSHMEM_IBGDA_SUPPORT_GPUMEM_ONLY} \
+NVSHMEM_IBDEVX_SUPPORT=${NVSHMEM_IBDEVX_SUPPORT} \
+NVSHMEM_IBRC_SUPPORT=${NVSHMEM_IBRC_SUPPORT} \
+NVSHMEM_LIBFABRIC_SUPPORT=${NVSHMEM_LIBFABRIC_SUPPORT} \
+NVSHMEM_MPI_SUPPORT=${NVSHMEM_MPI_SUPPORT} \
+NVSHMEM_NVTX=${NVSHMEM_NVTX} \
+NVSHMEM_PMIX_SUPPORT=${NVSHMEM_PMIX_SUPPORT} \
+NVSHMEM_SHMEM_SUPPORT=${NVSHMEM_SHMEM_SUPPORT} \
+NVSHMEM_TEST_STATIC_LIB=${NVSHMEM_TEST_STATIC_LIB} \
+NVSHMEM_TIMEOUT_DEVICE_POLLING=${NVSHMEM_TIMEOUT_DEVICE_POLLING} \
+NVSHMEM_TRACE=${NVSHMEM_TRACE} \
+NVSHMEM_UCX_SUPPORT=${NVSHMEM_UCX_SUPPORT} \
+NVSHMEM_USE_DLMALLOC=${NVSHMEM_USE_DLMALLOC} \
+NVSHMEM_USE_NCCL=${NVSHMEM_USE_NCCL} \
+NVSHMEM_USE_GDRCOPY=${NVSHMEM_USE_GDRCOPY} \
+NVSHMEM_VERBOSE=${NVSHMEM_VERBOSE} \
+CUDA_HOME=${CUDA_HOME} \
+GDRCOPY_HOME=${GDRCOPY_HOME} \
+LIBFABRIC_HOME=${LIBFABRIC_HOME} \
+MPI_HOME=${MPI_HOME} \
+NCCL_HOME=${NCCL_HOME} \
+NVSHMEM_PREFIX=${NVSHMEM_PREFIX} \
+PMIX_HOME=${PMIX_HOME} \
+SHMEM_HOME=${SHMEM_HOME} \
+UCX_HOME=${UCX_HOME}\"")
+
+# Find the internal nccl.h file first.
+if(NVSHMEM_USE_NCCL)
+  find_path(
+    NCCL_INCLUDE nccl.h
+    HINTS ${CMAKE_SOURCE_DIR} ${NCCL_HOME}
+    PATH_SUFFIXES include_nccl include lib64
+  )
+endif()
+
+if(NVSHMEM_USE_GDRCOPY)
+  find_path(
+    GDRCOPY_INCLUDE gdrapi.h
+    PATHS /usr/local/gdrcopy /usr/local/gdrdrv ${CMAKE_SOURCE_DIR}
+    HINTS ${CMAKE_SOURCE_DIR} /usr/local/gdrcopy /usr/local/gdrdrv ${GDRCOPY_HOME}
+    PATH_SUFFIXES include_gdrcopy include
+  )
+endif()
+
+if(NVSHMEM_SHMEM_SUPPORT)
+  find_library(
+    SHMEM_LIB
+    NAMES oshmem
+    HINTS ${SHMEM_HOME}
+    PATH_SUFFIXES lib lib64)
+  find_path(SHMEM_INCLUDE NAME shmem.h HINTS ${SHMEM_HOME}
+            PATH_SUFFIXES include
+  )
+  add_library(shmem IMPORTED INTERFACE)
+  target_link_libraries(shmem INTERFACE ${SHMEM_LIB})
+  target_include_directories(shmem INTERFACE ${SHMEM_INCLUDE})
+  if(NVSHMEM_MPI_SUPPORT)
+    separate_arguments(SHMEM_C_LINK_FLAGS NATIVE_COMMAND "${MPI_C_LINK_FLAGS}")
+    target_link_options(shmem INTERFACE ${SHMEM_C_LINK_FLAGS})
+    target_compile_definitions(shmem INTERFACE ${MPI_C_COMPILE_DEFINITIONS})
+    target_compile_options(shmem INTERFACE ${MPI_C_COMPILE_OPTIONS})
+  endif()
+endif()
+
+cmake_policy(SET CMP0105 NEW)
+set(CMAKE_CUDA_DEVICE_COMPILER_WRAPPER_FLAG "")
+add_subdirectory(src)
+
+configure_file(License.txt License.txt COPYONLY)
+
+set(INCLUDE_INSTALL_DIR include/)
+set(LIB_INSTALL_DIR lib/)
+# ...
+include(CMakePackageConfigHelpers)
+
+configure_package_config_file(
+  NVSHMEMConfig.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/NVSHMEMConfig.cmake
+  INSTALL_DESTINATION ${LIB_INSTALL_DIR}/cmake/nvshmem
+  PATH_VARS INCLUDE_INSTALL_DIR LIB_INSTALL_DIR)
+
+write_basic_package_version_file(
+  NVSHMEMVersion.cmake
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY AnyNewerVersion)
+
+install(
+  EXPORT NVSHMEMTargets
+  NAMESPACE nvshmem::
+  DESTINATION lib/cmake/nvshmem/
+)
+
+# ${CMAKE_CURRENT_BINARY_DIR}/NVSHMEMConfig.cmake
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/NVSHMEMVersion.cmake
+        DESTINATION lib/cmake/nvshmem
+)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/NVSHMEMConfig.cmake
+        DESTINATION lib/cmake/nvshmem
+	)
+
+export(
+  EXPORT NVSHMEMTargets
+  NAMESPACE nvshmem::
+  FILE "${CMAKE_CURRENT_BINARY_DIR}/NVSHMEMTargets.cmake"
+)

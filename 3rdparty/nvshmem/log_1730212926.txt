@@ -1,0 +1,1226 @@
+*   8a6f4f1f |||| 2024-10-29T04:31:06-07:00 |||| Merge branch 'devel' into 'main'
+|\  
+| *   19095ef6 |||| 2024-10-29T04:11:56-07:00 |||| Merge branch 'sethh/fix_mnnvl_allgather' into 'devel'
+| |\  
+| | * 37932283 |||| 2024-10-29T04:11:56-07:00 |||| fcollect: disable LL in hybrid MNNVL environments.
+| |/  
+* | 03a91ab9 |||| 2024-10-25T19:17:41-07:00 |||| Merge branch 'devel' into 'main'
+|\| 
+| *   9197203c |||| 2024-10-25T19:03:34-07:00 |||| Merge branch 'sethh/fcollect_mnnvl_fix' into 'devel'
+| |\  
+| | * e907c06b |||| 2024-10-25T19:03:32-07:00 |||| NVSHMEM: merge code for 3.1.6 RC
+| |/  
+| *   9cf24b83 |||| 2024-10-25T18:34:57-07:00 |||| Merge branch 'main' into 'devel'
+| |\  
+| |/  
+|/|   
+* |   f75ccd73 |||| 2024-10-19T07:35:57-07:00 |||| Merge branch 'release/3_1_5' into 'main'
+|\ \  
+| * \   b6e097ec |||| 2024-10-18T18:03:20-07:00 |||| Merge branch 'main' into release/3_1_5
+| |\ \  
+| |/ /  
+|/| |   
+* | |   aaab9820 |||| 2024-10-10T01:41:25-07:00 |||| Merge branch 'release/3_1_4' into 'main'
+|\ \ \  
+| * | | b025b683 |||| 2024-10-10T01:41:25-07:00 |||| NVSHMEM 3.1.4 Release Candidate
+|/ / /  
+* | |   7f152031 |||| 2024-10-05T11:28:05-07:00 |||| Merge branch 'release/3_1_1' into 'main'
+|\ \ \  
+| * \ \   a00d31e9 |||| 2024-10-05T07:20:30-07:00 |||| Merge branch 'main' into release/3_1_1
+| |\ \ \  
+| |/ / /  
+|/| | |   
+* | | |   6720e7b1 |||| 2024-10-02T17:45:08-07:00 |||| Merge branch 'release/3_1_0' into 'main'
+|\ \ \ \  
+| * | | | 306498dc |||| 2024-10-02T17:45:07-07:00 |||| NVSHMEM: 3.1.0-0
+|/ / / /  
+* | | |   f9b69fb6 |||| 2024-06-18T18:10:08-07:00 |||| Merge branch 'sethh/v3_0_6_4' into 'main'
+|\ \ \ \  
+| * | | | 3367a3ec |||| 2024-06-18T18:06:51-07:00 |||| version: Update to 3.0.6-4 for merge to main.
+| | * | | 4848875c |||| 2024-10-05T07:10:01-07:00 |||| NVSHMEM 3.1.1 Release Candidate
+| | | | * be845f4d |||| 2024-10-22T11:59:25-07:00 |||| Merge branch 'vkhodel/better_pkg' into 'devel'
+| | | |/| 
+| | | | * 83356cb0 |||| 2024-10-22T11:59:25-07:00 |||| propagate errors from make to gitlab; fail if there is a container version...
+| | | |/  
+| | | *   7ed0c555 |||| 2024-10-18T17:59:21-07:00 |||| Merge branch 'sethh/reduce_perf_fix' into 'devel'
+| | | |\  
+| | | | * a47ca8f8 |||| 2024-10-18T17:59:21-07:00 |||| NVSHMEM Bug Fixes from 3.1.4 RC
+| | | |/  
+| | | *   bea63f72 |||| 2024-10-15T11:46:12-07:00 |||| Merge branch 'kartiki/ibgda-sysmem-heap-ci-on-aws' into 'devel'
+| | | |\  
+| | | | * 4aa86920 |||| 2024-10-15T11:46:12-07:00 |||| Run IBGDA sysmem heap tests on AWS P5 cluster during CI
+| | | |/  
+| | | *   1fb76150 |||| 2024-10-13T09:50:23-07:00 |||| Merge branch 'arnavg/nvshmem/clang-format-token' into 'devel'
+| | | |\  
+| | | | * 9465e6f6 |||| 2024-10-13T09:50:22-07:00 |||| Update auto formatting clang-token
+| | | |/  
+| | | *   a81a76fa |||| 2024-10-11T17:46:18-07:00 |||| Merge branch 'vkhodel/docker' into 'devel'
+| | | |\  
+| | | | * a4c67d1e |||| 2024-10-11T17:46:17-07:00 |||| minor changes to building and package scripts
+| | | |/  
+| | | *   501a4a3d |||| 2024-10-10T01:36:33-07:00 |||| Merge branch 'sethh/fix_regcount_regression' into 'devel'
+| | | |\  
+| | | | * 9d960290 |||| 2024-10-10T01:36:32-07:00 |||| NVSHMEM 3.1 Bug Fixes for Release Candidate
+| | | |/  
+| | | *   fcd34a53 |||| 2024-10-09T08:28:13-07:00 |||| Merge branch 'arnavg/nvshmem/nvbug4786955' into 'devel'
+| | | |\  
+| | | | * 039dca3c |||| 2024-10-09T08:28:12-07:00 |||| Fix for NVSHMEM 3+ - nvmlDeviceGetGpuFabricInfoV segfaults on Eos with CUDA 12.5 and CUDA compatibility
+| | | |/  
+| | | * c3f9b441 |||| 2024-10-08T09:18:24-07:00 |||| Merge branch 'arnavg/nvshmem/nvls-allreduce-pe-calc' into 'devel'
+| | |/| 
+| | | * deffeebc |||| 2024-10-08T09:18:23-07:00 |||| Fix for [NVSHMEM 3.1][3.1.1-1] [NVLS feature] allreduce cases failed on single Viking H20 node.
+| | |/  
+| | *   17c29f1a |||| 2024-10-05T07:07:49-07:00 |||| Merge branch 'arnavg/nvshmem/nvbug4891787' into 'devel'
+| | |\  
+| | | * 278c5602 |||| 2024-10-05T07:07:48-07:00 |||| NVSHMEM: Fix bugs in 3.1.0 Release Candidate
+| | |/  
+| | *   217814cc |||| 2024-10-04T17:59:05-07:00 |||| Merge branch 'release/merge_back_to_devel' into 'devel'
+| | |\  
+| | | * fa74643d |||| 2024-10-04T17:59:05-07:00 |||| Merge back to devel after 3.1.0.0
+| | |/  
+| | *   c14419c2 |||| 2024-10-02T16:10:21-07:00 |||| Merge branch 'alanger/pr/add_half_precision_support' into 'devel'
+| | |\  
+| | | * 53cd70a4 |||| 2024-10-02T16:10:21-07:00 |||| Add collective APIs for half and bfloat16 datatypes
+| | * |   56628ccb |||| 2024-10-02T13:16:11-07:00 |||| Merge branch 'arnavg/nvshmem/nvls-default-selection' into 'devel'
+| | |\ \  
+| | | * | 4efc0983 |||| 2024-10-02T13:16:10-07:00 |||| Tune default algo selection strategy for collectives
+| | |/ /  
+| | * |   8fdf46a8 |||| 2024-10-02T07:13:22-07:00 |||| Merge branch 'sethh/LL128_implementation' into 'devel'
+| | |\ \  
+| | | |/  
+| | |/|   
+| | | * 3e3c6347 |||| 2024-10-02T07:13:22-07:00 |||| FCollect LL8 optimizations and LL128 implementation
+| | |/  
+| | *   d69a86ea |||| 2024-09-30T17:15:17-07:00 |||| Merge branch 'sethh/CI_ninja_build_enable' into 'devel'
+| | |\  
+| | | * 36e6357d |||| 2024-09-30T17:15:17-07:00 |||| CMake: fix regression in Ninja compilation.
+| | |/  
+| | *   76e549e1 |||| 2024-09-30T15:17:08-07:00 |||| Merge branch 'alanger/pr/fix_shmem_get_bw_reporting' into 'devel'
+| | |\  
+| | | * c9f60979 |||| 2024-09-30T15:17:08-07:00 |||| Fix shmem_get_bw reporting
+| | |/  
+| | *   f3fbaabd |||| 2024-09-30T11:34:39-07:00 |||| Merge branch 'alanger/pr/increase_reduce_scratch_size' into 'devel'
+| | |\  
+| | | * 698d0797 |||| 2024-09-30T07:45:02-07:00 |||| Increase REDUCE SCRATCH SIZE
+| | * |   9597ce6c |||| 2024-09-30T08:29:03-07:00 |||| Merge branch 'pmarkthub/gpu_verbs/dmabuf-for-control-bufs' into 'devel'
+| | |\ \  
+| | | |/  
+| | |/|   
+| | | * ae11d71c |||| 2024-09-30T08:29:03-07:00 |||| [IBGDA] Implement DMABUF support for control buffers
+| | |/  
+| | *   893b77cd |||| 2024-09-27T23:01:27-07:00 |||| Merge branch 'pmarkthub/gpu_verbs/a2a-with-signal-set' into 'devel'
+| | |\  
+| | | * 33157a71 |||| 2024-09-27T23:01:27-07:00 |||| [IBGDA & A2A] Change to A2A implementation to use SIGNAL_SET when using P2P or IBGDA
+| | |/  
+| | *   8d365154 |||| 2024-09-27T21:11:16-07:00 |||| Merge branch 'alanger/pr/dynamic_gid' into 'devel'
+| | |\  
+| | | * 9d606c25 |||| 2024-09-27T21:11:15-07:00 |||| Dynamic GID detection
+| | |/  
+| | *   efd75b57 |||| 2024-09-27T15:23:35-07:00 |||| Merge branch 'sethh/kitmaker_fixes' into 'devel'
+| | |\  
+| | | * 565e84e6 |||| 2024-09-27T15:23:34-07:00 |||| CMake: Prepare NVSHMEM Packages for external packaging.
+| | |/  
+| | *   08b615b2 |||| 2024-09-25T10:29:33-07:00 |||| Merge branch 'arnavg/nvshmem/fcollect_multi_cta' into 'devel'
+| | |\  
+| | | * 2d2adc32 |||| 2024-09-25T10:29:33-07:00 |||| NVLS Allgather Multi-CTA Support for DIRECT
+| | |/  
+| | *   3119db98 |||| 2024-09-24T20:01:41-07:00 |||| Merge branch 'arnavg/nvshmem/nvls-allreduce' into 'devel'
+| | |\  
+| | | * 949e5eec |||| 2024-09-24T20:01:41-07:00 |||| NVLS AllReduce TwoShot support
+| | |/  
+| | *   30e5b4f8 |||| 2024-09-23T16:12:25-07:00 |||| Merge branch 'sethh/devicelib_env_rename' into 'devel'
+| | |\  
+| | | * 8c670ffd |||| 2024-09-23T16:12:24-07:00 |||| CMake: Rename the devicelib cuda home variable
+| | |/  
+| | *   bf015085 |||| 2024-09-23T12:24:07-07:00 |||| Merge branch 'sethh/add_cmake_binaries' into 'devel'
+| | |\  
+| | | * 550007b4 |||| 2024-09-23T12:24:07-07:00 |||| CMake: Prepare packages for 3.1
+| | |/  
+| | *   8695ac11 |||| 2024-09-16T20:18:38-07:00 |||| Merge branch 'pezhu/devel_coverity' into 'devel'
+| | |\  
+| | | * 35dc6efb |||| 2024-09-16T20:18:38-07:00 |||| [coverity]: cid: 22649617,22649625,22649627
+| | |/  
+| | *   29f96e58 |||| 2024-09-10T17:20:48-07:00 |||| Merge branch 'alanger/pr/fix_team_split_strided' into 'devel'
+| | |\  
+| | | * 33558d66 |||| 2024-09-10T17:20:48-07:00 |||| Fix stride calculation in team split strided
+| | |/  
+| | *   3548b1ac |||| 2024-09-06T18:13:28-07:00 |||| Merge branch 'pezhu/devel_coverity' into 'devel'
+| | |\  
+| | | * 7aa79dfa |||| 2024-09-06T18:13:28-07:00 |||| [coverity] CID: minor fix for CID 22649630 22650451 22650450
+| | |/  
+| | *   a84a5400 |||| 2024-09-05T17:18:12-07:00 |||| Merge branch 'arnavg/nvshmem/nvbug4655341' into 'devel'
+| | |\  
+| | | * 91fcf39e |||| 2024-09-05T17:18:12-07:00 |||| [nvbug: 4655341] Fix build issue for DVS
+| | |/  
+| | *   f9f67ba7 |||| 2024-08-30T15:47:41-07:00 |||| Merge branch 'vectorize_packLL' into 'devel'
+| | |\  
+| | | * 56cdd816 |||| 2024-08-30T15:47:41-07:00 |||| Vectorize LL8 PackLL
+| | * |   14eb70a3 |||| 2024-08-30T13:24:09-07:00 |||| Merge branch 'ridgunji/mem_heap_test_development' into 'devel'
+| | |\ \  
+| | | |/  
+| | |/|   
+| | | * 13b1fbbd |||| 2024-08-30T13:24:09-07:00 |||| Development of the NVSHMEM symmetric heap class tests
+| | |/  
+| | *   90276aa8 |||| 2024-08-30T09:11:32-07:00 |||| Merge branch 'arnavg/nvshmem/nvls-rs-support' into 'devel'
+| | |\  
+| | | * 73d74a0e |||| 2024-08-30T09:11:32-07:00 |||| NVLS ReduceScatter Support for internal teams
+| | |/  
+| | *   3fc23cad |||| 2024-08-29T17:17:02-07:00 |||| Merge branch 'abaran/function_call_fix' into 'devel'
+| | |\  
+| | | * a8af239a |||| 2024-08-29T17:17:02-07:00 |||| Ensure get psync len function uses get fcollect psync len function
+| | |/  
+| | *   5a4186e9 |||| 2024-08-26T18:30:23-07:00 |||| Merge branch 'pezhu/devel_coverity' into 'devel'
+| | |\  
+| | | * fed7da5f |||| 2024-08-26T18:30:23-07:00 |||| [coverity] Logically dead code
+| | |/  
+| | *   7663c0c8 |||| 2024-08-19T17:37:30-07:00 |||| Merge branch 'arnavg/nvshmem/uid-bootstrap-examples' into 'devel'
+| | |\  
+| | | * 7991b526 |||| 2024-08-19T17:37:30-07:00 |||| Add UID bootstrap example
+| | |/  
+| | *   e2b23ccf |||| 2024-08-19T16:39:04-07:00 |||| Merge branch 'arnavg/nvshmem/perftest-bugs' into 'devel'
+| | |\  
+| | | * f1f9bc69 |||| 2024-08-19T16:39:04-07:00 |||| OOB access in atomic_bw
+| | |/  
+| | *   1104593c |||| 2024-08-15T12:08:38-07:00 |||| Merge branch 'arnavg/nvshmem/cuda-compat-issue' into 'devel'
+| | |\  
+| | | * 360da707 |||| 2024-08-15T12:08:37-07:00 |||| WAR for CUDA 12.5 compat with MNNVL
+| | |/  
+| | *   14c607ed |||| 2024-08-13T03:52:39-07:00 |||| Merge branch 'arnavg/nvshmem/nvls-mc-ptr' into 'devel'
+| | |\  
+| | | * 06768a01 |||| 2024-08-13T03:52:38-07:00 |||| NVLS Multicast Heap API Support
+| | |/  
+| | *   2f857b9c |||| 2024-08-12T18:05:00-07:00 |||| Merge branch 'pezhu/devel_coverity' into 'devel'
+| | |\  
+| | | * 013edf35 |||| 2024-08-12T18:04:59-07:00 |||| [Coverity]  22649610 22649594   Uninitialized scalar variable
+| | * |   7a05d961 |||| 2024-08-12T13:38:05-07:00 |||| Merge branch 'alanger/pr/add_rs_api' into 'devel'
+| | |\ \  
+| | | |/  
+| | |/|   
+| | | * 88766216 |||| 2024-08-12T13:38:04-07:00 |||| Add reducescatter collective API
+| | |/  
+| | *   811ce7a3 |||| 2024-08-08T11:54:51-07:00 |||| Merge branch 'arnavg/nvshmem/nvls-support-ll-algo' into 'devel'
+| | |\  
+| | | * b99bddf2 |||| 2024-08-08T11:54:51-07:00 |||| NVLS LL algo support for allgather onstream and device API
+| | |/  
+| | *   ff1f4058 |||| 2024-08-08T10:50:15-07:00 |||| Merge branch 'ridgunji/mem_unit_tests' into 'devel'
+| | |\  
+| | | * 3fa0ad82 |||| 2024-08-08T10:50:15-07:00 |||| Added first unit test of mem_p2p_transport
+| | |/  
+| | *   f19ad92a |||| 2024-08-08T07:50:35-07:00 |||| Merge branch 'alanger/pr/revert_to_3.0_version' into 'devel'
+| | |\  
+| | | * 417fa3aa |||| 2024-08-07T15:01:35-07:00 |||| clang format
+| | | * 7adff972 |||| 2024-08-07T15:00:06-07:00 |||| Revert minor version; Set to 3.0.15.0
+| | |/  
+| | *   8729ad70 |||| 2024-08-06T16:53:37-07:00 |||| Merge branch 'alanger/pr/use_custreamwaitvalue_when_bypassflush_set' into 'devel'
+| | |\  
+| | | * 24169d66 |||| 2024-07-17T14:13:50-07:00 |||| use cuStreamWaitValue when BYPASS_FLUSH is set
+| | |/  
+| | *   806cbff1 |||| 2024-08-06T16:35:48-07:00 |||| Merge branch 'alanger/pr/fix_custreamwrite_usage' into 'devel'
+| | |\  
+| | | * e7b2df97 |||| 2024-07-17T14:15:28-07:00 |||| Update version to 3.1.5
+| | | * 2426d962 |||| 2024-07-12T21:21:57-07:00 |||| Use cuStreamWriteValue only when job connectivity is LDST_ATOMICS
+| | |/  
+| | *   8bf506a4 |||| 2024-08-02T17:37:14-07:00 |||| Merge branch 'pezhu/devel_coverity' into 'devel'
+| | |\  
+| | | * d0113f98 |||| 2024-08-02T17:37:14-07:00 |||| Coverity: 22649622 Resource leak
+| | |/  
+| | *   c3111f62 |||| 2024-07-31T10:09:19-07:00 |||| Merge branch 'abaran/perftest_bug_fix' into 'devel'
+| | |\  
+| | | * 8fb7d54e |||| 2024-07-31T10:09:18-07:00 |||| Fix bug 4719294
+| | |/  
+| | *   5455c98d |||| 2024-07-30T10:29:55-07:00 |||| Merge branch 'arnavg/nvshmem/nvbug4774872-2' into 'devel'
+| | |\  
+| | | * 8a1c7cc5 |||| 2024-07-30T10:29:55-07:00 |||| Fix nvbug 4774872
+| | |/  
+| | *   350b7431 |||| 2024-07-29T11:29:49-07:00 |||| Merge branch 'sethh/Fix_Cuda_symbols' into 'devel'
+| | |\  
+| | | * bc1dcfd5 |||| 2024-07-29T11:29:49-07:00 |||| nvmlwrap: Fix cuda constant values.
+| | |/  
+| | *   44ad5336 |||| 2024-07-29T11:27:29-07:00 |||| Merge branch 'arnavg/nvshmem/remote-perftest-ib-list' into 'devel'
+| | |\  
+| | | * 5efaec26 |||| 2024-07-29T11:27:29-07:00 |||| Remove host/coll variants from perftest IB list
+| | |/  
+| | *   a03a73eb |||| 2024-07-26T10:57:36-07:00 |||| Merge branch 'arnavg/nvshmem/nvls-support-device-state' into 'devel'
+| | |\  
+| | | * dd049429 |||| 2024-07-26T10:57:35-07:00 |||| NVLINK SHARP support for internal teams
+| | |/  
+| | *   1ca262e3 |||| 2024-07-25T23:05:26-07:00 |||| Merge branch 'arnavg/nvshmem/enable_sm100' into 'devel'
+| | |\  
+| | | * a32a64c1 |||| 2024-07-25T23:05:25-07:00 |||| Enable Blackwell build and improve CI & docs
+| | |/  
+| | *   c9e6d98b |||| 2024-07-24T23:42:50-07:00 |||| Merge branch 'ridgunji/nvshmem/fix_vmm_segfault' into 'devel'
+| | |\  
+| | | * 9bdc6c2e |||| 2024-07-24T23:42:50-07:00 |||| Add missing remote transport initialization for segfault issue
+| | |/  
+| | *   36f79014 |||| 2024-07-22T18:23:41-07:00 |||| Merge branch 'ridgunji/mem_transport_minorFixes' into 'devel'
+| | |\  
+| | | * b75562b1 |||| 2024-07-22T18:23:41-07:00 |||| Made minor fixes to the mem_transport.cpp and .hpp files
+| | |/  
+| | *   5ba20e7f |||| 2024-07-22T11:25:43-07:00 |||| Merge branch 'arnavg/nvshmem/remove-perftest-host' into 'devel'
+| | |\  
+| | | * 228fa78b |||| 2024-07-22T11:25:43-07:00 |||| Deprecate host-side coll perftest
+| | |/  
+| | *   c920aefc |||| 2024-07-18T10:46:54-07:00 |||| Merge branch 'arnavg/nvshmem/reduction_bug' into 'devel'
+| | |\  
+| | | * e71f7b84 |||| 2024-07-18T10:46:54-07:00 |||| Fix nvbug for cuda invalid resource handle for reduction
+| | |/  
+| | *   dd0a6c8c |||| 2024-07-15T17:28:01-07:00 |||| Merge branch 'arnavg/nvshmem/host-coll-bug' into 'devel'
+| | |\  
+| | | * eb2f58ab |||| 2024-07-15T17:28:01-07:00 |||| Address bug in perftest/host/coll
+| | |/  
+| | *   d72718ed |||| 2024-07-12T14:58:45-07:00 |||| Merge branch 'arnavg/nvshmem/perftest-r2r-debug' into 'devel'
+| | |\  
+| | | * 86497ec1 |||| 2024-07-12T14:58:45-07:00 |||| Remove memcpyAsync to minimize r2r variations
+| | |/  
+| | *   18f37eda |||| 2024-07-09T13:05:05-07:00 |||| Merge branch 'sethh/symmetric_mem_refactor' into 'devel'
+| | |\  
+| | | * 53c05e0f |||| 2024-07-03T12:53:38-07:00 |||| symmetric_heap: move functions called in class to protected.
+| | * |   b7854869 |||| 2024-07-09T13:04:40-07:00 |||| Merge branch 'sethh/env_disambiguation' into 'devel'
+| | |\ \  
+| | | |/  
+| | |/|   
+| | | * 66ae3c24 |||| 2024-07-05T13:06:34-07:00 |||| in-place clang-formatting
+| | | * 6b0cae05 |||| 2024-07-05T11:56:06-07:00 |||| env: Clarify the bootstrap plugin environment vars
+| | * |   80ec6914 |||| 2024-07-05T23:56:35-07:00 |||| Merge branch 'alanger/pr/use_custreamwaitvalue' into 'devel'
+| | |\ \  
+| | | |/  
+| | |/|   
+| | | * 14a36c27 |||| 2024-07-05T23:56:35-07:00 |||| Use cuStreamWriteValue64 instead of signal_op_on_stream in put_signal_on_stream API
+| | |/  
+| | *   72e24da1 |||| 2024-07-02T13:02:24-07:00 |||| Merge branch 'sethh/CI_fix_timeouts' into 'devel'
+| | |\  
+| | | * 2b9f4aaa |||| 2024-07-02T13:02:24-07:00 |||| CI: add timeouts to jobs missing them.
+| | |/  
+| | *   73c12740 |||| 2024-06-28T15:56:42-07:00 |||| Merge branch 'arnavg/nvshmem/versioned-structs' into 'devel'
+| | |\  
+| | | * c619b00d |||| 2024-06-28T15:56:42-07:00 |||| Fix missing initialization in gpu_coll_env_params_var
+| | |/  
+| | *   5461c5e1 |||| 2024-06-28T14:25:57-07:00 |||| Merge branch 'alanger/pr/fix_timeout_initializer' into 'devel'
+| | |\  
+| | | * 5200481a |||| 2024-06-25T17:22:25-07:00 |||| Update version to 3.0.8.0
+| | | * 06fc6e5d |||| 2024-06-25T17:19:52-07:00 |||| Use correct init value for timeout
+| | |/  
+| | *   a1c97275 |||| 2024-06-28T14:09:25-07:00 |||| Merge branch 'alanger/pr/fix_sysmem_ci' into 'devel'
+| | |\  
+| | | * 58b8f196 |||| 2024-06-28T14:07:42-07:00 |||| Update version to 3.0.7.2
+| | | * b467dbb1 |||| 2024-06-18T15:34:33-07:00 |||| Fix sysmem CI skip test list
+| | |/  
+| | *   4a281dd7 |||| 2024-06-26T14:48:51-07:00 |||| Merge branch 'abaran/nvshmem/perf_metrics' into 'devel'
+| | |\  
+| | | * 6a63a200 |||| 2024-06-26T14:48:51-07:00 |||| improve readability and added metrics to perftest output
+| | |/  
+| | * ec550184 |||| 2024-06-24T15:58:40-07:00 |||| Merge branch 'arnavg/nvshmem/fcollect-algo' into 'devel'
+| |/| 
+| | * 50b73f60 |||| 2024-06-24T15:58:40-07:00 |||| Add algo selection for fcollect
+| |/  
+| *   66fd88cb |||| 2024-06-18T18:03:01-07:00 |||| Merge branch 'arnavg/nvshmem/missing-cudawrap-11.0' into 'devel'
+| |\  
+| | * 09de3888 |||| 2024-06-18T17:59:12-07:00 |||| version: bump for merge back to devel.
+| | *   7f3fc350 |||| 2024-06-18T17:57:50-07:00 |||| Merge branch 'main' into arnavg/nvshmem/missing-cudawrap-11.0
+| | |\  
+| |_|/  
+|/| |   
+* | |   31641700 |||| 2024-06-18T11:52:31-07:00 |||| Merge branch 'sethh/nvshmem_3_0_6_2' into 'main'
+|\ \ \  
+| * | | cb5e81e5 |||| 2024-06-17T16:51:10-07:00 |||| version: Update to 3.0.6-2
+| |/ /  
+| | * 0d5870d9 |||| 2024-06-18T17:47:25-07:00 |||| Bump up
+| | * 7a0362cf |||| 2024-06-18T17:45:52-07:00 |||| Add missing include
+| |/  
+| *   eed0f38d |||| 2024-06-18T07:35:06-07:00 |||| Merge branch 'alanger/pr/fix_mnnvl_discovery_2' into 'devel'
+| |\  
+| | * 4db06157 |||| 2024-06-17T18:55:59-07:00 |||| in-place clang-formatting
+| | * f7db57e0 |||| 2024-06-17T18:52:42-07:00 |||| Fix typo
+| | * fc3c8af4 |||| 2024-06-17T17:56:28-07:00 |||| Fix typo
+| | * 930f934a |||| 2024-06-17T17:34:22-07:00 |||| Check if p2p list is of form (start, stride, size)
+| |/  
+| *   1e2775b5 |||| 2024-06-17T16:46:34-07:00 |||| Merge branch 'alanger/pr/fix_mnnvl_discovery_2' into 'devel'
+| |\  
+| | * 893a74bb |||| 2024-06-17T11:28:33-07:00 |||| NVSHMEM: Make MNNVL failures non-fatal.
+| | * 57bb8b93 |||| 2024-06-17T15:18:22-07:00 |||| Fix MNNVL discovery code
+| |/  
+| *   888a729e |||| 2024-06-17T14:10:57-07:00 |||| Merge branch 'pmarkthub/gpu_verbs/fix-roce-bug' into 'devel'
+| |\  
+| | * 3924b1dc |||| 2024-06-17T09:22:26-07:00 |||| version: Update version for bug fix.
+| | *   0a3b1178 |||| 2024-06-17T09:21:35-07:00 |||| Merge branch 'main' into pmarkthub/gpu_verbs/fix-roce-bug
+| | |\  
+| |_|/  
+|/| |   
+* | |   e710567d |||| 2024-06-13T21:32:55-07:00 |||| Merge branch 'sethh/3_0_respin_merge_main' into 'main'
+|\ \ \  
+| * \ \   a103f4a1 |||| 2024-06-13T15:39:53-07:00 |||| Merge branch 'main' into sethh/3_0_respin_merge_main
+| |\ \ \  
+| |/ / /  
+|/| | |   
+* | | |   8269a094 |||| 2024-06-04T16:22:59-07:00 |||| Merge branch 'alanger/pr/update_main_with_3_0_4' into 'main'
+|\ \ \ \  
+| * \ \ \   d96d1b62 |||| 2024-06-04T16:21:20-07:00 |||| Merge branch 'main' into alanger/pr/update_main_with_3_0_4
+| |\ \ \ \  
+| |/ / / /  
+|/| | | |   
+* | | | |   6dae0eba |||| 2024-06-01T17:37:04-07:00 |||| Merge branch '3_0_rc1' into 'main'
+|\ \ \ \ \  
+| * | | | | 8851f6c2 |||| 2024-06-01T11:56:22-07:00 |||| version: Update package version formerge to main
+* | | | | |   76632072 |||| 2024-01-26T19:55:45-08:00 |||| Merge branch 'devel' into 'main'
+|\ \ \ \ \ \  
+* \ \ \ \ \ \   fd5814e5 |||| 2024-01-22T23:18:41-08:00 |||| Merge branch 'devel' into 'main'
+|\ \ \ \ \ \ \  
+* \ \ \ \ \ \ \   42dc2f4e |||| 2024-01-11T18:09:20-08:00 |||| Merge branch 'devel' into 'main'
+|\ \ \ \ \ \ \ \  
+* \ \ \ \ \ \ \ \   a30a2b4a |||| 2024-01-04T17:57:15-08:00 |||| Merge branch 'devel' into 'main'
+|\ \ \ \ \ \ \ \ \  
+* \ \ \ \ \ \ \ \ \   4f2c95e8 |||| 2023-12-21T07:51:22-08:00 |||| Merge branch 'devel' into 'main'
+|\ \ \ \ \ \ \ \ \ \  
+* | | | | | | | | | | c3f9acab |||| 2023-12-16T09:58:32-08:00 |||| Merge branch 'devel' into 'main'
+| | | | | | | * | | | ef146a96 |||| 2024-06-04T14:37:15-07:00 |||| Update version to 3.0.4.1
+| | | | | | | | * | | bebc18a5 |||| 2024-06-13T15:34:58-07:00 |||| version: Update tweak version for merge to main.
+| | | | | | | | |/ /  
+| | | | | | | | | * 4c7bdbbb |||| 2024-06-16T23:34:21-07:00 |||| Fix an IBGDA bug showing up when using RoCE because the send_cq and ah objects are inside union
+| | | | | | | | |/  
+| | | | | | | | * 6af79152 |||| 2024-06-13T15:13:42-07:00 |||| Merge branch 'sethh/3_0_respin' into 'devel'
+| | | | | | | |/| 
+| | | | | | | | * bcc12304 |||| 2024-06-13T15:13:42-07:00 |||| Merge Request for all 3.0.5 bug fixes.
+| | | | | | | |/  
+| | | | | | | * e141ffc9 |||| 2024-06-04T09:35:20-07:00 |||| Merge branch 'alanger/pr/team_shared_fix' into 'devel'
+| | | | | | |/| 
+| | | | | | | * 61171fc6 |||| 2024-06-04T09:35:20-07:00 |||| Fix bug during team creation
+| | | | | | |/  
+| | | | | | *   9c2208bf |||| 2024-06-01T11:54:06-07:00 |||| Merge branch 'sethh/test_new_config' into 'devel'
+| | | | | | |\  
+| | | | | | | * 06617d40 |||| 2024-06-01T11:36:43-07:00 |||| CI: Fix config for merge to main
+| | | | | | |/  
+| | | | | | *   38c852a7 |||| 2024-06-01T08:22:26-07:00 |||| Merge branch 'alanger/pr/optimize_small_msg_rdxn' into 'devel'
+| | | | | | |\  
+| | | | | | | * 27cc23f7 |||| 2024-06-01T05:25:24-07:00 |||| libfabric: Add missing header
+| | | | | | | * 57146112 |||| 2024-06-01T02:33:26-07:00 |||| include/device: remove uses of cuda.h from dev headers
+| | | | | | | * 496a3bd5 |||| 2024-05-31T16:36:15-07:00 |||| Add cuda.h to reduce.cuh
+| | | | | | | * 497f879d |||| 2024-05-31T16:27:49-07:00 |||| UPdate version to 3.0.3.0
+| | | | | | | * 3126ce7b |||| 2024-05-31T15:20:10-07:00 |||| fix build-time error
+| | | | | | | * 94a35361 |||| 2024-03-18T16:53:01-07:00 |||| in-place clang-formatting
+| | | | | | | * a85da2c7 |||| 2024-05-31T14:26:23-07:00 |||| Guard constexpr usage with c++17 macro
+| | | | | | | * 5c6cac1c |||| 2024-03-18T16:50:02-07:00 |||| Use cooperative groups for internode reduce
+| | | | | | | * 7a2db71c |||| 2024-03-18T16:22:01-07:00 |||| Do parallel sends/recvs in small msg reduce block scoped
+| | | | | | |/  
+| | | | | | *   b3d38963 |||| 2024-06-01T05:18:59-07:00 |||| Merge branch 'alanger/pr/oberon_nw_support' into 'devel'
+| | | | | | |\  
+| | | | | | | *   1388d173 |||| 2024-06-01T02:49:02-07:00 |||| Merge branch 'devel' into 'alanger/pr/oberon_nw_support'
+| | | | | | | |\  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | * |   69b26c26 |||| 2024-06-01T02:36:22-07:00 |||| Merge branch 'abaran/team_max_fix' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | e3df35ea |||| 2024-05-31T14:22:13-07:00 |||| updated project version to 3.0.1
+| | | | | | | * |   4dad2ecb |||| 2024-05-31T14:17:33-07:00 |||| Merge branch 'devel' into abaran/team_max_fix
+| | | | | | | |\ \  
+| | | | | | | |/ /  
+| | | | | | |/| |   
+| | | | | | | * | 8fcb42d3 |||| 2024-05-31T09:10:11-07:00 |||| changed log to NVSHMEM_INIT
+| | | | | | | * | 8cf97c18 |||| 2024-05-30T13:49:18-07:00 |||| manual clang format fix
+| | | | | | | * | d419cfcc |||| 2024-05-30T11:21:59-07:00 |||| collapsed prints to one statement
+| | | | | | | * | 841d02a5 |||| 2024-05-30T09:45:02-07:00 |||| print heap size attr
+| | | | | | | * | b7bb52ee |||| 2024-05-30T09:23:17-07:00 |||| changed print level
+| | | | | | | * | 94ff8a7f |||| 2024-05-29T19:15:18-07:00 |||| debug statements and team max fix
+| | | | | | | | * f4adc761 |||| 2024-06-01T02:16:40-07:00 |||| team_internal.cpp: Fix uninitialized variable list.
+| | | | | | | | * d7a66619 |||| 2024-05-31T15:50:52-07:00 |||| in-place clang-formatting
+| | | | | | | | * 6211de66 |||| 2024-05-31T15:45:59-07:00 |||| Fix rebase error
+| | | | | | | | * 62b6acfd |||| 2024-05-31T15:41:54-07:00 |||| Update version to 3.0.2.0
+| | | | | | | | * e9909bbb |||| 2024-05-29T19:20:31-07:00 |||| fix rebase issues
+| | | | | | | | * d16a7307 |||| 2024-04-22T16:19:43-07:00 |||| Properly compose TEAM_SHARED
+| | | | | | | | * a7584d60 |||| 2024-03-26T20:19:40-07:00 |||| Add Oberon Networking Support
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | * |   af1b1459 |||| 2024-05-31T13:57:39-07:00 |||| Merge branch 'abi_compat_changes_uber_branch' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | 058d503e |||| 2024-05-31T03:58:17-07:00 |||| ibgda: Add padding to state struct.
+| | | | | | | * |   b374ee6e |||| 2024-05-31T02:56:26-07:00 |||| Merge branch 'pmarkthub/gpu_verbs/async-postsend-cpu' into abi_compat_changes_uber_branch
+| | | | | | | |\ \  
+| | | | | | | | * | 1b0ead25 |||| 2024-05-30T01:00:09-07:00 |||| Change the expected size of struct nvshmemi_ibgda_device_qp_v1 to 184
+| | | | | | | | * | 199f3e1c |||| 2024-05-30T00:53:29-07:00 |||| Merge branch 'devel' into pmarkthub/gpu_verbs/async-postsend-cpu
+| | | | | | | | |\| 
+| | | | | | | | * | bafc36f5 |||| 2024-05-23T19:01:44-07:00 |||| in-place clang-formatting
+| | | | | | | | * | 8531a21b |||| 2024-05-23T18:58:07-07:00 |||| Change the error report regarding GPU UAR mapping failure to warning
+| | | | | | | | * | 90cda940 |||| 2024-05-22T19:16:30-07:00 |||| in-place clang-formatting
+| | | | | | | | * | 45b368d9 |||| 2024-05-22T19:12:28-07:00 |||| Fix compile errors
+| | | | | | | | * |   90954dec |||| 2024-05-22T19:01:24-07:00 |||| Merge branch 'devel' into pmarkthub/gpu_verbs/async-postsend-cpu
+| | | | | | | | |\ \  
+| | | | | | | | * | | af764de6 |||| 2024-05-19T22:31:14-07:00 |||| in-place clang-formatting
+| | | | | | | | * | | 5f706be3 |||| 2024-05-19T22:27:55-07:00 |||| Rename NIC_POSTER_LOC to NIC_HANDLER
+| | | | | | | | * | | ad6c398e |||| 2024-02-14T00:28:20-08:00 |||| in-place clang-formatting
+| | | | | | | | * | | 027d6a04 |||| 2024-02-14T00:25:18-08:00 |||| Fix bug when PeerMappingOverride regkey is not set
+| | | | | | | | * | | b0d7ed33 |||| 2024-02-13T20:27:22-08:00 |||| in-place clang-formatting
+| | | | | | | | * | | 1f8fcefd |||| 2024-02-13T06:18:00-08:00 |||| in-place clang-formatting
+| | | | | | | | * | | 805c9382 |||| 2024-02-13T20:23:53-08:00 |||| Fix bug in poll cq when the NIC poster is GPU
+| | | | | | | | * | | 3b49b0c4 |||| 2024-02-13T06:14:30-08:00 |||| Fix bugs related to assigning and using the new prod_idx variable
+| | | | | | | | * | | 0f31dc03 |||| 2024-02-13T01:32:47-08:00 |||| Use gdr_copy_from_mapping to take a snapshot of prod_idx_array
+| | | | | | | | * | | 07795856 |||| 2024-02-13T01:21:17-08:00 |||| Modify the progress_transports proxy code to also run IBGDA
+| | | | | | | | * | | c1f78fd0 |||| 2024-02-13T01:20:57-08:00 |||| Setup use_async_postsend flag
+| | | | | | | | * | | ed2593ca |||| 2024-02-09T02:18:21-08:00 |||| Apply ibgda_nic_poster_loc to various parts to support both GPU and CPU
+| | | | | | | | * | | c524650c |||| 2024-02-09T02:01:18-08:00 |||| Introduce NVSHMEM_IBGDA_NIC_POSTER_LOC envvar and implement an auto-discovery algorithm
+| | | | | | | | * | | 12504702 |||| 2024-02-09T02:00:47-08:00 |||| Remove unused prod_idx_array
+| | | | | | | | * | | 23779573 |||| 2024-02-08T01:11:47-08:00 |||| Add GDRCOPY compile-time guard
+| | | | | | | | * | | b4c46b9a |||| 2024-02-08T01:11:09-08:00 |||| Fix compile error in ibgda_device.cuh
+| | | | | | | | * | | c321bdd1 |||| 2024-01-22T06:10:35-08:00 |||| Aligned size when calling gdr_pin_buffer
+| | | | | | | | * | | abd46257 |||| 2024-01-22T01:33:54-08:00 |||| Added gdrcopy support to ibgda_gpu_mem_alloc
+| | | | | | | | * | | 8cda0a8c |||| 2024-01-21T23:34:38-08:00 |||| Implemented async post-send with CPU as the poster
+| | | | | | | | * | | 99fc75aa |||| 2024-02-08T00:16:57-08:00 |||| Implement use_async_postsend on the device side
+| | | | | | | | * | | 33899a7b |||| 2024-02-07T23:21:25-08:00 |||| Use prod_idx instead of ready_head in ibgda_quiet
+| | | | | | | | * | | bcdcf483 |||| 2024-02-07T23:20:19-08:00 |||| Use on-demand ctrl_seg for DB ringing
+| | | | | | | * | | | 7834bdae |||| 2024-05-31T02:48:58-07:00 |||| CI: fix issues with builds after merge.
+| | | | | | | * | | | 43186f08 |||| 2024-05-30T13:54:34-07:00 |||| Apply clang-formatting
+| | | | | | | * | | | 05253ab6 |||| 2024-05-29T19:21:57-07:00 |||| Build error fixes
+| | | | | | | * | | | d4cffe21 |||| 2024-05-29T15:28:06-07:00 |||| Reorder initializer fields
+| | | | | | | * | | | 19d163c1 |||| 2024-05-29T11:28:58-07:00 |||| Fix sizeof struct for TEAM_INITIALIZER
+| | | | | | | * | | | 7b37601f |||| 2024-05-28T13:14:36-07:00 |||| Update misleading log message
+| | | | | | | * | | | e073dc58 |||| 2024-05-28T01:53:16-07:00 |||| Apply clang-formatting
+| | | | | | | * | | | a7f12b47 |||| 2024-05-28T01:22:20-07:00 |||| Fix usage of macro and parse version
+| | | | | | | * | | | 0c5a7285 |||| 2024-05-27T22:23:27-07:00 |||| Apply clang-formatting
+| | | | | | | * | | | 63d5c9db |||| 2024-05-27T22:12:13-07:00 |||| Address build error:
+| | | | | | | * | | | a684bdfe |||| 2024-05-27T21:23:17-07:00 |||| Add proper versioning to uid_handle
+| | | | | | | * | | | bbb1e909 |||| 2024-05-21T09:18:54-07:00 |||| CI: Address review comments and strengthen tests.
+| | | | | | | * | | | 99ed25f7 |||| 2024-05-19T12:46:48-07:00 |||| CI: Update lib versions and add ABI change tests.
+| | | | | | | * | | | dbec265e |||| 2024-05-18T15:31:01-07:00 |||| version: update all version checks in the repo.
+| | | | | | | * | | | 14378e48 |||| 2024-05-18T08:37:18-07:00 |||| types: version all abi crossing types.
+| | | | | | | * | | | 05798e87 |||| 2024-05-09T09:34:08-07:00 |||| NVSHMEM: Add sentinel values to all public enums.
+| | | | | | * | | | |   dc310261 |||| 2024-05-31T13:57:18-07:00 |||| Merge branch 'arnavg/nvshmem/sysmem-logs-stale' into 'devel'
+| | | | | | |\ \ \ \ \  
+| | | | | | | * | | | | 4be4ba5d |||| 2024-05-31T13:57:17-07:00 |||| Remove stale sysmem shm file
+| | | | | | | |/ / / /  
+| | | | | | * | | | |   d46b4759 |||| 2024-05-31T10:01:44-07:00 |||| Merge branch 'alanger/pr/fix_bcast_threshold' into 'devel'
+| | | | | | |\ \ \ \ \  
+| | | | | | | |/ / / /  
+| | | | | | |/| | | |   
+| | | | | | | * | | | 0c9c577a |||| 2024-05-30T18:06:35-07:00 |||| Fix bcast ll threshold
+| | | | | | |/ / / /  
+| | | | | | * | | |   344c2ca9 |||| 2024-05-30T17:09:45-07:00 |||| Merge branch 'revert-23621e75' into 'devel'
+| | | | | | |\ \ \ \  
+| | | | | | | |_|_|/  
+| | | | | | |/| | |   
+| | | | | | | * | | 781d752a |||| 2024-05-30T11:59:52-07:00 |||| Revert "Merge branch 'sethh/abi_compat_changes' into 'devel'"
+| | | | | | |/ / /  
+| | | | | | * | |   23621e75 |||| 2024-05-27T13:21:52-07:00 |||| Merge branch 'sethh/abi_compat_changes' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | * | | 8a9d1166 |||| 2024-05-21T09:18:54-07:00 |||| CI: Address review comments and strengthen tests.
+| | | | | | | * | | 0bb276e8 |||| 2024-05-19T12:46:48-07:00 |||| CI: Update lib versions and add ABI change tests.
+| | | | | | | * | | 609ce43a |||| 2024-05-18T15:31:01-07:00 |||| version: update all version checks in the repo.
+| | | | | | | * | | ade7790c |||| 2024-05-18T08:37:18-07:00 |||| types: version all abi crossing types.
+| | | | | | | * | | 48728f6d |||| 2024-05-09T09:34:08-07:00 |||| NVSHMEM: Add sentinel values to all public enums.
+| | | | | | |/ / /  
+| | | | | | * | |   71ace3b1 |||| 2024-05-26T13:13:54-07:00 |||| Merge branch 'sethh/nvshmem_common_h_fix' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | |_|/  
+| | | | | | |/| |   
+| | | | | | | * | 0cc41699 |||| 2024-05-22T11:05:49-07:00 |||| include: fix missing ptrdiff definition in gcc9+
+| | | | | | |/ /  
+| | | | | | * |   e1f44696 |||| 2024-05-22T12:03:36-07:00 |||| Merge branch 'alanger/pr/fix_ptr_test' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | 7f5c2c68 |||| 2024-05-20T18:32:11-07:00 |||| Use atomicAdd_system
+| | | | | | * | |   5be64b1b |||| 2024-05-22T08:28:34-07:00 |||| Merge branch 'pmarkthub/nvbugs/4272672' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | * | | 6cfc75db |||| 2024-05-02T03:06:22-07:00 |||| Fix rebase bug
+| | | | | | | * | | 533536d1 |||| 2023-12-13T11:59:48-08:00 |||| fix build error
+| | | | | | | * | | 38a397b0 |||| 2023-12-13T11:08:41-08:00 |||| build error
+| | | | | | | * | | 8562b249 |||| 2023-12-10T18:15:13-08:00 |||| Fixed clang format error
+| | | | | | | * | | 0bab14d0 |||| 2023-12-10T18:14:43-08:00 |||| Changed the return type of ibgda_destroy_cq_shared_objects to void
+| | | | | | | * | | e559cd79 |||| 2023-12-10T18:08:00-08:00 |||| Rearranged members in struct ibgda_device
+| | | | | | | * | | 7d846a8f |||| 2023-11-30T09:49:12+00:00 |||| Fixed bug related to cq_offset
+| | | | | | | * | | 116b825e |||| 2023-11-07T15:02:28-08:00 |||| Fixed clang formatting
+| | | | | | | * | | 2200d39e |||| 2023-11-07T14:16:57-08:00 |||| Consolidated CQ and DBR buffer allocation and mapping
+| | | | | | | * | | 2fab0e8e |||| 2023-11-07T13:46:52-08:00 |||| Consolidated WQ and DBR buffers allocation and mapping
+| | | | | | | * | | 1a8e1502 |||| 2023-11-07T13:44:23-08:00 |||| Exposed wq_umem_offset field in CREATE_QP in mlx5_ifc.h
+| | | | | | * | | |   f0317cbc |||| 2024-05-21T17:41:34-07:00 |||| Merge branch 'arnavg/nvshmem/fix-build-issue' into 'devel'
+| | | | | | |\ \ \ \  
+| | | | | | | |_|/ /  
+| | | | | | |/| | |   
+| | | | | | | * | | 9cd52f9e |||| 2024-05-21T14:30:47-07:00 |||| Address build issue with use of auto
+| | | | | | |/ / /  
+| | | | | | * | |   236309bd |||| 2024-05-20T16:47:18-07:00 |||| Merge branch 'arnavg/nvshmem/build-without-remote' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | * | | 78f311a6 |||| 2024-05-20T16:47:18-07:00 |||| Add macro for conditional compile of remote transports
+| | | | | | | | |/  
+| | | | | | | |/|   
+| | | | | | * | |   2a17c228 |||| 2024-05-20T14:33:35-07:00 |||| Merge branch 'pmarkthub/gpu_verbs/change-default-qp-type' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | * | | 0e9f734f |||| 2024-05-13T01:12:22-07:00 |||| Change the default IBGDA QP type to RC
+| | | | | | | |/ /  
+| | | | | | * | |   ae8c3445 |||| 2024-05-20T14:30:12-07:00 |||| Merge branch 'pezhu/devel_coverity' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | * | | da21d25d |||| 2024-05-20T14:30:12-07:00 |||| [Coverity]: CID 2261576[0,2,3] Missing check for errors after kernel launch
+| | | | | | | |/ /  
+| | | | | | * | |   cd126d69 |||| 2024-05-20T09:49:09-07:00 |||| Merge branch 'sethh/version_copy' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | |/ /  
+| | | | | | |/| |   
+| | | | | | | * | c71934e9 |||| 2024-05-19T14:51:22-07:00 |||| cmake: Add additional version.txt for packaging.
+| | | | | | * | |   96ac092e |||| 2024-05-17T16:39:12-07:00 |||| Merge branch 'pmarkthub/gpu_verbs/fix-sysmem-cst-dci-bug' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | * | | 5ae2f5f9 |||| 2024-05-16T20:48:43-07:00 |||| Remove ibgda_get_cst_dci and use ibgda_get_dci instead
+| | | | | | * | | |   159fec8f |||| 2024-05-17T16:37:51-07:00 |||| Merge branch 'alanger/pr/fix_p2p_atomic' into 'devel'
+| | | | | | |\ \ \ \  
+| | | | | | | |_|/ /  
+| | | | | | |/| | |   
+| | | | | | | * | | cafa0252 |||| 2024-05-16T15:39:16-07:00 |||| in-place clang-formatting
+| | | | | | | * | | c7f5048c |||| 2024-05-12T21:05:37-07:00 |||| Use system scoped atomics for P2P
+| | | | | | * | | |   0c7ba4df |||| 2024-05-17T08:29:13-07:00 |||| Merge branch 'sethh/abi_reduction' into 'devel'
+| | | | | | |\ \ \ \  
+| | | | | | | |_|/ /  
+| | | | | | |/| | |   
+| | | | | | | * | | 667d7bc6 |||| 2024-05-16T14:26:44-07:00 |||| MR: Address comments from Arnav
+| | | | | | | * | | 50801287 |||| 2024-05-09T00:21:56-07:00 |||| nvshmem_host: Reduce .sym file to minimum set.
+| | | | | | | * | | 46694f26 |||| 2024-05-07T08:25:51-07:00 |||| include: Fix order of options and defines.
+| | | | | | | * | | 703337b4 |||| 2024-05-06T16:39:55-07:00 |||| include: remove deprecated functions.
+| | | | | | | * | | bc756ca4 |||| 2024-05-06T13:29:14-07:00 |||| proxy: move shared channel structs to device_host header.
+| | | | | | | * | | 8b830e95 |||| 2024-05-05T19:58:27-07:00 |||| src/include: Refactor includes to exclude internal defs from ABI.
+| | | | | | | * | | f459d546 |||| 2024-05-05T00:31:00-07:00 |||| scripts: Generalize include_checker and add to CI
+| | | | | | | * | | 51dbff2a |||| 2024-05-04T22:57:49-07:00 |||| nvshmem: Add nvshmem_build_options includes
+| | | | | | | * | | ec80726d |||| 2024-05-03T06:37:01-07:00 |||| src/bootstrap: Add info to bootstrap and simplify ABI
+| | | | | | | * | | 13bde9ae |||| 2024-05-03T02:21:53-07:00 |||| host: Factor out non_abi calls from host to dev headers
+| | | | | | | * | | 7e134269 |||| 2024-04-28T19:25:32-07:00 |||| scripts: Add check for header include breakage.
+| | | | | | | * | | ec4ebeec |||| 2024-04-28T19:24:12-07:00 |||| include: move uid types to their own file.
+| | | | | | | * | | e6952560 |||| 2024-04-24T11:57:02-07:00 |||| Simplify host-side nvshmemi_state_t type.
+| | | | | | * | | |   2e4d8918 |||| 2024-05-16T16:23:58-07:00 |||| Merge branch 'arnavg/nvshmem/coll-precision-issue' into 'devel'
+| | | | | | |\ \ \ \  
+| | | | | | | |_|_|/  
+| | | | | | |/| | |   
+| | | | | | | * | | 2015747b |||| 2024-05-16T16:23:58-07:00 |||| Address perftest precision issue
+| | | | | | * | | |   6163201b |||| 2024-05-14T10:22:04-07:00 |||| Merge branch 'alanger/pr/fix_ib_ro_compile_error' into 'devel'
+| | | | | | |\ \ \ \  
+| | | | | | | |/ / /  
+| | | | | | |/| | |   
+| | | | | | | * | | 1eaf2c58 |||| 2024-05-13T12:07:06-07:00 |||| fix compile error
+| | | | | | |/ / /  
+| | | | | | * | |   003394f6 |||| 2024-05-09T11:03:11-07:00 |||| Merge branch 'arnavg/nvshmem/NVSHMEM-1464' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | |/ /  
+| | | | | | |/| |   
+| | | | | | | * | fa6f9309 |||| 2024-05-09T11:03:10-07:00 |||| Address non-reentrant function call in test
+| | | | | | * | |   4575be3e |||| 2024-05-09T00:05:39-07:00 |||| Merge branch 'arnavg/nvshmem/sysmem-memory-corruption' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | * | | 0349d8ac |||| 2024-05-09T00:05:38-07:00 |||| Fix sysmem + P2P or sysmem + IBRC memory corruption
+| | | | | | * | | |   0bca3dc6 |||| 2024-05-08T13:32:43-07:00 |||| Merge branch 'pezhu/devel_coverity' into 'devel'
+| | | | | | |\ \ \ \  
+| | | | | | | |/ / /  
+| | | | | | |/| | |   
+| | | | | | | * | | 04182872 |||| 2024-05-08T13:32:43-07:00 |||| coverity fix: cid:22615765 cid:22615764
+| | | | | | | |/ /  
+| | | | | | * | |   8f82a324 |||| 2024-05-06T16:45:13-07:00 |||| Merge branch 'arnavg/nvshmem/missing-handle-type' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | |/ /  
+| | | | | | |/| |   
+| | | | | | | * | 04501d2d |||| 2024-05-06T16:45:13-07:00 |||| Missing enum definition for CUDA 11.0 builds
+| | | | | | |/ /  
+| | | | | | * |   e94ec50c |||| 2024-05-04T20:38:37-07:00 |||| Merge branch 'arnavg/nvshmem/oopfy_p2p_phase2' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | 99d93548 |||| 2024-05-04T20:38:37-07:00 |||| [NVSHMEM-1555] Symmetric Memory Management OOPfyication [Phase-2]
+| | | | | | |/ /  
+| | | | | | * |   b5c0a6fe |||| 2024-05-03T06:32:42-07:00 |||| Merge branch 'sethh/IWYU_Macro_Fix' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | 1de66e17 |||| 2024-05-03T02:30:02-07:00 |||| in-place clang-formatting
+| | | | | | | * | 45418f00 |||| 2024-05-02T19:16:25-07:00 |||| src: Add check for IWYU quirks.
+| | | | | | * | |   40965f5c |||| 2024-05-03T02:05:27-07:00 |||| Merge branch 'arnavg/nvshmem/sysmem_rail_issue' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | * | | f578f107 |||| 2024-05-03T02:05:26-07:00 |||| Address SYSMEM + RAIL_OPT data corruption and incorrect memGran
+| | | | | | | |/ /  
+| | | | | | * | |   7d400353 |||| 2024-05-03T00:58:06-07:00 |||| Merge branch 'arnavg/nvshmem/crash-in-unreg' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | |/ /  
+| | | | | | |/| |   
+| | | | | | | * | 84af2d19 |||| 2024-05-03T00:58:06-07:00 |||| Add NULL check for cache of mem_handles in remote transports
+| | | | | | |/ /  
+| | | | | | * |   063ab210 |||| 2024-04-30T08:26:41-07:00 |||| Merge branch 'sethh/build_info_fix' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | f6ee0173 |||| 2024-04-29T21:03:02-07:00 |||| CMake: Add nvshmem version to git_commit.txt.
+| | | | | | * | |   b3064671 |||| 2024-04-30T08:03:41-07:00 |||| Merge branch 'arnavg/perftest/on_stream_issue' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | |/ /  
+| | | | | | |/| |   
+| | | | | | | * | 62340517 |||| 2024-04-30T08:03:41-07:00 |||| Missing cudaEventCreate in perftest onstream collectives test
+| | | | | | * | |   eaf8dce7 |||| 2024-04-29T16:26:29-07:00 |||| Merge branch 'sethh/header_fixes' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | |/ /  
+| | | | | | |/| |   
+| | | | | | | * | f9602364 |||| 2024-04-26T16:03:32-07:00 |||| include: Add package version to nvshmem_version.h.
+| | | | | | | * | f0a4747e |||| 2024-04-25T18:04:30-07:00 |||| scripts: Add top-of-file docs to IWYU scripts
+| | | | | | | * | f283211e |||| 2024-04-15T18:29:35-07:00 |||| src: remove using namespace std from headers
+| | | | | | | * | d727ad26 |||| 2024-04-15T16:44:39-07:00 |||| include: move non_abi headers to a new directory
+| | | | | | | * | 4574b474 |||| 2024-04-15T16:39:07-07:00 |||| src: move util directory under host.
+| | | | | | | * | 47d423ac |||| 2024-04-15T15:38:33-07:00 |||| CI/IWYU: add cuda files to IWYU check.
+| | | | | | | * | b8e106cb |||| 2024-04-15T13:15:42-07:00 |||| CI: update headers based on new IWYU output
+| | | | | | | * | 195c9383 |||| 2024-04-11T19:42:08-07:00 |||| nvshmem: Add IWYU script for headers.
+| | | | | | | * | f0af3bff |||| 2024-04-10T17:43:49-07:00 |||| include/common: Move common files to ABI folders.
+| | | | | | | * | 6305a60e |||| 2024-04-10T16:39:44-07:00 |||| CI: Add back IWYU check to source build.
+| | | | | | | * | e997cf4c |||| 2024-04-10T14:27:30-07:00 |||| src: Fix includes based on iwyu
+| | | | | | | * | b35512a5 |||| 2024-04-09T14:08:09-07:00 |||| transport/ibgda: change header configuration
+| | | | | | | * | 3d4032e4 |||| 2024-04-09T13:02:00-07:00 |||| transport: initial header relocation
+| | | | | | | * | ae358a5b |||| 2024-04-09T11:06:39-07:00 |||| device: move rma.cu to host.
+| | | | | | | |/  
+| | | | | | * |   167bc5c8 |||| 2024-04-29T10:23:15-07:00 |||| Merge branch 'sethh/add_ptx' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * 57fbc162 |||| 2024-04-19T17:39:58-07:00 |||| CI: add a host-side run to confirm ptx functionality.
+| | | | | | | * 72f49168 |||| 2024-04-19T15:58:48-07:00 |||| CI: add test to confirm we are building PTX into our code.
+| | | | | | * |   571ea82f |||| 2024-04-23T10:57:13-07:00 |||| Merge branch 'arnavg/nvshmem/broadcastmem_support' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * 52af6f66 |||| 2024-04-23T10:57:13-07:00 |||| [NVSHMEM-1431]: Add support for fcollectmem, broadcastmem and onstream APIs
+| | | | | | * |   342bd384 |||| 2024-04-22T13:22:59-07:00 |||| Merge branch 'arnavg/nvshmem/nvbug-4613362' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | d105d810 |||| 2024-04-22T02:25:42-07:00 |||| Address compile error on aarch64
+| | | | | | | |/  
+| | | | | | * |   bf995ae9 |||| 2024-04-22T11:42:00-07:00 |||| Merge branch 'arnavg/nvshmem/team-destroy-subteam' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | 042e0269 |||| 2024-04-22T11:41:59-07:00 |||| NVSHMEM-1560: Fix leak in nvshmemi_team_destroy
+| | | | | | | |/  
+| | | | | | * |   3c01a002 |||| 2024-04-22T09:26:55-07:00 |||| Merge branch 'pezhu/devel_coverity' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * c1d6a7f3 |||| 2024-04-22T09:26:54-07:00 |||| coverity:22635859 + 22625286
+| | | | | | * |   46e4c0fb |||| 2024-04-17T07:25:30-07:00 |||| Merge branch 'sethh/abi_fixes' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * 5bdf4ed0 |||| 2024-04-09T14:13:14-07:00 |||| include: move cuda_interface_sync.cu to host.
+| | | | | | | * 894394d5 |||| 2024-04-01T17:21:51-07:00 |||| device: Move proxy code to host and headers.
+| | | | | | | * 4663d1fc |||| 2024-03-14T14:39:16-07:00 |||| device: remove cuda_interface_sync.cu
+| | | | | | | * 7c378ff0 |||| 2024-03-14T14:30:14-07:00 |||| device: Remove quiet_on_stream
+| | | | | | | * ffc24b21 |||| 2024-03-14T11:06:51-07:00 |||| cudawrap: Add additional missing enums.
+| | | | | | | * f8979128 |||| 2024-03-14T10:27:07-07:00 |||| src: Move on_stream collectives to host lib
+| | | | | | | * 3e45ea10 |||| 2024-03-14T08:24:39-07:00 |||| cudawrap: Add declarations for remaining symbols
+| | | | | | | * cb097e30 |||| 2024-03-08T12:35:25-08:00 |||| nvshmem: fix remaining compiler bugs
+| | | | | | | * fada9e6a |||| 2024-03-07T17:46:34-08:00 |||| NVSHMEM: Remove all CUDA and CUDART Compiletime Checks
+| | | | | | | * ff42b6a8 |||| 2024-03-07T15:32:04-08:00 |||| nvshmem: remove compile-time flags for CUDA < 11.0
+| | | | | | | * 36b73e85 |||| 2024-03-07T14:55:21-08:00 |||| nvshmemi_state_t: Remove scratch spaces used in debug paths.
+| | | | | | | * 774b5e9c |||| 2024-03-07T10:50:47-08:00 |||| nvshmemi_state_t: remove cudevice
+| | | | | | | * 705fb3bf |||| 2024-03-07T10:46:42-08:00 |||| nvshmemi_state_t: remove prefix variable
+| | | | | | | * 185e542a |||| 2024-02-06T14:32:43-07:00 |||| src/include: remove shared_memory.h from public headers.
+| | | | | | |/  
+| | | | | | *   d09ab1f4 |||| 2024-04-15T13:20:09-07:00 |||| Merge branch 'arnavg/nvshmem/mpi_bootstrap_bug' into 'devel'
+| | | | | | |\  
+| | | | | | | * 9bb10546 |||| 2024-04-15T13:20:09-07:00 |||| Fix bootstrap bugs and add debug messages
+| | | | | | * |   b52fbbab |||| 2024-04-15T08:30:54-07:00 |||| Merge branch 'sethh/ibdevx_atomics_fix' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * 42ad138d |||| 2024-04-12T21:30:27-07:00 |||| mlx5: Fix endianness check.
+| | | | | | |/  
+| | | | | | *   ce397460 |||| 2024-04-08T16:24:12-07:00 |||| Merge branch 'arnavg/nvshmem/nvbug4593392' into 'devel'
+| | | | | | |\  
+| | | | | | | * 3d7684f9 |||| 2024-04-08T16:24:12-07:00 |||| [NVBUG] 4593392: Use empty ctor definition when using noexcept instead of default specifier
+| | | | | | |/  
+| | | | | | *   ae487acc |||| 2024-04-04T15:41:28-07:00 |||| Merge branch 'sethh/dlopen_use_soname' into 'devel'
+| | | | | | |\  
+| | | | | | | * 70fa64fe |||| 2024-04-03T14:49:02-07:00 |||| cuda/nvmlwrap: dlopen SONAME instead of Linker Name
+| | | | | | * |   2be8a094 |||| 2024-04-04T11:10:59-07:00 |||| Merge branch 'sethh/error_message_fixes' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | d6445ca4 |||| 2024-04-03T15:39:57-07:00 |||| in-place clang-formatting
+| | | | | | | * | a4532451 |||| 2024-04-03T15:35:02-07:00 |||| init: remove extraneous messages about cuda API failures
+| | | | | | | |/  
+| | | | | | * |   fdc4b13c |||| 2024-04-04T09:45:21-07:00 |||| Merge branch 'arnavg/nvshmem/malloc_noaction' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * b9dbc22d |||| 2024-04-04T09:45:20-07:00 |||| [NVSHMEM-1373] Add no action support for malloc/calloc/align/free
+| | | | | | |/  
+| | | | | | *   243c2c72 |||| 2024-04-02T12:52:50-07:00 |||| Merge branch 'sesu/guarded_nvshmem_common_ibgda.h_header_in_mem_transport.cpp' into 'devel'
+| | | | | | |\  
+| | | | | | | * ce40d074 |||| 2024-04-02T17:35:09+08:00 |||| header src/include/common/nvshmem_common_ibgda.h should be guarded by a macro in new source file mem_transport.cpp
+| | | | | | * |   d3b57540 |||| 2024-04-02T10:49:49-07:00 |||| Merge branch 'sethh/fix_bin_dir_permissions' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | d1965473 |||| 2024-04-01T18:31:38-07:00 |||| CMake: Remove test_cxx11.sh
+| | | | | | | * | 13fd429e |||| 2024-04-01T18:30:45-07:00 |||| CMake: Add execute permissions to bin and scripts.
+| | | | | | | |/  
+| | | | | | * |   5595a9d9 |||| 2024-04-02T09:13:52-07:00 |||| Merge branch 'arnavg/nvshmem/fix_ci_build' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * 202752e5 |||| 2024-04-01T15:52:26-07:00 |||| Address path issue
+| | | | | | |/  
+| | | | | | *   31546578 |||| 2024-04-01T09:49:04-07:00 |||| Merge branch 'arnavg/nvshmem/oopfy_mem_phase1' into 'devel'
+| | | | | | |\  
+| | | | | | | * 319b827c |||| 2024-04-01T09:49:03-07:00 |||| [NVSHMEM-1556] Symmetric Memory Management OOPfyication [Phase-1]
+| | | | | | |/  
+| | | | | | *   32a802ef |||| 2024-03-27T10:44:52-07:00 |||| Merge branch 'sesu/python_scr_enhancement' into 'devel'
+| | | | | | |\  
+| | | | | | | * 4546b27f |||| 2024-03-27T18:10:49+08:00 |||| Write running cmd line into both out and err files.
+| | | | | | * | 597a5704 |||| 2024-03-25T11:13:05-07:00 |||| Merge branch 'sesu/python_scr_enhancement' into 'devel'
+| | | | | | |\| 
+| | | | | | | * 4a3ff413 |||| 2024-03-25T15:02:00+08:00 |||| Support show minor and max results on screen; Support run partial cases in cmdline mode.
+| | | | | | | * 2d7f579c |||| 2024-03-25T14:11:45+08:00 |||| Support show_data and cases arguments in scri
+| | | | | | | * c377211c |||| 2024-03-22T17:50:05+08:00 |||| Add a parameter. The results of the first and last row of each table can be displayed on the screen.
+| | | | | | |/  
+| | | | | | *   b4a3bbef |||| 2024-03-20T12:56:26-07:00 |||| Merge branch 'sesu/scr_enhancement' into 'devel'
+| | | | | | |\  
+| | | | | | | * 0827ed92 |||| 2024-03-19T16:50:34+08:00 |||| Remove some redundant comment lines.
+| | | | | | | * 8da12f6f |||| 2024-03-19T16:45:01+08:00 |||| Prints error output for failed test cases.
+| | | | | | * |   fec8a571 |||| 2024-03-20T10:08:38-07:00 |||| Merge branch 'pezhu/devel_coverity' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * 27b2b080 |||| 2024-03-20T10:08:38-07:00 |||| Coverity fix
+| | | | | | |/  
+| | | | | | *   9d57c972 |||| 2024-03-14T08:11:42-07:00 |||| Merge branch 'sethh/remove_make_files' into 'devel'
+| | | | | | |\  
+| | | | | | | * 741d696d |||| 2024-03-06T17:15:27-08:00 |||| NVSHMEM: remove the make build system.
+| | | | | | * |   8290549f |||| 2024-03-14T07:40:01-07:00 |||| Merge branch 'sethh/fix_test_output' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | 552da2ab |||| 2024-03-06T10:56:35-08:00 |||| in-place clang-formatting
+| | | | | | | * | 68924c9e |||| 2024-03-06T08:27:43-08:00 |||| Perftest: Make test output format a runtime parameter.
+| | | | | | | |/  
+| | | | | | * |   743e444a |||| 2024-03-11T16:54:50-07:00 |||| Merge branch 'pezhu/devel_coverity' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * df5a3d50 |||| 2024-03-11T16:54:49-07:00 |||| Pezhu/devel coverity
+| | | | | | |/  
+| | | | | | *   abaadb89 |||| 2024-03-06T08:16:45-08:00 |||| Merge branch 'pmarkthub/gpu_verbs/add-atomic-cap-check' into 'devel'
+| | | | | | |\  
+| | | | | | | * ecf5dbc7 |||| 2024-03-05T19:43:34-08:00 |||| in-place clang-formatting
+| | | | | | | * 09be957c |||| 2024-03-06T03:40:24+00:00 |||| Call nvshmemt_ib_common_check_nic_ext_atomic_support in ibdevx
+| | | | | | | * df44adee |||| 2024-03-06T03:30:11+00:00 |||| Move the nic atomic support check to transport_mlx5_common
+| | | | | | | * db30de70 |||| 2024-03-04T23:38:31-08:00 |||| in-place clang-formatting
+| | | | | | | * 8dcf4e39 |||| 2024-03-05T07:34:42+00:00 |||| Add atomic cap query and check. Skip that HCA if it does not support all necessary atomics.
+| | | | | | * |   4f733477 |||| 2024-03-05T13:45:06-08:00 |||| Merge branch 'sethh/ci_update_partitions' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * e8298836 |||| 2024-02-20T17:23:05-08:00 |||| CI: add A40 partition to IB-based jobs.
+| | | | | | |/  
+| | | | | | *   d4127ab6 |||| 2024-02-29T07:50:00-08:00 |||| Merge branch 'sethh/fix_non_ib_build' into 'devel'
+| | | | | | |\  
+| | | | | | | * e025118e |||| 2024-02-27T15:56:44-08:00 |||| mem.cpp: conditionally include nvshmem_common_ibgda.h
+| | | | | | * |   6343d2b2 |||| 2024-02-29T01:31:06-08:00 |||| Merge branch 'arnavg/nvshmem/uid_bootstrap/ci_stage' into 'devel'
+| | | | | | |\ \  
+| | | | | | | |/  
+| | | | | | |/|   
+| | | | | | | * 18e8e828 |||| 2024-02-29T01:31:05-08:00 |||| NVSHMEM-1486: Introduce UID bootstrap CI stage
+| | | | | | |/  
+| | | | | | *   5c983b14 |||| 2024-02-27T11:01:12-08:00 |||| Merge branch 'sethh/ci_remove_p9' into 'devel'
+| | | | | | |\  
+| | | | | | | * 8e7b22c9 |||| 2024-02-26T18:19:27-07:00 |||| CI: Remove P9 Pipelines
+| | | | | | |/  
+| | | | | | *   87a2f60d |||| 2024-02-23T14:57:23-08:00 |||| Merge branch 'sethh/add_debugger_delay' into 'devel'
+| | | | | | |\  
+| | | | | | | * 4ed9a125 |||| 2024-02-20T13:41:43-08:00 |||| in-place clang-formatting
+| | | | | | | * e25467c0 |||| 2024-02-16T20:25:08-08:00 |||| env: add option to delay init for debugger attach
+| | | | | | * |   744b520d |||| 2024-02-23T14:03:51-08:00 |||| Merge branch 'sesu/scripts_enhancement' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | a8bd687e |||| 2024-02-20T12:53:53+08:00 |||| Add /lib64 in mpirun cmdline.
+| | | | | | | * | f72ffba5 |||| 2024-01-24T18:19:13+08:00 |||| Handle an expected error with the 'try' command
+| | | | | | | * | a191b66f |||| 2024-01-22T17:09:03+08:00 |||| Update interact mode
+| | | | | | | * | b58bfe87 |||| 2024-01-12T16:19:21+08:00 |||| Remove null -genv value in list, when it exists.
+| | | | | | | |/  
+| | | | | | * |   a72943d9 |||| 2024-02-21T10:59:35-08:00 |||| Merge branch 'arnavg/nvshmem/uninitialized_mutex_destroy' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | efbc9ddf |||| 2024-02-21T10:59:35-08:00 |||| Use syscheck macro for better errno decoding of pthread_mutex APIs
+| | | | | | * | |   f66a16f5 |||| 2024-02-21T06:47:53-08:00 |||| Merge branch 'arnavg/nvshmem/bootstrap_versioning' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | * | | 5524f9aa |||| 2024-02-21T06:47:52-08:00 |||| Simplify bootstrap common in nvshmem host library
+| | | | | | | | |/  
+| | | | | | | |/|   
+| | | | | | * | |   55a9cbd8 |||| 2024-02-21T00:33:28-08:00 |||| Merge branch 'arnavg/nvshmem/address-coverage-dup-issue' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | |/ /  
+| | | | | | |/| |   
+| | | | | | | * | b91f89d2 |||| 2024-02-21T00:33:28-08:00 |||| Rename simple-pmi to avoid coverage hit due to file dup issue
+| | | | | | |/ /  
+| | | | | | * |   bc86efee |||| 2024-02-20T12:09:48-08:00 |||| Merge branch 'sethh/ci_cluster_update_fix' into 'devel'
+| | | | | | |\ \  
+| | | | | | | * | df21a3b0 |||| 2024-02-20T09:04:27-08:00 |||| CI: Temporarily disable the libfabric and ucx status jobs.
+| | | | | | | * | 65f12d1f |||| 2024-02-15T18:54:06-08:00 |||| CI: Update paths and arguments for gpu comms cluster
+| | | | | | | * | fc19a9d5 |||| 2024-02-11T19:52:05-08:00 |||| src/util: Fix strnlen calls in sockets.cpp.
+| | | | | | * | |   8d71a88d |||| 2024-02-20T11:57:57-08:00 |||| Merge branch 'pmarkthub/gpu_verbs/fix_qp_warp_mapping' into 'devel'
+| | | | | | |\ \ \  
+| | | | | | | |/ /  
+| | | | | | |/| |   
+| | | | | | | * | d46b016e |||| 2024-01-31T20:48:46-08:00 |||| in-place clang-formatting
+| | | | | | | * | 64b70df6 |||| 2024-01-31T20:45:07-08:00 |||| Fix bug in the DCI QPI ID calculation when setting NVSHMEM_IBGDA_DCI_MAP_BY=dct
+| | | | | | | * | e1e5f5a5 |||| 2024-01-30T22:59:01-08:00 |||| Fix how the DCI QP ID is caculated when setting NVSHMEM_IBGDA_DCI_MAP_BY=warp
+| | | | | | | * | fd7e16e3 |||| 2024-01-30T22:39:30-08:00 |||| Fix how the RC QP ID is caculated when setting NVSHMEM_IBGDA_RC_MAP_BY=warp
+| | | | | | |/ /  
+| | | | | |/| |   
+| | | | | | * | 60a6b1bd |||| 2024-02-13T12:22:48-08:00 |||| Merge branch 'jdinan/mr/nvhsmem' into 'devel'
+| | | | | |/| | 
+| | | | | | * | dd5cf078 |||| 2024-01-19T14:47:08-05:00 |||| Replace NVHSMEM with NVSHMEM
+| | | | | | |/  
+| | | | | * | c2cba658 |||| 2024-01-26T16:13:28-08:00 |||| Merge branch 'sethh/variable_definition_fix' into 'devel'
+| | | | |/| | 
+| | | | | * | ac3f1dd9 |||| 2024-01-25T23:20:55-07:00 |||| NVSHMEM: Update version to 2.11.0-5
+| | | | | * | b8ea9806 |||| 2024-01-25T23:05:19-07:00 |||| transport_ib_common: Fix undefined variable issue.
+| | | | |/ /  
+| | | | * |   bcc6aac1 |||| 2024-01-22T19:34:22-08:00 |||| Merge branch 'arnavg/nvshmem/memory-reordering-global-exit' into 'devel'
+| | | | |\ \  
+| | | | | |/  
+| | | | |/|   
+| | | | | * b1a565ad |||| 2024-01-22T19:34:22-08:00 |||| Add volatile cast in progress_global_exit
+| | | | |/  
+| | | | * cb89c479 |||| 2024-01-12T12:32:48-08:00 |||| Merge branch 'pmarkthub/nvbugs/4434356' into 'devel'
+| | | |/| 
+| | | | * 71c2d1d9 |||| 2024-01-12T00:31:06-08:00 |||| Fixed bug in nvshmemi_ibgda_put_signal_thread_impl
+| | | |/  
+| | | *   9e2c0ce0 |||| 2024-01-11T18:07:53-08:00 |||| Merge branch 'alanger/pr/211_changelog' into 'devel'
+| | | |\  
+| | | | * 92c71d38 |||| 2024-01-11T15:57:53-08:00 |||| Update package revision
+| | | | *   16a09f82 |||| 2024-01-11T15:57:16-08:00 |||| Merge branch 'devel' into alanger/pr/211_changelog
+| | | | |\  
+| | | | * | 7bc68283 |||| 2024-01-11T15:48:46-08:00 |||| Apply Jim suggestion
+| | | | * | 16b39bcb |||| 2024-01-11T15:47:27-08:00 |||| Apply 1 suggestion
+| | | | * | f05d2d02 |||| 2024-01-10T14:02:33-08:00 |||| Changelog: Apply review comments
+| | | | * | 1ce9e620 |||| 2023-12-15T17:45:10-08:00 |||| First attempt at 2.11 changelog
+| | | * | |   86f35ebf |||| 2024-01-11T18:07:43-08:00 |||| Merge branch 'sethh/hca_pe_mapping_fix' into 'devel'
+| | | |\ \ \  
+| | | | |_|/  
+| | | |/| |   
+| | | | * | 6db219c5 |||| 2024-01-11T15:32:59-07:00 |||| transport: clearly delineate nvml header code.
+| | | | * | 5e72c5d8 |||| 2024-01-11T15:24:56-07:00 |||| transport/ibgda: Fix additional can_coalesce_warp bugs
+| | | | * | d756e214 |||| 2024-01-11T02:55:44-08:00 |||| Fix warp coalescing bug in nvshmemi_ibgda_put_signal_thread_impl
+| | | | * | f7b0662d |||| 2024-01-10T20:24:52-07:00 |||| host/topo: Fix OOB array access in get_devices_by_distance.
+| | | | * | 33a929c9 |||| 2024-01-10T15:46:20-08:00 |||| transport-ibdevx: fix finalize path with NVSHMEM_NIC_PE_MAPPING=1
+| | | | * | 5d5035f6 |||| 2024-01-10T15:38:24-08:00 |||| transport/ibgda: Fix regression in default PE count.
+| | | | * | d5e60086 |||| 2024-01-10T05:16:31-07:00 |||| transport/ib*: Close device contexts in all cases.
+| | | | * | 21c442b8 |||| 2024-01-10T04:51:44-07:00 |||| host/p2p: Fix the implementation of nvmlGpuFabricInfo_v2
+| | | | * | 8ef20c14 |||| 2024-01-10T01:18:57-08:00 |||| in-place clang-formatting
+| | | | * | c7ca13ed |||| 2024-01-10T02:11:26-07:00 |||| transport/ib*: Fix incorrect value passed in for HCA_PE_MAPPING
+| | | |/ /  
+| | | * |   4e3d96f3 |||| 2024-01-10T02:54:06-08:00 |||| Merge branch 'arnavg/nvshmem/transport-double-close' into 'devel'
+| | | |\ \  
+| | | | * | 29713c06 |||| 2024-01-10T02:54:06-08:00 |||| Reset object to NULL to avoid double close during finalize
+| | | * | |   33c6ff0d |||| 2024-01-09T20:03:55-08:00 |||| Merge branch 'arnavg/nvshmem/log_level_change' into 'devel'
+| | | |\ \ \  
+| | | | |/ /  
+| | | |/| |   
+| | | | * | 0b488105 |||| 2024-01-09T20:03:54-08:00 |||| Make transport init ERROR to WARNING
+| | | * | |   2bf767be |||| 2024-01-09T16:45:19-08:00 |||| Merge branch 'sethh/2_11_0_2_bug_fixes' into 'devel'
+| | | |\ \ \  
+| | | | |/ /  
+| | | |/| |   
+| | | | * | 71a67a68 |||| 2024-01-09T13:55:06-07:00 |||| CI: P9 reduce num iters for init_loop and app_multi_init.
+| | | | * | f2fe275b |||| 2024-01-05T17:34:00-07:00 |||| transport/ibgda: Fix portID selection index.
+| | | | * | 171d4fdf |||| 2024-01-05T12:52:45-08:00 |||| in-place clang-formatting
+| | | | * | 645dd4e9 |||| 2024-01-05T13:19:16-07:00 |||| Makefile: Add app_multi_init test to CUTESTBIN file.
+| | | | * | 5816520a |||| 2024-01-05T00:05:43+00:00 |||| transport: remove noisy warnings.
+| | | |/ /  
+| | | * |   2222c084 |||| 2024-01-09T09:07:15-08:00 |||| Merge branch 'alanger/pr/check_clusteruuid_null' into 'devel'
+| | | |\ \  
+| | | | * | 357f53c8 |||| 2024-01-08T21:25:38-08:00 |||| in-place clang-formatting
+| | | | * | 2f1fd367 |||| 2024-01-08T21:22:23-08:00 |||| Apply Arnav's comments
+| | | | * | 47286c0b |||| 2024-01-08T18:10:34-08:00 |||| check null value of clusterUuid
+| | | |/ /  
+| | |/| |   
+| | | * |   c24d082b |||| 2024-01-09T09:07:04-08:00 |||| Merge branch 'sesu/scripts_enhancement' into 'devel'
+| | | |\ \  
+| | | | * | 932a8ca4 |||| 2024-01-09T11:29:21+08:00 |||| Fixed variable writing errors.
+| | | | * | f02f7537 |||| 2024-01-07T23:32:05+08:00 |||| Support NVSHMEMTEST_USE_UID_BOOTSTRAP=2 and NVSHMEMTEST_USE_UID_BOOTSTRAP=1 in func-test
+| | | | * | 9ade92d4 |||| 2024-01-03T16:49:25+08:00 |||| UID
+| | | | * | dc361ba1 |||| 2023-12-26T21:35:04+08:00 |||| Support UID bootstrp in python script.
+| | |_|/ /  
+| |/| | |   
+| | | * | 12354250 |||| 2024-01-09T09:06:41-08:00 |||| Merge branch 'arnavg/nvshmem/uid_bootstrap/hydra-test-support' into 'devel'
+| | |/| | 
+| | | * | 20c8cf2d |||| 2024-01-09T09:06:41-08:00 |||| Add hydra support for UID bootstrap test
+| | |/ /  
+| | * |   7b11f567 |||| 2024-01-04T17:39:32-08:00 |||| Merge branch 'sethh/2_11_0_2' into 'devel'
+| | |\ \  
+| | | * | edcbb21e |||| 2024-01-04T18:00:52-07:00 |||| NVSHMEM: Update version to 2.11.0-2
+| | |/ /  
+| | * |   9a22e25e |||| 2024-01-04T12:06:49-08:00 |||| Merge branch 'sethh/ibgda_fix_device_warning' into 'devel'
+| | |\ \  
+| | | * | 404faa11 |||| 2024-01-02T15:44:05-07:00 |||| transport/ibgda: Fix overflow check in num_devices
+| | * | |   48fc784a |||| 2024-01-04T12:06:37-08:00 |||| Merge branch 'arnavg/nvshmem/makefile_deprecation_banner' into 'devel'
+| | |\ \ \  
+| | | * | | 4d97505d |||| 2024-01-04T12:06:37-08:00 |||| Add deprecation warning to makefile
+| | |/ / /  
+| | * | |   984a1dc3 |||| 2024-01-03T10:44:53-08:00 |||| Merge branch 'sethh/libfabric_regression_fix' into 'devel'
+| | |\ \ \  
+| | | |/ /  
+| | |/| |   
+| | | * | f3fc122f |||| 2023-12-30T21:35:30-07:00 |||| transport/libfabric: Always set FI_HMEM_CUDA_USE_GDRCOPY
+| | * | |   a77765a4 |||| 2024-01-02T14:14:23-08:00 |||| Merge branch 'sethh/ibgda_segfault_fix' into 'devel'
+| | |\ \ \  
+| | | |/ /  
+| | |/| |   
+| | | * | 23e9d655 |||| 2023-12-30T07:01:00+00:00 |||| transport/ibgda: Remove extra close calls in init.
+| | * | |   90caedb0 |||| 2023-12-30T06:51:37-08:00 |||| Merge branch 'arnavg/nvshmem/mnnvl_version_issue' into 'devel'
+| | |\ \ \  
+| | | |/ /  
+| | |/| |   
+| | | * | 7ec94b45 |||| 2023-12-29T22:01:46+00:00 |||| include/cudawrap: Extend some definitions for CUDA 12.x
+| | | * | 73a52ddb |||| 2023-12-27T13:07:14-08:00 |||| Only CUDA 12.4+ supports that type
+| | * | |   8bc915b9 |||| 2023-12-29T16:38:12-08:00 |||| Merge branch 'sethh/ib_fix_ifdef' into 'devel'
+| | |\ \ \  
+| | | * | | 6804fc93 |||| 2023-12-27T10:39:48-07:00 |||| transport/ib_common: Fix preprocessor error on undefined macro.
+| | | |/ /  
+| | * | |   dd1fadc4 |||| 2023-12-29T14:51:42-08:00 |||| Merge branch 'sethh/ibgda_fix_device_closure' into 'devel'
+| | |\ \ \  
+| | | |/ /  
+| | |/| |   
+| | | * | 10b65c20 |||| 2023-12-27T19:31:01+00:00 |||| transport/ibgda: Close device handles between iterations.
+| | |/ /  
+| | * | 5a16419e |||| 2023-12-27T09:35:49-08:00 |||| Merge branch 'pezhu/mem_hanging_bugfix_4256611' into 'devel'
+| |/| | 
+| | * | c374e47c |||| 2023-12-27T09:35:49-08:00 |||| Pezhu/mem hanging bugfix 4256611
+| |/ /  
+| * |   8eaae9a6 |||| 2023-12-20T19:57:39-08:00 |||| Merge branch 'jdinan/mr/quiet-warning' into 'devel'
+| |\ \  
+| | * | 6ba8a8c0 |||| 2023-12-20T12:56:17-05:00 |||| Quiet unused function warning
+| * | |   827395c9 |||| 2023-12-20T19:08:53-08:00 |||| Merge branch 'sethh/nvml_update' into 'devel'
+| |\ \ \  
+| | |/ /  
+| |/| |   
+| | * | 5da1c9bb |||| 2023-12-20T13:03:16-08:00 |||| NVSHMEM: Update version to 2.11.0-1
+| | * | b5ff9d47 |||| 2023-12-20T12:31:34-08:00 |||| in-place clang-formatting
+| | * | 06ce49ca |||| 2023-12-20T12:27:24-08:00 |||| host: Address review comments on MR 777
+| | * | c742e2cc |||| 2023-12-19T19:51:51-08:00 |||| in-place clang-formatting
+| | * | ad7296cf |||| 2023-12-20T08:00:57-08:00 |||| CMake/Make: Don't link to NVML.
+| | * | 8da018eb |||| 2023-12-19T19:48:33-08:00 |||| host: Don't depend on NVML version at compile time.
+| | * | 6abc6d76 |||| 2023-12-19T16:52:02-08:00 |||| host/cudawrap: always include cuCtxSetFlags
+| * | |   d1b3c002 |||| 2023-12-20T08:45:42-08:00 |||| Merge branch 'arnavg/nvshmem/uid_bootstrap/missing-utils-perftest' into 'devel'
+| |\ \ \  
+| | |/ /  
+| |/| |   
+| | * | cda26157 |||| 2023-12-20T08:45:42-08:00 |||| Missing perftest utils support for UID bootstrap
+| |/ /  
+| * | 62dccc2d |||| 2023-12-18T09:47:55-08:00 |||| Merge branch 'sethh/remove_iwyu_check' into 'devel'
+|/| | 
+| * | b9194820 |||| 2023-12-15T14:38:29-08:00 |||| CI: Remove IWYU test.
+* | |   3e35ee58 |||| 2023-12-15T23:14:55-08:00 |||| Merge branch 'sethh/transport_mem_leak_fix' into 'devel'
+|\ \ \  
+| * | | 3a19c7c0 |||| 2023-12-15T16:30:27-08:00 |||| NVSHMEM: Update version to 2.11.0-0
+| * | | 9d45bba5 |||| 2023-12-15T16:55:57-07:00 |||| host/transport: fix use-after-free.
+|/ / /  
+* | |   b9fdad3e |||| 2023-12-15T22:53:38-08:00 |||| Merge branch 'arnavg/nvshmem/cmake_make_output_disparity' into 'devel'
+|\ \ \  
+| * | | eecafe34 |||| 2023-12-15T22:53:38-08:00 |||| nvshmemu_wrap output was inconsistent across build generators
+| |/ /  
+* | |   e835f158 |||| 2023-12-15T22:52:50-08:00 |||| Merge branch 'sethh/test_host_init_extension' into 'devel'
+|\ \ \  
+| * | | 424aba79 |||| 2023-12-15T11:17:07-08:00 |||| in-place clang-formatting
+| * | | 7aba0158 |||| 2023-12-15T11:13:02-08:00 |||| nvshmem: Rework nvshmemx_hostlib_init_attr API
+| * | | c9aa5ab0 |||| 2023-11-15T15:15:22-08:00 |||| test/init: Refactor nvshmemx_host_init code.
+| | |/  
+| |/|   
+* | |   556e6eed |||| 2023-12-15T22:52:05-08:00 |||| Merge branch 'pmarkthub/nvbugs/4290486' into 'devel'
+|\ \ \  
+| * | | 49736637 |||| 2023-12-12T02:16:31-08:00 |||| in-place clang-formatting
+| * | | b7710ea8 |||| 2023-12-12T10:10:25+00:00 |||| Fixed the network resource leakage in ibgda.cpp
+| * | | 7b4e54a6 |||| 2023-12-12T02:55:33+00:00 |||| Call cudaFree(qp_group_switches_d) in ibgda.cpp
+| |/ /  
+* | |   f2844e33 |||| 2023-12-15T22:51:25-08:00 |||| Merge branch 'alanger/pr/fix_fd_exch' into 'devel'
+|\ \ \  
+| * | | 6e186f75 |||| 2023-12-15T10:26:19-08:00 |||| in-place clang-formatting
+| * | | 22b69cb6 |||| 2023-12-15T10:20:01-08:00 |||| Close recv sockets
+| * | | a0cd8e0c |||| 2023-12-14T20:06:58-08:00 |||| Fix FD exchange over IPC sockets
+| |/ /  
+* | |   ef15b2bd |||| 2023-12-15T22:51:09-08:00 |||| Merge branch 'sethh/ibgda_bug_fix' into 'devel'
+|\ \ \  
+| |_|/  
+|/| |   
+| * | a0ee85b8 |||| 2023-12-15T12:39:15-08:00 |||| host/topo: Fix bug with device assignment.
+| |/  
+* |   064e2c30 |||| 2023-12-15T13:02:13-08:00 |||| Merge branch 'alanger/pr/fix_mnnvl_builds' into 'devel'
+|\ \  
+| * | 8792cba6 |||| 2023-12-12T16:46:44-08:00 |||| Fix build error
+|/ /  
+* |   1678deea |||| 2023-12-15T12:55:11-08:00 |||| Merge branch 'revert-056e8913' into 'devel'
+|\ \  
+| * | 71c7d0d5 |||| 2023-12-12T15:53:32-08:00 |||| Revert "Merge branch 'pezhu/coverity_cpu_coll' into 'devel'"
+* | |   81738fde |||| 2023-12-15T12:52:47-08:00 |||| Merge branch 'sethh/mem_leak_fixes' into 'devel'
+|\ \ \  
+| |/ /  
+|/| |   
+| * | c9b784ce |||| 2023-12-14T11:46:37-08:00 |||| in-place clang-formatting
+| * | 86a782c4 |||| 2023-12-14T11:42:43-08:00 |||| team_internal: Free leaked CUDA memory.
+| |/  
+* |   597c91b7 |||| 2023-12-15T11:59:27-08:00 |||| Merge branch 'arnavg/nvshmem/uid_bootstrap/move-to-inline-structs' into 'devel'
+|\ \  
+| |/  
+|/|   
+| * d555e6b4 |||| 2023-12-15T11:59:27-08:00 |||| Use inline and open-source UID structs for nvshmemx_init_attr_t
+|/  
+*   afc1c0d9 |||| 2023-12-14T19:05:42-08:00 |||| Merge branch 'jdinan/mr/libfabric-env-vars' into 'devel'
+|\  
+| * 7fa2dc27 |||| 2023-12-13T11:26:07-05:00 |||| Remove unused variable
+| * 7eaa23d9 |||| 2023-12-12T19:11:33-08:00 |||| in-place clang-formatting
+| * 473e501e |||| 2023-12-12T22:07:30-05:00 |||| Update libfabric env var settings
+* |   05becac3 |||| 2023-12-14T19:01:50-08:00 |||| Merge branch 'sethh/nested_init_fix' into 'devel'
+|\ \  
+| * | 79eaf1e6 |||| 2023-12-14T10:35:38-08:00 |||| test/host/interop: Remmove redundant fini calls
+| * | f55da911 |||| 2023-12-12T08:32:11-08:00 |||| CI: Add NVSHMEM_HOME/lib to LD_LIBRARY_PATH
+| * | 7a26adc5 |||| 2023-10-05T11:09:40-07:00 |||| init: Fix edge case in init cleanup.
+| * | 2598347a |||| 2023-10-04T17:14:01-07:00 |||| test/interop: Add more complex init_loop test.
+| * | c631a006 |||| 2023-09-27T13:00:05-07:00 |||| init: Fix bugs in multi-init path.
+* | |   b5eea1ee |||| 2023-12-13T08:27:30-08:00 |||| Merge branch 'alanger/pr/sysmem_heap_fix' into 'devel'
+|\ \ \  
+| |_|/  
+|/| |   
+| * | ce50b1f4 |||| 2023-11-20T09:15:28-08:00 |||| in-place clang-formatting
+| * | c1aaea3b |||| 2023-10-31T17:32:57+00:00 |||| IBGDA Fix for large message
+| * | 12d7557f |||| 2023-10-30T22:55:45+00:00 |||| Fix enable_rail_opt runs with sysmem
+| |/  
+* |   853de8f1 |||| 2023-12-12T15:34:13-08:00 |||| Merge branch 'sethh/libfabric_env_update' into 'devel'
+|\ \  
+| * | b53f3863 |||| 2023-12-12T15:34:13-08:00 |||| transport/libfabric: Check for set env variables before overriding them
+| |/  
+* |   66cba429 |||| 2023-12-12T14:58:28-08:00 |||| Merge branch 'alanger/pr/add_cuda_version_check' into 'devel'
+|\ \  
+| * | 6cbd5a1a |||| 2023-12-11T18:07:12-08:00 |||| Add CUDA_VERSION>=12040 when using NVML API
+| |/  
+* |   d4d0d6b2 |||| 2023-12-12T14:57:57-08:00 |||| Merge branch 'sethh/uid_cmake_fix' into 'devel'
+|\ \  
+| * | d84e41d1 |||| 2023-12-12T14:57:57-08:00 |||| cmake/bootstrap: Add cxx standard to UID bootstrap.
+* | |   05d4d405 |||| 2023-12-12T13:52:36-08:00 |||| Merge branch 'alanger/pr/clean_built_headers' into 'devel'
+|\ \ \  
+| * | | 2b8bd69b |||| 2023-12-12T13:52:36-08:00 |||| Clean built header nvshmem_version.h
+| | |/  
+| |/|   
+* | |   2f06ce06 |||| 2023-12-12T12:29:40-08:00 |||| Merge branch 'sethh/ci_env_files' into 'devel'
+|\ \ \  
+| |/ /  
+|/| |   
+| * | 4bb39433 |||| 2023-12-07T15:53:57-08:00 |||| CI: give draco_reno_inline_per_patch an env file.
+* | |   25ac06f6 |||| 2023-12-11T10:47:54-08:00 |||| Merge branch 'jdinan/mr/libfabric-mr-key-fix' into 'devel'
+|\ \ \  
+| |_|/  
+|/| |   
+| * | 70965096 |||| 2023-07-15T09:31:33-04:00 |||| Fix code formatting
+| * | b174c046 |||| 2023-07-14T16:52:42-04:00 |||| Make FI_MR_PROV_KEY a hard requirement
+| |/  
+* |   236aaf66 |||| 2023-12-10T11:50:39-08:00 |||| Merge branch 'alanger/pr/use_fabric_handle' into 'devel'
+|\ \  
+| * | 704709fe |||| 2023-12-08T15:43:57-08:00 |||| build fix
+| * | 99b2d207 |||| 2023-12-08T09:51:06-08:00 |||| in-place clang-formatting
+| * | 7c6b40e5 |||| 2023-12-08T09:46:34-08:00 |||| fix build error
+| * | f9a16c70 |||| 2023-12-07T16:03:34-08:00 |||| clang format
+| * | 0b621b7f |||| 2023-12-06T16:13:19-08:00 |||| Address review comments
+| * | cdb7642d |||| 2023-12-04T21:57:42+00:00 |||| fix seg fault
+| * | b530993b |||| 2023-11-21T15:00:08-08:00 |||| build fixes
+| * | 289a7686 |||| 2023-11-21T14:58:27-08:00 |||| Add check for fabric handle type support
+| * | e5e0d719 |||| 2023-11-21T22:19:23+00:00 |||| build fixes
+| * | 6d402109 |||| 2023-11-20T16:12:18-08:00 |||| Fix nvmlDeviceGetGpuFabricInfoV usage
+| * | 484fda61 |||| 2023-11-20T12:26:09-08:00 |||| Print MNNVL run info
+| * | f322f01f |||| 2023-11-20T11:36:00-08:00 |||| Check MNNVL for Hopper+
+| * | 1fb2880b |||| 2023-11-13T17:00:52-08:00 |||| Determine MNNVL env programmatically
+| * | 16e4495e |||| 2023-11-13T14:38:08-08:00 |||| Address Arnav's feedback
+| * | 962516e9 |||| 2023-11-06T16:52:18-08:00 |||| Use HANDLE_TYPE_FABRIC for CUDA >= 12.4
+| |/  
+* |   2c37f3ab |||| 2023-12-08T15:51:22-08:00 |||| Merge branch 'alanger/pr/use_init_wrapper_in_initloop_test' into 'devel'
+|\ \  
+| * | 3b7fe860 |||| 2023-12-08T15:51:22-08:00 |||| Use init_wrapper for init_loop test
+* | |   63e10aaf |||| 2023-12-08T15:50:51-08:00 |||| Merge branch 'sethh/multi_port_work' into 'devel'
+|\ \ \  
+| * | | a00c715c |||| 2023-12-08T15:50:51-08:00 |||| Add support for using multiple NICs/PE
+| | |/  
+| |/|   
+* | |   c18c3a40 |||| 2023-12-08T15:50:26-08:00 |||| Merge branch 'alanger/pr/improve_ibgda_quiet_on_stream' into 'devel'
+|\ \ \  
+| * | | 92ddc89c |||| 2023-12-08T15:50:26-08:00 |||| Use multiple threads for quiet_on_stream with IBGDA
+* | | |   b990b4b0 |||| 2023-12-08T15:49:21-08:00 |||| Merge branch 'arnavg/nvshmem/uid_bootstrap/bootstrap-feature-impl' into 'devel'
+|\ \ \ \  
+| * | | | 012177bb |||| 2023-12-08T15:49:21-08:00 |||| NVSHMEM-1482 & NVSHMEM-1483: Implement Bootstrap Middleware and Frontend API
+| | |/ /  
+| |/| |   
+* | | |   d94cfb8b |||| 2023-12-07T19:04:11-08:00 |||| Merge branch 'pezhu/mem_leak_for_mem_cache' into 'devel'
+|\ \ \ \  
+| |/ / /  
+|/| | |   
+| * | | 9744d8df |||| 2023-12-07T19:04:11-08:00 |||| fix the memory leak when handling the mem cache in transport init
+| | |/  
+| |/|   
+* | |   5f03cc83 |||| 2023-12-07T15:34:48-08:00 |||| Merge branch 'arnavg/nvshmem/auto-formatting-checkout' into 'devel'
+|\ \ \  
+| |_|/  
+|/| |   
+| * | 64c6d0c3 |||| 2023-12-07T15:34:47-08:00 |||| Update clang auto-formatter to remove checkout
+|/ /  
+* |   eabe6cf0 |||| 2023-12-07T10:30:37-08:00 |||| Merge branch 'alanger/pr/change_envvars_status' into 'devel'
+|\ \  
+| * | 54738bfd |||| 2023-12-07T10:30:37-08:00 |||| Update status of some env vars
+| |/  
+* |   7ee49cc5 |||| 2023-12-07T10:24:47-08:00 |||| Merge branch 'pmarkthub/relaxed-ordering' into 'devel'
+|\ \  
+| * | d0320bb0 |||| 2023-12-04T19:53:57-08:00 |||| Implemented HAVE_IBV_ACCESS_RELAXED_ORDERING compile-time check in Makefile
+| * | 731c236f |||| 2023-11-16T23:31:14-08:00 |||| Added HAVE_IBV_ACCESS_RELAXED_ORDERING protection
+| * | 11b79595 |||| 2023-11-06T13:41:41-08:00 |||| Changed the default value of relaxed ordering to true and fixed clang formatting error
+| * | bc67efda |||| 2023-10-24T01:01:18-07:00 |||| Renamed to NVSHMEM_IB_ENABLE_RELAXED_ORDERING
+| * | f7a7f3bb |||| 2023-10-23T05:29:39+00:00 |||| Renamed IB_RELAXED_ORDERING to ENABLE_IB_RELAXED_ORDERING and fixed typo
+| * | 3dd41304 |||| 2023-10-04T02:59:04+00:00 |||| Introduced NVSHMEM_IB_RELAXED_ORDERING
+| |/  
+* |   59bbd383 |||| 2023-12-07T10:20:38-08:00 |||| Merge branch 'pmarkthub/gpu_verbs/war-compiler-npes-issue' into 'devel'
+|\ \  
+| * | f30a3694 |||| 2023-11-17T01:39:14-08:00 |||| Fixed clang format error
+| * | 6aa5c107 |||| 2023-11-16T22:56:19-08:00 |||| Added comment about the nvcc issue and WAR we apply
+| * | 18280c0c |||| 2023-10-17T01:31:25-07:00 |||| WAR a (likely) compiler bug that causes npes to temporary become 0
+| |/  
+* |   b15ff382 |||| 2023-12-07T00:29:44-08:00 |||| Merge branch 'sethh/dmabuf_devel' into 'devel'
+|\ \  
+| * | d6059792 |||| 2023-12-06T09:10:39-08:00 |||| env_defs: Address MR comments.
+| * | 8d66193e |||| 2023-11-22T15:07:41-08:00 |||| in-place clang-formatting
+| * | 0df10ba7 |||| 2023-11-22T15:00:48-08:00 |||| env_defs: Add a new option to disable dma_buf.
+* | |   fda62189 |||| 2023-12-06T19:12:39-08:00 |||| Merge branch 'sethh/libfabric_fix' into 'devel'
+|\ \ \  
+| * | | 1a20a243 |||| 2023-10-17T09:43:22-06:00 |||| libfabric: Properly error out in quiet when progress fails.
+| * | | 964795c0 |||| 2023-10-24T14:34:23-07:00 |||| src/libfabric: Set env vars for SS provider.
+| * | | 7bca84b1 |||| 2023-10-24T10:29:35-07:00 |||| src/host: Fix calculation of offset for remote pointers.
+| |/ /  
+* | |   d62a6df2 |||| 2023-12-06T18:16:13-08:00 |||| Merge branch 'pmarkthub/gpu_verbs/improve-poll-cq' into 'devel'
+|\ \ \  
+| |_|/  
+|/| |   
+| * | f0d4d194 |||| 2023-11-17T01:11:05-08:00 |||| Fixed bug in rma_g when can_combine_data is detected
+| * |   af2c0387 |||| 2023-11-17T00:04:19-08:00 |||| Merge branch 'devel' into pmarkthub/gpu_verbs/improve-poll-cq
+| |\ \  
+| * | | 9b919212 |||| 2023-11-07T14:30:34-08:00 |||| Merge branch 'devel' into pmarkthub/gpu_verbs/improve-poll-cq
+* | | |   2b381e2f |||| 2023-12-05T10:57:49-08:00 |||| Merge branch 'alanger/pr/fix_sysmem_ci_test_list' into 'devel'
+|\ \ \ \  
+| * | | | ee129d90 |||| 2023-12-04T14:04:59-08:00 |||| Remove no gdrcopy testing from sysmem
+| * | | | 92cb2a71 |||| 2023-11-27T14:42:34-08:00 |||| CI: Rename NEEDING_FIX to SKIP
+| * | | | b0777b2e |||| 2023-11-27T14:40:39-08:00 |||| Update skip test list for sysmem CI
+| | |_|/  
+| |/| |   
+* | | |   cec9d179 |||| 2023-12-04T15:24:14-08:00 |||| Merge branch 'alanger/pr/guard_gdrapi' into 'devel'
+|\ \ \ \  
+| * | | | e658c3e0 |||| 2023-11-27T14:06:14-08:00 |||| Guard include gdrapi.h with NVSHMEM_USE_GDRCOPY
+| |/ / /  
+* | | |   056e8913 |||| 2023-12-04T10:58:32-08:00 |||| Merge branch 'pezhu/coverity_cpu_coll' into 'devel'
+|\ \ \ \  
+| |/ / /  
+|/| | |   
+| * | | 1dc85464 |||| 2023-11-15T09:35:39+08:00 |||| fix nccl handle
+|/ / /  
+* | |   805e3150 |||| 2023-11-20T08:26:25-08:00 |||| Merge branch 'sethh/ci_fix_broadcast_test' into 'devel'
+|\ \ \  
+| * | | 4ab332ee |||| 2023-11-17T16:04:14-08:00 |||| CI: Don't run broadcast test on sysmem heap jobs
+|/ / /  
+* | |   4b10f944 |||| 2023-11-17T16:11:39-08:00 |||| Merge branch 'sethh/ci/push-auto-cancel' into 'devel'
+|\ \ \  
+| * | | 1bab29b2 |||| 2023-11-17T16:11:39-08:00 |||| CI: Make running jobs interruptible.
+|/ / /  
+* | |   3c3ed623 |||| 2023-11-17T16:06:10-08:00 |||| Merge branch 'arnavg/nvshmem/clang-format-auto' into 'devel'
+|\ \ \  
+| |_|/  
+|/| |   
+| * | 5c26f830 |||| 2023-11-17T16:06:09-08:00 |||| [NVSHMEM] NVSHMEM-1516: Introduce in-place clang-formatting
+|/ /  
+* |   fe5ff8c0 |||| 2023-11-14T14:54:53-08:00 |||| Merge branch 'arnavg/nvshmem/uid_bootstrap/port-nccl-sockets' into 'devel'
+|\ \  
+| * | 3bc75566 |||| 2023-11-14T14:54:53-08:00 |||| [NVSHMEM] Resolves NVSHMEM-1481: Implement Bootstrap Socket Module
+* | |   1b2f434c |||| 2023-11-12T13:01:25-08:00 |||| Merge branch 'arnavg/nvshmem/uid_bootstrap/unit-test-breakage' into 'devel'
+|\ \ \  
+| |/ /  
+|/| |   
+| * | 22ddbbe7 |||| 2023-11-12T13:01:25-08:00 |||| [NVSHMEM] Test Escapes on unsupported configurations
+|/ /  
+* |   d3a8dec5 |||| 2023-11-09T12:16:22-08:00 |||| Merge branch 'alanger/pr/use_max_threads_in_reduce_stream' into 'devel'
+|\ \  
+| * | f5a9ab36 |||| 2023-11-06T08:47:59-08:00 |||| Launch max threads in reduce_on_stream
+|  /  
+* | cf18cd43 |||| 2023-11-09T12:16:09-08:00 |||| Merge branch 'alanger/pr/mspace_class' into 'devel'
+* |   ef3cd0e2 |||| 2023-11-09T10:28:57-08:00 |||| Merge branch 'arnavg/nvshmem/test-contributors-readme' into 'devel'
+|\ \  
+| |/  
+|/|   
+| * ceb13d42 |||| 2023-11-09T10:28:57-08:00 |||| [NVSHMEM] Add Test Contributors README.md
+|/  
+* 6487467d |||| 2023-11-05T21:11:10-08:00 |||| Merge branch 'arnavg/nvshmem/uid_bootstrap/test-framework' into 'devel'
+* c0b55036 |||| 2023-11-05T21:11:09-08:00 |||| [NVSHMEM] NVSHMEM-1484: Bootstrap Module Test Framework

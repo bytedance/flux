@@ -1,6 +1,6 @@
 //===- cuda_stub.h ----------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -38,11 +38,11 @@ namespace bytedance::flux {
   _(cuCtxGetDevice)
 
 extern "C" {
-typedef struct CUDA {
+using CUDA = struct CUDA {
 #define CREATE_MEMBER(name) decltype(&(name)) name;
   FLUX_FORALL_CUDA(CREATE_MEMBER)
 #undef CREATE_MEMBER
-} CUDA;
+};
 }
 
 CUDA &cuda_stub();
@@ -64,5 +64,10 @@ get_cu_error_string(CUresult statuse) {
     FLUX_CHECK(error == CUDA_SUCCESS) << "Got bad cuda status: " << get_cu_error_string(error) \
                                       << "(" << error << ") at " #status;                      \
   } while (0)
+
+CUresult CUStreamWaitValue(
+    CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags);
+CUresult CUStreamWriteValue(
+    CUstream stream, CUdeviceptr addr, cuuint32_t value, unsigned int flags);
 
 }  // namespace bytedance::flux

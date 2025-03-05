@@ -1,0 +1,4 @@
+{
+  global: nvshmemt_init;
+  local: *;
+};

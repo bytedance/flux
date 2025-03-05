@@ -1,6 +1,6 @@
 //===- op_registry_proto_utils.cc -------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -66,7 +66,7 @@ ToUnifiedGemmMata(const proto::GemmMeta &config) {
   const auto &dtype = config.dtype();
   auto impl_spec = [&config]() -> UnifiedImplMeta {
     if (config.has_gemm_v3_meta()) {
-      return make_gemm_v3_meta(config.gemm_v3_meta().fast_accum());
+      return make_gemm_v3_meta(config.gemm_v3_meta().fast_accum(), /*block_scale=*/false);
     }
     return None{};
   }();
@@ -163,7 +163,7 @@ ToUnifiedGemmHparams(const proto::GemmHparams &hparams) {
 }
 
 void
-load_tune_config_from_file(TuningConfigRegistry &registry, const std::string &file_name) {
+load_tune_config_from_file(TuningConfigRegistry &registry, const char *file_name) {
   if (!std::filesystem::exists(file_name)) {
     std::cerr << "FLUX_TUNE_CONFIG_FILE " << file_name << " not exist, skip\n";
     return;
@@ -208,7 +208,7 @@ load_tune_config_from_file(TuningConfigRegistry &registry, const std::string &fi
 #else
 namespace bytedance::flux {
 void
-load_tune_config_from_file(TuningConfigRegistry &registry, const std::string &file_name) {
+load_tune_config_from_file(TuningConfigRegistry &registry, const char *file_name) {
   std::cerr << "add tune config at runtime is not supported, please recompile flux with protobuf "
                "support and try again\n";
 }
