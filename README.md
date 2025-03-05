@@ -28,13 +28,13 @@ cd ..
 ```
 
 #### Build in a virtual environment
-Here is a snippet to install Flux in a virtual environment. Let's finish the installation in an virtual environment with CUDA 12.4, torch 2.5.0 and python 3.11.
+Here is a snippet to install Flux in a virtual environment. Let's finish the installation in an virtual environment with CUDA 12.4, torch 2.6.0 and python 3.11.
 
 ```bash
 conda create -n flux python=3.11
 conda activate flux
 pip3 install packaging
-pip3 install torch==2.5.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip3 install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 ./build.sh --clean-all
 ./build.sh --arch "80;89;90" --nvshmem --package
@@ -43,11 +43,12 @@ pip3 install torch==2.5.0 torchvision torchaudio --index-url https://download.py
 Then you would expect a wheel package under `dist/` folder that is suitable for your virtual environment.
 
 ### Install from PyPI
-We provide some pre-built wheels for Flux, and you can directly install with pip if your wanted version is available. Currently we provide wheels for the following configurations: torch(2.5.0, 2.6.0), python(3.10, 3.11), cuda(12.4).
+We also provide some pre-built wheels for Flux, and you can directly install with pip if your wanted version is available. Currently we provide wheels for the following configurations: torch(2.5.0, 2.6.0), python(3.10, 3.11), cuda(12.4).
 
 ```bash
 # Make sure that PyTorch is installed.
 pip install byte-flux
+# After installation, double check the torch version is align with the wheel before using.
 ```
 
 #### Build options
@@ -93,7 +94,7 @@ python3 test/python/gemm_only/test_gemm_only.py 4096 12288 6144 --dtype=float16
 ```
 
 You can check out the documentations for more details!
-* For a more detailed usage on MoE kernels, please refer to [Flux MoE Doc](https://github.com/ZSL98/flux/blob/comet_clean/docs/mlsys_comet_ae.md).
+* For a more detailed usage on MoE kernels, please refer to [Flux MoE Doc](https://github.com/bytedance/flux/blob/main/docs/mlsys_comet_ae.md). Try to run some small examples 
 
 
 ## Citations

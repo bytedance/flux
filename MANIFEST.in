@@ -1,1 +1,3 @@
 global-exclude *.so*
+recursive-include python/flux/include *
+recursive-include python/flux/share *

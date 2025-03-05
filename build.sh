@@ -19,6 +19,7 @@ function clean_py() {
     rm -rf python/flux/lib
     rm -rf .eggs/
     rm -rf python/flux.egg-info
+    rm -rf python/byte_flux.egg-info
     rm -rf python/flux_ths_pybind.*
 }
 
