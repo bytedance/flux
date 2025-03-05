@@ -10,7 +10,6 @@ Install Flux either from source or from PyPI.
 ### Build from source
 ```bash
 git clone --recursive https://github.com/bytedance/flux.git
-git checkout comet
 
 # Patch CUTLASS
 cd 3rdparty/cutlass
@@ -34,6 +33,7 @@ Here is a snippet to install Flux in a virtual environment. Let's finish the ins
 conda create -n flux python=3.11
 conda activate flux
 pip3 install packaging
+pip3 install ninja
 pip3 install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 ./build.sh --clean-all
@@ -51,20 +51,13 @@ pip install byte-flux
 # After installation, double check the torch version is align with the wheel before using.
 ```
 
-#### Build options
+### Customized Installation
+#### Build options for source installation
 
 1. Add `--nvshmem` to build Flux with NVSHMEM support. It is essential for the MoE kernels.
 2. If you are tired of the cmake process, you can set environment variable `FLUX_BUILD_SKIP_CMAKE` to 1 to skip cmake if `build/CMakeCache.txt` already exists.
 3. If you want to build a wheel package, add `--package` to the build command. find the output wheel file under dist/
 
-```bash
-# Ampere
-./build.sh --arch 80 --package
-# Ada Lovelace
-./build.sh --arch 89 --package
-# Hopper
-./build.sh --arch 90 --package
-```
 
 #### Dependencies
 The core dependencies of Flux are NCCL, CUTLASS, and NVSHMEM, which are located under the 3rdparty folder.
@@ -94,7 +87,9 @@ python3 test/python/gemm_only/test_gemm_only.py 4096 12288 6144 --dtype=float16
 ```
 
 You can check out the documentations for more details!
-* For a more detailed usage on MoE kernels, please refer to [Flux MoE Doc](https://github.com/bytedance/flux/blob/main/docs/mlsys_comet_ae.md). Try to run some small examples 
+* For a more detailed usage on MoE kernels, please refer to [Flux MoE Usage](https://github.com/bytedance/flux/blob/main/docs/moe_usage.md). Try some [examples](https://github.com/bytedance/flux/blob/main/examples) as a quick start!
+* For some performance numbers, please refer to [Performance Doc](https://github.com/bytedance/flux/blob/main/docs/performance.md).
+* To learn more about the design principles of Flux, please refer to [Design Doc](https://github.com/bytedance/flux/blob/main/docs/design.md).
 
 
 ## Citations

@@ -88,4 +88,4 @@ Specifically, the torch implementation for MoE layer 0 includes: all-gather + sc
 | MoE layer1 (H100) | 3.254ms | 0.981ms |
 
 ---
-For more guide on how to use MoE kernels in Flux, please refer to docs/mlsys_comet_ae.md.
+For more guide on how to use MoE kernels in Flux, please refer to [Flux MoE Usage](https://github.com/bytedance/flux/blob/main/docs/moe_usage.md) and [Comet(MLSys2025)](https://github.com/bytedance/flux/blob/main/docs/mlsys_comet_ae.md).

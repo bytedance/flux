@@ -99,14 +99,11 @@ struct GemmGroupedV3GatherRSTS_Space {
   static constexpr auto AllGemmHParams_FP16 = make_space_gemm_hparams(
       cute::make_tuple(make_gemm_v3_hparams(Shape<_1, _1, _1>{})),
       cute::make_tuple(
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<8192>{}),
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<4096>{}),
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<3072>{}),
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<2048>{}),
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<1280>{}),
           make_gather_rs_hparams(cute::Int<28>{}, cute::Int<1024>{}),
           make_gather_rs_hparams(cute::Int<28>{}, cute::Int<768>{}),
+          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<640>{}),
           make_gather_rs_hparams(cute::Int<28>{}, cute::Int<512>{}),
+          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<384>{}),
           make_gather_rs_hparams(cute::Int<28>{}, cute::Int<256>{})),
       cute::make_tuple(Shape<_128, _256, _64>{}));
 
