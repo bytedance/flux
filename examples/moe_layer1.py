@@ -292,7 +292,7 @@ if __name__ == "__main__":
         output_dtype=output_dtype,
         dist=args.dist,
         fast_accum=args.fast_accum,
-        weight_groups=args.weight_groups,
+        weight_groups=1,
         drop_token=args.drop_token,
         debug=args.debug,
         generator=generator,
@@ -318,7 +318,7 @@ if __name__ == "__main__":
 
     if TP_GROUP.rank() == 0:
         flux.testing.print_grouped_gemm_sol_time_ms(
-            moe_ctx.ntokens * moe_ctx.topk * args.weight_groups,
+            moe_ctx.ntokens * moe_ctx.topk,
             moe_ctx.ffn_size_shard,
             moe_ctx.h,
             args.G // args.E,  # E

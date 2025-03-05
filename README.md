@@ -5,15 +5,7 @@ Flux is a communication-overlapping library for dense/MoE models on GPUs, provid
 Flux's efficient kernels are compatible with Pytorch and can be integrated into existing frameworks easily, supporting various Nvidia GPU architectures and data types.
 
 ## Installation
-Install Flux either from PyPI or from source.
-
-### Install from PyPI
-
-```
-# Make sure that PyTorch is installed.
-pip install packaging
-pip install byte-flux
-```
+Install Flux either from source or from PyPI.
 
 ### Build from source
 ```bash
@@ -26,6 +18,7 @@ git checkout v3.7.0
 cd ..
 patch -p1 < ./cutlass3.7.patch
 
+cd ..
 # Ampere
 ./build.sh --arch 80 --nvshmem
 # Ada Lovelace
@@ -47,6 +40,15 @@ pip3 install torch==2.5.0 torchvision torchaudio --index-url https://download.py
 ./build.sh --arch "80;89;90" --nvshmem --package
 ```
 
+Then you would expect a wheel package under `dist/` folder that is suitable for your virtual environment.
+
+### Install from PyPI
+We provide some pre-built wheels for Flux, and you can directly install with pip if your wanted version is available. Currently we provide wheels for the following configurations: torch(2.5.0, 2.6.0), python(3.10, 3.11), cuda(12.4).
+
+```bash
+# Make sure that PyTorch is installed.
+pip install byte-flux
+```
 
 #### Build options
 
