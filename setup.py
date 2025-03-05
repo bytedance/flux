@@ -251,12 +251,13 @@ def main():
             "flux.testing",
         ],
     )
-    data_file_list = ["python/lib/libflux_cuda.so"]
+    data_file_list = ["python/flux/lib/libflux_cuda.so"]
+    data_file_list += ["python/flux/lib/libflux_cuda_ths_op.so"]
     if enable_nvshmem:
         data_file_list += [
-            "python/lib/nvshmem_bootstrap_uid.so",
-            "python/lib/nvshmem_transport_ibrc.so.3",
-            "python/lib/libnvshmem_host.so.3",
+            "python/flux/lib/nvshmem_bootstrap_uid.so",
+            "python/flux/lib/nvshmem_transport_ibrc.so.3",
+            "python/flux/lib/libnvshmem_host.so.3",
         ]
     # Configure package
     setuptools.setup(
@@ -271,9 +272,13 @@ def main():
         install_requires=["torch"],
         extras_require={"test": ["torch", "numpy"]},
         license_files=("LICENSE",),
-        package_data={"python/lib": ["*.so"]},  # only works for sdist
+        package_data={
+            "python/flux/lib": ["*.so"],
+            "python/flux/include": ["*.h"],
+            "python/flux/share": ["*.cmake"],
+        },  # only works for bdist_wheel under package
         python_requires=">=3.8",
-        # include_package_data=True,
+        include_package_data=True,
         data_files=[
             (
                 "lib",  # installed directory
