@@ -25,7 +25,7 @@ RS refers to ReduceScatter. Thus GEMM+RS refers to the second layer of an MLP.
 ---
 
 ### MoE MLP
-For MoE MLP, we measure the performance of kernels on L20 and H100 GPUs. Each machine has 8 GPUs. H100 GPUs are connected via NVLink and L20 GPUs are connected via PCIe.
+For MoE MLP, we measure the performance of kernels on L20 and H800 GPUs. Each machine has 8 GPUs. H800 GPUs are connected via NVLink and L20 GPUs are connected via PCIe.
 The performance of flux kernels is shown in the tables below.
 Specifically, the torch implementation for MoE layer 0 includes: all-gather + scatter + gemm, and the torch implementation for MoE layer 1 includes: gemm + topk-reduce + reduce-scatter. Flux's optimized kernels show better performance.
 
@@ -42,8 +42,8 @@ Specifically, the torch implementation for MoE layer 0 includes: all-gather + sc
 | --- | --- | --- |
 | MoE layer0 (L20) | 26.792ms | 7.813ms |
 | MoE layer1 (L20) | 42.092ms | 7.976ms |
-| MoE layer0 (H100) | 4.702ms | 1.146ms |
-| MoE layer1 (H100) | 10.452ms | 1.863ms |
+| MoE layer0 (H800) | 4.702ms | 1.146ms |
+| MoE layer1 (H800) | 10.452ms | 1.863ms |
 
 #### M=8192, K=8192, N=8192, TP=4, EP=2, num_experts=32, topk=4
 
@@ -56,8 +56,8 @@ Specifically, the torch implementation for MoE layer 0 includes: all-gather + sc
 | --- | --- | --- |
 | MoE layer0 (L20) | 26.911ms | 8.727ms |
 | MoE layer1 (L20) | 34.850ms | 8.445ms |
-| MoE layer0 (H100) | 4.069ms | 1.335ms |
-| MoE layer1 (H100) | 6.672ms | 1.685ms |
+| MoE layer0 (H800) | 4.069ms | 1.335ms |
+| MoE layer1 (H800) | 6.672ms | 1.685ms |
 
 #### M=8192, K=8192, N=8192, TP=8, EP=1, num_experts=8, topk=2
 
@@ -70,8 +70,8 @@ Specifically, the torch implementation for MoE layer 0 includes: all-gather + sc
 | --- | --- | --- |
 | MoE layer0 (L20) | 19.734ms | 5.901ms |
 | MoE layer1 (L20) | 28.046ms | 6.744ms |
-| MoE layer0 (H100) | 2.124ms | 0.657ms |
-| MoE layer1 (H100) | 4.561ms | 1.019ms |
+| MoE layer0 (H800) | 2.124ms | 0.657ms |
+| MoE layer1 (H800) | 4.561ms | 1.019ms |
 
 
 #### M=8192, K=8192, N=8192, TP=4, EP=2, num_experts=8, topk=2
@@ -84,8 +84,8 @@ Specifically, the torch implementation for MoE layer 0 includes: all-gather + sc
 | --- | --- | --- |
 | MoE layer0 (L20) | 21.68ms | 6.155ms |
 | MoE layer1 (L20) | 25.118ms | 7.009ms |
-| MoE layer0 (H100) | 2.284ms | 0.955ms |
-| MoE layer1 (H100) | 3.254ms | 0.981ms |
+| MoE layer0 (H800) | 2.284ms | 0.955ms |
+| MoE layer1 (H800) | 3.254ms | 0.981ms |
 
 ---
 For more guide on how to use MoE kernels in Flux, please refer to [Flux MoE Usage](https://github.com/bytedance/flux/blob/main/docs/moe_usage.md) and [Comet(MLSys2025)](https://github.com/bytedance/flux/blob/main/docs/mlsys_comet_ae.md).
