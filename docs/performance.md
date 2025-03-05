@@ -1,6 +1,6 @@
 ## Performance Report
 
----
+In this report, we first show some numbers related to Flux and torch implementation. Note that the naive torch implementation is only functional and not well-optimized for speed.
 
 ### Dense MLP
 For dense MLP, we measured performance of kernels on L20 GPUs. Each machine has 8 GPUs, with a TP size set to 8. The table below shows the performance comparison between flux and torch+nccl. It can be observed that by overlapping fine-grained computation and communication, Flux is able to effectively hide a significant portion of the communication time.
@@ -27,7 +27,7 @@ RS refers to ReduceScatter. Thus GEMM+RS refers to the second layer of an MLP.
 ### MoE MLP
 For MoE MLP, we measure the performance of kernels on L20 and H800 GPUs. Each machine has 8 GPUs. H800 GPUs are connected via NVLink and L20 GPUs are connected via PCIe.
 The performance of flux kernels is shown in the tables below.
-Specifically, the torch implementation for MoE layer 0 includes: all-gather + scatter + gemm, and the torch implementation for MoE layer 1 includes: gemm + topk-reduce + reduce-scatter. Flux's optimized kernels show better performance.
+Specifically, the torch implementation for MoE layer 0 includes: all-gather + scatter + gemm, and the torch implementation for MoE layer 1 includes: gemm + topk-reduce + reduce-scatter. Flux's optimized kernels show good performance.
 
 #### M=8192, K=8192, N=8192, TP=8, EP=1, num_experts=32, topk=4
 
@@ -87,5 +87,11 @@ Specifically, the torch implementation for MoE layer 0 includes: all-gather + sc
 | MoE layer0 (H800) | 2.284ms | 0.955ms |
 | MoE layer1 (H800) | 3.254ms | 0.981ms |
 
----
-For more guide on how to use MoE kernels in Flux, please refer to [Flux MoE Usage](https://github.com/bytedance/flux/blob/main/docs/moe_usage.md) and [Comet(MLSys2025)](https://github.com/bytedance/flux/blob/main/docs/mlsys_comet_ae.md).
+Again, the torch implementation is not optimized. For comparisons with stronger baselines, readers can refer to Flux's MoE paper ([Comet](https://arxiv.org/abs/2502.19811)) for more details. A comparison of end-to-end MoE model forward latency is shown in Figure 1.
+
+<figure style="text-align: center;">
+  <img src="assets/e2e_latency.png" alt="e2e_latency" style="width:85%">
+  <figcaption style="text-align:center; font-style:italic">Figure 1. End-to-end MoE model forwars latency</figcaption>
+</figure>
+
+For more guide on how to use MoE kernels in Flux, please refer to [Flux MoE Usage](https://github.com/bytedance/flux/blob/main/docs/moe_usage.md) and [Comet-AE(MLSys2025)](https://github.com/bytedance/flux/blob/main/docs/mlsys_comet_ae.md).
