@@ -4,20 +4,19 @@ Flux is a communication-overlapping library for dense/MoE models on GPUs, provid
 
 Flux's efficient kernels are compatible with Pytorch and can be integrated into existing frameworks easily, supporting various Nvidia GPU architectures and data types.
 
-## Installation
+Welcome to join the [Wechat](https://github.com/bytedance/flux/blob/main/docs/assets/comet_wechat_group.JPG) group and stay tuned!
+
+## Getting started
 Install Flux either from source or from PyPI.
 
-### Build from source
+### Install from Source
 ```bash
 git clone --recursive https://github.com/bytedance/flux.git
 
 # Patch CUTLASS
-cd 3rdparty/cutlass
-git checkout v3.7.0
-cd ..
-patch -p1 < ./cutlass3.7.patch
+cd 3rdparty/cutlass && git checkout v3.7.0 && cd ..
+patch -p1 < ./cutlass3.7.patch && cd ..
 
-cd ..
 # Ampere
 ./build.sh --arch 80 --nvshmem
 # Ada Lovelace
@@ -26,7 +25,7 @@ cd ..
 ./build.sh --arch 90 --nvshmem
 ```
 
-#### Build in a virtual environment
+#### Install in a virtual environment
 Here is a snippet to install Flux in a virtual environment. Let's finish the installation in an virtual environment with CUDA 12.4, torch 2.6.0 and python 3.11.
 
 ```bash
