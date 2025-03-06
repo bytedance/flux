@@ -11,7 +11,7 @@ Install Flux either from source or from PyPI.
 
 ### Install from Source
 ```bash
-git clone --recursive https://github.com/bytedance/flux.git
+git clone --recursive https://github.com/bytedance/flux.git && cd flux
 
 # Install dependencies
 bash ./install_deps.sh
