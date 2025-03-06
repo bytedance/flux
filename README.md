@@ -11,17 +11,16 @@ Install Flux either from source or from PyPI.
 
 ### Install from Source
 ```bash
-git clone --recursive https://github.com/bytedance/flux.git
+git clone --recursive https://github.com/bytedance/flux.git && cd flux
 
-# Patch CUTLASS
-cd 3rdparty/cutlass && git checkout v3.7.0 && cd ..
-patch -p1 < ./cutlass3.7.patch && cd ..
+# Install dependencies
+bash ./install_deps.sh
 
-# Ampere
+# For Ampere(sm80) GPU
 ./build.sh --arch 80 --nvshmem
-# Ada Lovelace
+# For Ada Lovelace(sm89) GPU
 ./build.sh --arch 89 --nvshmem
-# Hopper
+# For Hopper(sm90) GPU
 ./build.sh --arch 90 --nvshmem
 ```
 
@@ -42,12 +41,11 @@ pip3 install torch==2.6.0 torchvision torchaudio --index-url https://download.py
 Then you would expect a wheel package under `dist/` folder that is suitable for your virtual environment.
 
 ### Install from PyPI
-We also provide some pre-built wheels for Flux, and you can directly install with pip if your wanted version is available. Currently we provide wheels for the following configurations: torch(2.5.0, 2.6.0), python(3.10, 3.11), cuda(12.4).
+We also provide some pre-built wheels for Flux, and you can directly install with pip if your wanted version is available. Currently we provide wheels for the following configurations: torch(2.4.0, 2.5.0, 2.6.0), python(3.10, 3.11), cuda(12.4).
 
 ```bash
 # Make sure that PyTorch is installed.
 pip install byte-flux
-# After installation, double check the torch version is align with the wheel before using.
 ```
 
 ### Customized Installation
@@ -61,7 +59,7 @@ pip install byte-flux
 #### Dependencies
 The core dependencies of Flux are NCCL, CUTLASS, and NVSHMEM, which are located under the 3rdparty folder.
 1. NCCL: Managed by git submodule automatically.
-2. NVSHMEM: The current nvshmem folder under flux/3rdparty is extracted from the nvshmem_src_3.1.7-1.txz downloaded from https://developer.nvidia.com/nvshmem. Users can also try other newer versions of nvshmem.
+2. NVSHMEM: Downloaded from https://developer.nvidia.com/nvshmem. The current version is 3.2.5-1.
 3. CUTLASS: Flux leverages CUTLASS to generate high-performance GEMM kernels. We currently use CUTLASS 3.7.0 and a tiny patch should be applied to CUTLASS.
 
 
