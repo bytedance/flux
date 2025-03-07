@@ -1,6 +1,6 @@
 //===- op_registry.cu --------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,8 +15,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "flux/gemm_hparams.h"
 #include "flux/op_registry_proto_utils.h"
 #include "flux/flux.h"
+#include "flux/utils.h"
 #include "flux/op_registry.h"
 #include <mutex>
 
@@ -48,14 +50,16 @@ get_arch() {
 TuningConfigRegistry &
 TuningConfigRegistry::instance() {
   static TuningConfigRegistry inst;
-  char *env = getenv("FLUX_TUNE_CONFIG_FILE");
+  const char *env = getenv("FLUX_TUNE_CONFIG_FILE");
   if (env != nullptr) {
     static std::once_flag flag;
-    std::call_once(flag, load_tune_config_from_file, inst, std::string(env));
+    std::call_once(flag, load_tune_config_from_file, inst, env);
   } else {
 #if defined(FLUX_DEBUG)
-    std::cerr
-        << "FLUX_TUNE_CONFIG_FILE not set. no tune config file specified, using default configs\n";
+    if (get_int_from_env("RANK", 0) == 0) {
+      std::cerr << "FLUX_TUNE_CONFIG_FILE not set. no tune config file specified, using default "
+                   "configs\n";
+    }
 #endif
   }
   return inst;
@@ -65,6 +69,18 @@ OpRegistry &
 OpRegistry::instance() {
   static OpRegistry inst;
   return inst;
+}
+
+bool
+OpRegistry::check_heuristic_rule(
+    const UnifiedGemmMeta &meta, const UnifiedGemmHParams &hparams, const RuntimeConfig &rt_conf) {
+  if (meta.impl() == _GemmV3{}) {
+    if (rt_conf.m() < 2048) {
+      auto const &v3_hparams = std::get<unified_type_t<GemmV3HParams>>(hparams.impl_spec());
+      return cute::get<0>(v3_hparams.cluster_shape()) == 1;
+    }
+  }
+  return true;
 }
 
 }  // namespace flux

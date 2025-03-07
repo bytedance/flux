@@ -1,6 +1,6 @@
 //===- gemm_v2_comm_none.hpp -------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -22,7 +22,6 @@
 #include "cute/numeric/integral_constant.hpp"
 #include "cutlass/gemm/gemm_enumerated_types.h"
 #include "cutlass/layout/matrix.h"
-#include "cutlass/conv/convolution.h"
 #include "cutlass/util/packed_stride.hpp"
 #include "flux/flux.h"
 #include "flux/cuda/gemm_impls/gemm_v2_impl.hpp"
@@ -32,17 +31,14 @@
 #include "cutlass/gemm/device/gemm_universal_with_absmax.h"
 
 namespace bytedance::flux {
+
 template <class GemmMetaT, class GemmHParamsT>
-class GemmV2CommNone
-    : public GemmV2Impl<GemmMetaT, GemmHParamsT, GemmV2CommNone<GemmMetaT, GemmHParamsT>> {
- public:
-  using Base = GemmV2Impl<GemmMetaT, GemmHParamsT, GemmV2CommNone>;
-  FLUX_DEFINE_DEFAULT_SPECIAL_FUNCS(GemmV2CommNone)
-
+struct GemmV2CommNone_Kernel : public GemmV2BaseKernel<
+                                   GemmMetaT,
+                                   GemmHParamsT,
+                                   GemmV2CommNone_Kernel<GemmMetaT, GemmHParamsT>> {
+  using Base = GemmV2BaseKernel<GemmMetaT, GemmHParamsT, GemmV2CommNone_Kernel>;
   static constexpr auto meta = to_gemm_meta(GemmMetaT{});
-  static constexpr auto hparams = to_gemm_hparams(GemmHParamsT{});
-  static constexpr auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
-
   static_assert(meta.comm_op() == _CommNone{}, "requires _CommNone{}");
 
   auto
@@ -50,13 +46,88 @@ class GemmV2CommNone
     auto params = this->default_kernel_params();
     return this->default_gemm_kernel(params);
   }
+};
+
+template <class GemmMetaT, class GemmHParamsT, class GemmKernelT>
+class GemmV2CommNone_Device : public GemmV2BaseDevice<
+                                  GemmMetaT,
+                                  GemmHParamsT,
+                                  GemmKernelT,
+                                  GemmV2CommNone_Device<GemmMetaT, GemmHParamsT, GemmKernelT>,
+                                  GemmV2CommNone_Kernel<GemmMetaT, GemmHParamsT>> {
+ public:
+  using KernelBuilder = GemmV2CommNone_Kernel<GemmMetaT, GemmHParamsT>;
+  using Base =
+      GemmV2BaseDevice<GemmMetaT, GemmHParamsT, GemmKernelT, GemmV2CommNone_Device, KernelBuilder>;
+  FLUX_DEFINE_DEFAULT_SPECIAL_FUNCS(GemmV2CommNone_Device)
+
+  static constexpr auto meta = to_gemm_meta(GemmMetaT{});
+  static constexpr auto hparams = to_gemm_hparams(GemmHParamsT{});
+  static constexpr auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
+
+  auto
+  to_s8_gemm_dequant_args_impl(S8GemmDequantArguments const &args) const {
+    using Gemm = identity_t<decltype(this->gemm_device())>;
+    using GemmArguments = typename Gemm::Arguments;
+    using EVT = identity_t<decltype(KernelBuilder().default_kernel_params().evt())>;
+
+    using ElementA = decltype(to_cutlass_element(dt_conf.a()));
+    using ElementB = decltype(to_cutlass_element(dt_conf.b()));
+    using ElementBias = typename Base::ElementCNonVoid;
+    using ElementD = decltype(to_cutlass_element(dt_conf.d()));
+
+    using ElementScale = typename Base::ElementScale;
+
+    auto ptr_A = static_cast<ElementA const *>(args.A);
+    auto ptr_B = static_cast<ElementB const *>(args.B);
+    auto ptr_bias = static_cast<ElementBias const *>(args.bias);
+    auto ptr_D = static_cast<ElementD *>(args.D);
+    auto ptr_scale_A = static_cast<ElementScale const *>(args.scale_A);
+    auto ptr_scale_B = static_cast<ElementScale const *>(args.scale_B);
+    auto beta = static_cast<ElementBias>(args.beta);
+
+    int stride_a = args.k;
+    int stride_b = this->get_stride_b(args.n, args.k);
+    // output's layout is same with bias
+    int stride_c = this->get_stride_c(args.m, args.n);
+    int stride_d = stride_c;
+    auto callback_args = this->s8gemm_callback_args(
+        args.m, args.n, beta, ptr_bias, ptr_D, stride_d, ptr_scale_A, ptr_scale_B);
+
+    auto const &v2_hparams = to_gemm_v2_hparams(hparams.impl_spec());
+    int avail_sms = -1;
+    if (hparams.gemm_kind() == _GemmStreamK{} and v2_hparams.streamk_mode() == _StreamkDP{}) {
+      avail_sms = 1;
+    }
+
+    auto gemm_args = GemmArguments(
+        cutlass::gemm::GemmUniversalMode::kGemm,
+        {args.m, args.n, args.k},  // problem_size
+        1,                         // batch count
+        callback_args,             // EVT args
+        ptr_A,                     // ptr_A
+        ptr_B,                     // ptr_B
+        nullptr,                   // ptr_C (unused)
+        nullptr,                   // ptr_D (unused)
+        args.m * args.k,           // batch stride A
+        args.n * args.k,           // batch stride B
+        0,                         // batch stride C(unused)
+        0,                         // batch stride D(unused)
+        stride_a,                  // stride A
+        stride_b,                  // stride B
+        0,                         // stride C(unused)
+        0,                         // stride D(unused)
+        /*avail_sms=*/avail_sms);
+
+    return gemm_args;
+  }
 
   auto
   to_fp8_gemm_args_impl(GemmFP8Arguments const &args) const {
     using Gemm = identity_t<decltype(this->gemm_device())>;
     using GemmArguments = typename Gemm::Arguments;
 
-    using EVT = identity_t<decltype(this->default_kernel_params().evt())>;
+    using EVT = identity_t<decltype(KernelBuilder().default_kernel_params().evt())>;
 
     using ElementA = decltype(to_cutlass_element(dt_conf.a()));
     using ElementB = decltype(to_cutlass_element(dt_conf.b()));
@@ -126,7 +197,7 @@ class GemmV2CommNone
     auto ptr_D = static_cast<ElementD *>(args.output);
 
     auto stride_C = cutlass::make_cute_packed_stride(
-        typename Base::StrideC{}, cute::make_shape(args.m, args.n, cute::Int<1>{}));
+        typename Base::StrideC{}, cute::make_shape(args.m, args.n, 1));
     auto stride_D = stride_C;
 
     auto callback_args =
@@ -164,62 +235,11 @@ class GemmV2CommNone
   to_gemm_args(std::any const &args, void *args_workspace) const {
     if constexpr (this->is_sm89 && this->is_fp8_gemm) {
       return to_fp8_gemm_args_impl(std::any_cast<GemmFP8Arguments>(args));
+    } else if constexpr (this->is_s8_gemm) {
+      return to_s8_gemm_dequant_args_impl(std::any_cast<S8GemmDequantArguments>(args));
     } else {
       return to_gemm_args_impl(std::any_cast<GemmOnlyArguments>(args));
     }
   }
 };
-
-struct GemmV2CommNone_Space : OpSpaceBase<GemmV2CommNone_Space> {
-  static constexpr auto AllGemmMeta_FP16 = make_space_gemm_meta(
-      cute::make_tuple(
-          _FP16{},
-          _BF16{},
-          make_gemm_dtype_config(_FP16{}, _FP16{}, _Void{}, _FP16{}),
-          make_gemm_dtype_config(_BF16{}, _BF16{}, _Void{}, _BF16{})),
-      cute::make_tuple(_Sm80{}, _Sm89{}),
-      cute::make_tuple(_CommNone{}),
-      cute::make_tuple(_RCR{}, _RRR{}),
-      cute::make_tuple(_GemmV2{}));
-
-  static constexpr auto AllGemmHParams_FP16 = make_space_gemm_hparams();
-
-  static constexpr auto AllGemmMeta_FP8 = make_space_gemm_meta(
-      cute::make_tuple(
-          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _Void{}, _BF16{}),
-          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _BF16{}, _BF16{}),
-          make_gemm_dtype_config(_E5M2{}, _E5M2{}, _Void{}, _BF16{}),
-          make_gemm_dtype_config(_E5M2{}, _E5M2{}, _BF16{}, _BF16{})),
-      cute::make_tuple(_Sm89{}),
-      cute::make_tuple(_CommNone{}),
-      cute::make_tuple(_RCR{}),  // Only register RCR layout for FP8 GEMM
-      cute::make_tuple(_GemmV2{}),
-      cute::make_tuple(make_gemm_v2_meta(_True{}), make_gemm_v2_meta(_False{})));
-
-  static constexpr auto AllGemmHParams_FP8 = make_space_gemm_hparams(
-      cute::make_tuple(Auto{}),
-      cute::make_tuple(Auto{}),
-      cute::make_tuple(Auto{}),
-      cute::make_tuple(Auto{}),
-      cute::make_tuple(Auto{}),
-      cute::make_tuple(Auto{}));
-
-  static constexpr auto AllGemmMeta = tuple_cat(AllGemmMeta_FP16, AllGemmMeta_FP8);
-
-  template <int SplitIdx, int NSplits, int ArchFilter = 0>
-  static constexpr auto
-  enumerate_split_meta_hparams_pairs() {
-    auto meta_split = split_slice_meta<SplitIdx, NSplits, ArchFilter>();
-    return tuple_unpack_cat(tuple_transform(meta_split, [](auto meta) {
-      if constexpr (tuple_has_elem(AllGemmMeta_FP16, meta)) {
-        return tuple_enumerate(
-            make_space_meta_hparams_pair(cute::make_tuple(meta), AllGemmHParams_FP16));
-      } else {
-        return tuple_enumerate(
-            make_space_meta_hparams_pair(cute::make_tuple(meta), AllGemmHParams_FP8));
-      }
-    }));
-  }
-};
-
 }  // namespace bytedance::flux

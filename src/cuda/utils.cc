@@ -1,6 +1,6 @@
 //===- utils.cc -------------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,6 +17,7 @@
 
 #include "flux/utils.h"
 #include <stdio.h>
+#include <exception>
 #include <string>
 #include <stdlib.h>
 
@@ -33,33 +34,53 @@ std::ostream null_stream(&null_buffer);
 
 int
 get_int_from_env(const char *env, int default_value) {
-  auto *env_str = getenv(env);
-  if (env_str == nullptr) {
+  try {
+    auto *env_str = getenv(env);
+    if (env_str == nullptr) {
 #if defined(FLUX_DEBUG)
-    fprintf(stderr, "env [%s] not set, using default_value: %d\n", env, default_value);
+      fprintf(stderr, "env [%s] not set, using default_value: %d\n", env, default_value);
 #endif
+      return default_value;
+    }
+#if defined(FLUX_DEBUG)
+    fprintf(stderr, "env [%s] set to %d\n", env, std::stoi(env_str));
+#endif
+    return std::stoi(env_str);
+  } catch (const std::exception &e) {
+    fprintf(
+        stderr,
+        "invalid INT enviroment variable [%s], set to default value %d. exception: %s\n",
+        env,
+        default_value,
+        e.what());
     return default_value;
   }
-#if defined(FLUX_DEBUG)
-  fprintf(stderr, "env [%s] set to %d\n", env, std::stoi(env_str));
-#endif
-  return std::stoi(env_str);
 }
 
 bool
 get_bool_from_env(const char *env, bool default_value) {
-  auto *env_str = getenv(env);
-  if (env_str == nullptr) {
+  try {
+    auto *env_str = getenv(env);
+    if (env_str == nullptr) {
 #if defined(FLUX_DEBUG)
-    fprintf(stderr, "env [%s] not set, using default_value: %d\n", env, default_value);
+      fprintf(stderr, "env [%s] not set, using default_value: %d\n", env, default_value);
 #endif
+      return default_value;
+    }
+    bool value = std::string(env_str) == "1" || std::string(env_str) == "ON";
+#if defined(FLUX_DEBUG)
+    fprintf(stderr, "env [%s] set to %d\n", env, value);
+#endif
+    return value;
+  } catch (const std::exception &e) {
+    fprintf(
+        stderr,
+        "invalid BOOL enviroment variable [%s], set to default value %d. exception: %s\n",
+        env,
+        default_value,
+        e.what());
     return default_value;
   }
-  bool value = std::string(env_str) == "1" || std::string(env_str) == "ON";
-#if defined(FLUX_DEBUG)
-  fprintf(stderr, "env [%s] set to %d\n", env, value);
-#endif
-  return value;
 }
 
 namespace {
@@ -114,8 +135,6 @@ DistEnv::DistEnv(int32_t rank, int32_t world_size, int32_t nnodes)
       << "invalid DistEnv with rank:" << rank << ",world_size:" << world_size;
   FLUX_CHECK(local_world_size * nnodes == world_size)
       << "invalid DistEnv with world_size:" << world_size << " % nnodes:" << nnodes << " != 0";
-  FLUX_CHECK(local_world_size <= kMaxLocalWorldSize)
-      << local_world_size << " > " << kMaxLocalWorldSize;
 }
 
 }  // namespace bytedance::flux

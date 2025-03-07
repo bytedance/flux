@@ -1,6 +1,6 @@
 ################################################################################
 #
-# Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+# Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -15,8 +15,13 @@
 #
 ################################################################################
 
+from typing import Optional
+
 import torch
 import torch.distributed as dist
+
+import flux
+
 from . import cpp_mod
 
 MAX_NUM_SIGNAL = 64
@@ -68,20 +73,6 @@ def get_intra_node_ag_group(tp_group: dist.ProcessGroup, nnodes: int):
     return INTRA_NODE_AG_KERNEL_GROUP
 
 
-def _auto_ring_mode() -> cpp_mod.AgRingMode:
-    import os
-
-    if os.getenv("FLUX_AG_CROSSNODE_RING_MODE") is not None:
-        return cpp_mod.AgRingMode(os.getenv("FLUX_AG_CROSSNODE_RING_MODE"))
-    force_nvlink = int(os.getenv("FLUX_FORCE_NVLINK", "-1"))
-    if force_nvlink == 1:  # nvlink mode
-        return cpp_mod.AgRingMode.All2All
-    elif force_nvlink == 0:  # pci-e mode
-        return cpp_mod.AgRingMode.Ring2D
-
-    return cpp_mod.AgRingMode.Auto
-
-
 class AGKernelXNode:
     def __init__(
         self,
@@ -94,15 +85,13 @@ class AGKernelXNode:
         transpose_weight: bool = True,
         gather_output: bool = False,
         local_copy: bool = False,
-        ring_mode: cpp_mod.AgRingMode = cpp_mod.AgRingMode.Auto,
+        ring_mode: Optional[cpp_mod.AGRingMode] = None,
     ) -> None:
         """
         : ring_mode[int]
-            -1 for auto: nvlink machine default to 0, non-nvlink machine default to 2
             0: nvlink mode: all-to-all
             1: 1d ring. for PCI-e communication optimization
             2: 2d ring. for PCI-e communication optimization. better performance than 1d ring
-            3: custom ring. for defining arbitrary ring at compile time
         """
         self.tp_group = tp_group
         self.world_size = self.tp_group.size()
@@ -127,13 +116,9 @@ class AGKernelXNode:
         self.input_buffer = None
         # output buffer
         self.output_buffer = None
-        if ring_mode == cpp_mod.AgRingMode.Auto:
-            self.ring_mode = _auto_ring_mode()
-        else:
-            self.ring_mode = ring_mode
-        print(f"ring_mode: {self.ring_mode}")
 
         self.cpp_op = None
+        self.ring_mode = ring_mode
         self.lazy_init_cpp_op(self.full_m)
 
     def lazy_init_cpp_op(self, full_m: int):

@@ -1,6 +1,6 @@
 //===- gemm_meta.h ------------------------------------------------ C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -29,12 +29,13 @@ struct GemmDTypeConfig : public FluxNamedTupleBase<GemmDTypeConfig, Ts...> {
   using Base = FluxNamedTupleBase<GemmDTypeConfig, Ts...>;
   static constexpr char const *Name = "GemmDTypeConfig";
   static constexpr char const *LowerName = "gemm_dtype_config";
-  static constexpr std::array<char const *, 5> Fields = {"a", "b", "c", "d", "acc"};
+  static constexpr std::array<char const *, 6> Fields = {"a", "b", "c", "d", "acc", "blockscale"};
   FLUX_NAMED_TUPLE_DEFINE_FIELD(a, 0)
   FLUX_NAMED_TUPLE_DEFINE_FIELD(b, 1)
   FLUX_NAMED_TUPLE_DEFINE_FIELD(c, 2)
   FLUX_NAMED_TUPLE_DEFINE_FIELD(d, 3)
   FLUX_NAMED_TUPLE_DEFINE_FIELD(acc, 4)
+  FLUX_NAMED_TUPLE_DEFINE_FIELD(blockscale, 5)
 
   constexpr GemmDTypeConfig() : Base() { check_type(); }
   constexpr GemmDTypeConfig(cute::tuple<Ts...> const &tup) : Base(tup) { check_type(); }
@@ -44,14 +45,26 @@ struct GemmDTypeConfig : public FluxNamedTupleBase<GemmDTypeConfig, Ts...> {
     return is_fp8_dtype(a()) && is_fp8_dtype(b());
   }
 
-  friend GemmDTypeConfig<DataTypeEnum, DataTypeEnum, DataTypeEnum, DataTypeEnum, DataTypeEnum>
+  constexpr bool
+  is_input_s8() const {
+    return is_s8_dtype(a()) && is_s8_dtype(b());
+  }
+
+  friend GemmDTypeConfig<
+      DataTypeEnum,
+      DataTypeEnum,
+      DataTypeEnum,
+      DataTypeEnum,
+      DataTypeEnum,
+      DataTypeEnum>
   unify_type(GemmDTypeConfig const &obj) {
     return cute::make_tuple(
         unify_type(obj.a()),
         unify_type(obj.b()),
         unify_type(obj.c()),
         unify_type(obj.d()),
-        unify_type(obj.acc()));
+        unify_type(obj.acc()),
+        unify_type(obj.blockscale()));
   }
 
  protected:
@@ -62,6 +75,8 @@ struct GemmDTypeConfig : public FluxNamedTupleBase<GemmDTypeConfig, Ts...> {
     static_assert(is_of_type_v<decltype(c()), DataTypeEnum>, "c() requires DataTypeEnum");
     static_assert(is_of_type_v<decltype(d()), DataTypeEnum>, "d() requires DataTypeEnum");
     static_assert(is_of_type_v<decltype(acc()), DataTypeEnum>, "acc() requires DataTypeEnum");
+    static_assert(
+        is_of_type_v<decltype(blockscale()), DataTypeEnum>, "blockscale() requires DataTypeEnum");
   }
 };
 
@@ -77,15 +92,22 @@ template <class T>
 inline constexpr bool is_gemm_dtype_config_v =
     detail::is_gemm_dtype_config<decay_and_strip_t<T>>::value;
 
-template <class DTypeA, class DTypeB, class DTypeC, class DTypeD, class DTypeAcc = _FP32>
-constexpr GemmDTypeConfig<DTypeA, DTypeB, DTypeC, DTypeD, DTypeAcc>
+template <
+    class DTypeA,
+    class DTypeB,
+    class DTypeC,
+    class DTypeD,
+    class DTypeAcc = _FP32,
+    class DTypeBlockScale = _FP32>
+constexpr GemmDTypeConfig<DTypeA, DTypeB, DTypeC, DTypeD, DTypeAcc, DTypeBlockScale>
 make_gemm_dtype_config(
     DTypeA const &dtype_a,
     DTypeB const &dtype_b,
     DTypeC const &dtype_c,
     DTypeD const &dtype_d,
-    DTypeAcc const &dtype_acc = _FP32{}) {
-  return {cute::make_tuple(dtype_a, dtype_b, dtype_c, dtype_d, dtype_acc)};
+    DTypeAcc const &dtype_acc = _FP32{},
+    DTypeBlockScale const &dtype_blockscale = _FP32{}) {
+  return {cute::make_tuple(dtype_a, dtype_b, dtype_c, dtype_d, dtype_acc, dtype_blockscale)};
 }
 
 template <class DTypeOrDTypeConfig>
@@ -95,7 +117,7 @@ make_gemm_dtype_config(DTypeOrDTypeConfig const &x) {
     return x;
   } else {
     static_assert(is_of_type_v<DTypeOrDTypeConfig, DataTypeEnum>, " requires DataTypeEnum.");
-    return make_gemm_dtype_config(x, x, x, x, _FP32{});
+    return make_gemm_dtype_config(x, x, x, x, _FP32{}, _FP32{});
   }
 }
 
@@ -151,33 +173,36 @@ struct GemmV3Meta : FluxNamedTupleBase<GemmV3Meta, Ts...> {
 
   static constexpr char const *Name = "GemmV3Meta";
   static constexpr char const *LowerName = "gemm_v3_meta";
-  static constexpr std::array<char const *, 1> Fields = {"fast_accum"};
+  static constexpr std::array<char const *, 2> Fields = {"fast_accum", "block_scale"};
 
   FLUX_NAMED_TUPLE_DEFINE_FIELD(fast_accum, 0)
+  FLUX_NAMED_TUPLE_DEFINE_FIELD(block_scale, 1)
 
   constexpr GemmV3Meta(cute::tuple<Ts...> const &tup) : Base(tup) { check_type(); }
 
-  friend GemmV3Meta<bool>
+  friend GemmV3Meta<bool, bool>
   unify_type(GemmV3Meta const &obj) {
-    return cute::make_tuple(bool(obj.fast_accum()));
+    return cute::make_tuple(bool(obj.fast_accum()), bool(obj.block_scale()));
   }
 
  protected:
   constexpr void
   check_type() const {
     static_assert(is_of_type_v<decltype(fast_accum()), bool>, "fast_accum() requires bool type.");
+    static_assert(
+        is_of_type_v<decltype(block_scale()), bool>, "block_scale() requires bool type.");
   };
 };
 
-template <class FastAccum>
-constexpr GemmV3Meta<FastAccum>
-make_gemm_v3_meta(FastAccum const &fast_accum) {
-  return {fast_accum};
+template <class FastAccum, class BlockScale = _False>
+constexpr GemmV3Meta<FastAccum, BlockScale>
+make_gemm_v3_meta(FastAccum const &fast_accum, BlockScale const &block_scale = _False{}) {
+  return {cute::make_tuple(fast_accum, block_scale)};
 }
 
-inline constexpr GemmV3Meta<_False>
+inline constexpr GemmV3Meta<_False, _False>
 to_gemm_v3_meta(None const &) {
-  return {_False{}};
+  return {cute::make_tuple(_False{}, _False{})};
 }
 
 template <class... Ts, __CUTE_REQUIRES(sizeof...(Ts) > 0)>
