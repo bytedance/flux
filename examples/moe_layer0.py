@@ -17,397 +17,356 @@
 
 import argparse
 import os
-import time
-from typing import List, Tuple, Union
+from functools import partial
+from typing import Any, List, Optional
 
 import torch
 import torch.distributed
 
 import flux
 import flux.testing
-from flux.testing import (
-    DTYPE_MAP,
-    initialize_distributed,
-    gate_func,
-    moe_gather_rs_forward_torch,
-    generate_data,
-)
+from flux.testing import DTYPE_MAP, RING_MODE_MAP, MoeAgScatterWithTorch, MoeMlp1Ctx
 from flux.testing.perf_db_helper import log_perf, set_global_args, should_log_to_rds
-from flux.util import get_arch
+from flux.testing.utils import all_gather_into_tensor_with_fp8
+
+
+DIST_ENV = flux.get_dist_env()
+TP_GROUP = DIST_ENV.get_world()
+EP_GROUP = None
+torch.cuda.set_device(DIST_ENV.LOCAL_RANK)
+print = partial(print, flush=True)
+
+
+def init_ep_group(ep_size: int):
+    assert DIST_ENV.WORLD_SIZE % ep_size == 0, f"{DIST_ENV.WORLD_SIZE} % {ep_size} != 0"
+    global EP_GROUP
+    assert EP_GROUP is None, "EP_GROUP already initialized"
+
+    assert TP_GROUP.size() % ep_size == 0, f"{TP_GROUP.size()} % {ep_size} != 0"
+    ffn_tp_size = TP_GROUP.size() // ep_size
+
+    temp_groups = []
+    for i in range(ffn_tp_size):
+        ranks = list(range(i, DIST_ENV.WORLD_SIZE, ffn_tp_size))
+        temp_groups.append(ranks)
+
+    ep_groups = []
+    for group in temp_groups:
+        for i in range(0, len(group), ep_size):
+            ep_groups.append(group[i : i + ep_size])
+
+    for ranks in ep_groups:
+        group = DIST_ENV.new_group(ranks)
+        if DIST_ENV.RANK in ranks:
+            EP_GROUP = group
 
 
 class PerfResult:
-    def __init__(self, name: str, output: torch.Tensor, gemm_time_ms: float) -> None:
+    def __init__(
+        self,
+        name: str,
+        outputs: List[torch.Tensor],
+        gathered_input: torch.Tensor,
+        gemm_time_ms: float,
+        scatter_time_ms: float,
+        comm_time_ms: float,
+    ) -> None:
         self.name = name
-        self.output = output
+        self.outputs = outputs
+        self.gathered_input = gathered_input
         self.gemm_time_ms = gemm_time_ms
-        self.total_ms = self.gemm_time_ms
+        self.scatter_time_ms = scatter_time_ms
+        self.comm_time_ms = comm_time_ms
+        self.total_ms = self.gemm_time_ms + self.scatter_time_ms + self.comm_time_ms
 
     def __repr__(self) -> str:
-        return f"{self.name}: gemm {self.gemm_time_ms:.3f} ms"
+        return (
+            f"{self.name}: gemm {self.gemm_time_ms:.3f} ms"
+            f", scatter {self.scatter_time_ms:.3f} ms"
+            f", comm {self.comm_time_ms:.3f} ms"
+        )
 
 
-def perf_gemm(iters: int, warmup_iters: int, name: str, fn: callable):
-    for _ in range(warmup_iters):
-        output = fn()
+@torch.no_grad()
+def perf_torch(ctx: MoeMlp1Ctx, warmup_iters: int, iters: int, gather_input: bool = True):
+    gemm_only_op = flux.GemmOnly(
+        ctx.inputs.dtype,
+        ctx.outputs[0].dtype,
+        use_fp8_gemm=flux.util.get_arch() < 90 and flux.is_fp8_dtype(ctx.inputs.dtype),
+    )
+
+    total_iters = warmup_iters + iters
+    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
+    comm_end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
+    scatter_end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
+    gemm_end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
+    ctx.clear_outputs()
+    torch.distributed.barrier()
     torch.cuda.synchronize()
-    total_time = 0
-    start = time.time()
-    for _ in range(iters):
-        output = fn()
-    torch.cuda.synchronize()
-    end = time.time()
-    total_time = end - start
-    return PerfResult(name=name, output=output, gemm_time_ms=total_time / iters * 1000)
 
+    for i in range(total_iters):
+        start_events[i].record()
+        MoeAgScatterWithTorch.comm_impl(ctx, TP_GROUP)
+        comm_end_events[i].record()
+        MoeAgScatterWithTorch.scatter_impl(ctx)
+        scatter_end_events[i].record()
+        MoeAgScatterWithTorch.gemm_impl(ctx, gemm_only_op)
+        gemm_end_events[i].record()
+    comm_times = []
+    scatter_times = []
+    gemm_times = []
+    for i in range(total_iters):
+        comm_end_events[i].synchronize()
+        scatter_end_events[i].synchronize()
+        gemm_end_events[i].synchronize()
+        if i >= warmup_iters:
+            comm_times.append(start_events[i].elapsed_time(comm_end_events[i]))
+            scatter_times.append(comm_end_events[i].elapsed_time(scatter_end_events[i]))
+            gemm_times.append(scatter_end_events[i].elapsed_time(gemm_end_events[i]))
+    comm_time = sum(comm_times) / iters
+    scatter_time = sum(scatter_times) / iters
+    gemm_time = sum(gemm_times) / iters
 
-def perf_torch(
-    inputs: Union[torch.Tensor, List[torch.Tensor]],
-    weights: Union[torch.Tensor, List[torch.Tensor]],
-    split_cpu: torch.Tensor,
-    iters: int,
-    warmup_iters: int,
-    token_index: torch.Tensor,
-    topk_index: torch.Tensor,
-    topk: int,
-    input_scales: Union[torch.Tensor, List[torch.Tensor], None],
-    weight_scales: Union[torch.Tensor, List[torch.Tensor], None],
-    output_vec_scales: Union[torch.Tensor, List[torch.Tensor], None],
-    do_all_reduce: bool = False,
-):
-
-    return perf_gemm(
-        iters,
-        warmup_iters,
-        f"torch #{TP_GROUP.rank()}",
-        lambda: moe_gather_rs_forward_torch(
-            TP_GROUP,
-            args.M,
-            eid_start,
-            ep_rank_m_start,
-            ep_rank_m_end,
-            inputs,
-            weights,
-            split_cpu,
-            token_index,
-            topk_index,
-            topk,
-            input_scales,
-            weight_scales,
-            output_vec_scales,
-            do_all_reduce,
-            fast_acc=args.fastacc,
-        ),
+    return PerfResult(
+        name=f"torch #{TP_GROUP.rank()}",
+        outputs=ctx.get_outputs_clone(),
+        gathered_input=flux.testing.clone_with_fp8(ctx.inputs),
+        gemm_time_ms=gemm_time,
+        scatter_time_ms=scatter_time,
+        comm_time_ms=comm_time,
     )
 
 
+@torch.no_grad()
 def perf_flux(
-    input: Union[torch.Tensor, List[torch.Tensor]],
-    weight: Union[torch.Tensor, List[torch.Tensor]],
-    split_cpu: torch.Tensor,
-    iters: int,
+    ctx: MoeMlp1Ctx,
     warmup_iters: int,
-    max_m: int,
-    topk: int,
-    routing_idx: torch.Tensor,
-    input_scale: Union[torch.Tensor, List[torch.Tensor], None],
-    weight_scale: Union[torch.Tensor, List[torch.Tensor], None],
-    output_vec_scale: Union[torch.Tensor, List[torch.Tensor], None],
-    do_all_reduce: bool = False,
-    use_read_mode: bool = False,
+    iters: int,
+    gather_input: bool = True,
 ):
-    n_dim = args.N
-    if isinstance(weight, torch.Tensor):
-        assert weight.size(1) == n_dim
-    elif isinstance(weight, list):
-        assert weight[0].size(1) == n_dim
+    tp_env = flux.DistEnvTPWithEP(tp_group=TP_GROUP, nnodes=DIST_ENV.NNODES, ep_group=EP_GROUP)
+    moe_args = flux.MoeArguments(
+        max_ntokens=ctx.b * ctx.s,
+        hidden=ctx.h,
+        ffn_hidden=ctx.ffn_size,
+        nexperts=ctx.nexperts,
+        topk=ctx.topk,
+        input_dtype=ctx.inputs_shard.dtype,
+        output_dtype=ctx.outputs[0].dtype,
+    )
 
-    input_dtype = input.dtype if isinstance(input, torch.Tensor) else input[0].dtype
-    is_fp8 = flux.is_fp8_dtype(input_dtype)
-    is_s8 = input_dtype == torch.int8
-    output_dtype = torch.bfloat16 if is_fp8 or is_s8 else input_dtype
+    extra_args = {}
     if flux.util.get_arch() >= 90:
-        op = flux.GemmGroupedV3GatherRS(
-            args.G, max_m, n_dim, topk, RANK, WORLD_SIZE, args.T, args.E, args.input_groups
-        )
+        op = flux.GemmGroupedV3AGScatter(tp_env=tp_env, moe_args=moe_args)
     else:
-        op = flux.GemmGroupedV2GatherRSOp(
-            TP_GROUP,
-            args.G,
-            max_m,
-            n_dim,
-            topk,
-            output_dtype,
-            args.T,
-            args.E,
-            args.input_groups,
-            do_all_reduce=do_all_reduce,
-            use_read_mode=use_read_mode,
+        op = flux.GemmGroupedV2AGScatterOp(tp_env=tp_env, moe_args=moe_args)
+
+    total_iters = warmup_iters + iters
+    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
+    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
+    ctx.clear_outputs()
+    torch.cuda.synchronize()
+    torch.distributed.barrier()
+    gathered_input = torch.empty_like(ctx.inputs) if gather_input else None
+    for i in range(total_iters):
+        ctx.clear_outputs()
+        op.clear_buffers()
+        start_events[i].record()
+        op.forward(
+            inputs_shard=ctx.inputs_shard,
+            weights=ctx.weights[0],
+            splits_gpu=ctx.splits_gpu,
+            scatter_index=ctx.scatter_index,
+            output_scale=ctx.output_scale[0],
+            outputs_buf=ctx.outputs[0],
+            fast_accum=ctx.fast_accum,
+            sm_margin=args.sm_margin,
+            allgather_output=gathered_input,
+            **extra_args,
         )
+        end_events[i].record()
 
-    def fn():
-        is_v2 = get_arch() < 90
-        extra_args = {} if not is_v2 else {"bias": None}
-        if isinstance(input, torch.Tensor):
-            return op.forward_gather_rs(
-                input,
-                weight,
-                split_cpu,
-                routing_idx,
-                input_scale=input_scale,
-                weight_scale=weight_scale,
-                output_vec_scale=output_vec_scale,
-                fast_accum=args.fastacc,
-                sm_margin=args.sm_margin,
-                **extra_args,
-            )
-        else:
-            return op.forward_gather_rs_multiple(
-                input,
-                weight,
-                split_cpu,
-                routing_idx,
-                input_scale=input_scale,
-                weight_scale=weight_scale,
-                output_vec_scale=output_vec_scale,
-                fast_accum=args.fastacc,
-                sm_margin=args.sm_margin,
-                **extra_args,
-            )
+    gemm_times = []
+    for i in range(total_iters):
+        end_events[i].synchronize()
+        if i >= warmup_iters:
+            gemm_times.append(start_events[i].elapsed_time(end_events[i]))
 
-    return perf_gemm(iters, warmup_iters, f"flux #{TP_GROUP.rank()}", fn)
+    gemm_time_ms = sum(gemm_times) / iters
 
+    return PerfResult(
+        name=f"flux #{TP_GROUP.rank()}",
+        outputs=ctx.get_outputs_clone(),
+        gathered_input=gathered_input,
+        gemm_time_ms=gemm_time_ms,
+        scatter_time_ms=0.0,
+        comm_time_ms=0.0,
+    )
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-M", type=int, default=32768)
-    parser.add_argument("-N", type=int, default=8192)
-    parser.add_argument("-K", type=int, default=8192)
-    parser.add_argument("-G", type=int, default=32)
-    parser.add_argument("-E", type=int, default=1, help="Expert parallel world size")
-    parser.add_argument("-T", type=int, default=8, help="Tensor parallel world size")
-    parser.add_argument("--topk", type=int, default=4)
-    parser.add_argument("--iters", default=10, type=int, help="perf iterations")
-    parser.add_argument("--warmup_iters", default=5, type=int, help="warmup iterations")
-    parser.add_argument("--sm_margin", default=0, type=int, help="sm margin")
-    parser.add_argument(
-        "--dtype", default="bfloat16", help="data type", choices=list(DTYPE_MAP.keys())
-    )
-    parser.add_argument(
-        "--fastacc", default=False, action="store_true", help="whether to enbale fast accumulate"
-    )
     parser.add_argument(
         "--dist",
         type=str,
         default="random",
-        choices=["uniform", "random", "random_with_first_k_experts"],
+        choices=["uniform", "random_uniform", "random", "random_with_first_k_experts"],
     )
-    parser.add_argument("--profile", action="store_true", default=False)
-    parser.add_argument("--input_groups", type=int, default=1, help="The number of input groups")
+    parser.add_argument("--B", type=int, default=1)
+    parser.add_argument("--S", type=int, default=8192)
+    parser.add_argument("--H", type=int, default=8192)
+    parser.add_argument("--ffn_hidden_size", type=int, default=8192)
+    parser.add_argument("--topk", type=int, default=4)
+    parser.add_argument("--G", type=int, default=32)
+    parser.add_argument("--iters", default=10, type=int, help="perf iterations")
+    parser.add_argument("--warmup_iters", default=10, type=int, help="warmup iterations")
+    parser.add_argument("--sm_margin", default=0, type=int, help="sm margin")
     parser.add_argument(
-        "--all_reduce", default=False, action="store_true", help="whether to use all_reduce"
+        "--dtype", default="bfloat16", help="data type", choices=list(DTYPE_MAP.keys())
     )
-    parser.add_argument("--use_read_mode", default=False, action="store_true")
+    parser.add_argument("-E", "--E", default=1, type=int, help="ep size")
     parser.add_argument(
-        "--debug", default=False, action="store_true", help="whether to use debug mode"
+        "--fast_accum", default=False, action="store_true", help="fp8 use fast accum"
+    )
+    parser.add_argument(
+        "--profile", default=False, action="store_true", help="dump torch.profiler.profile"
+    )
+    parser.add_argument(
+        "--drop_token",
+        default=False,
+        action="store_true",
+        help="if True, splits will have an additional item, tokens in whitch are droped",
+    )
+    parser.add_argument("--debug", default=False, action="store_true", help="debug mode")
+    parser.add_argument(
+        "--bias", action=argparse.BooleanOptionalAction, default=False, help="whether to add bias"
+    )
+    parser.add_argument(
+        "--gather_input",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="gather input",
+    )
+    parser.add_argument(
+        "--stable_index",
+        default=False,  # use harder cases.
+        action="store_true",
+        help="use sorted gather_index for each expert",
     )
     return parser.parse_args()
 
 
-ABSOLUTE_THRESHOLD_MAP = {
-    torch.float16: 1e-2,
-    torch.bfloat16: 2e-2,
-    torch.float8_e4m3fn: 3e-2,
-    torch.float8_e5m2: 3e-2,
-    torch.int8: 2e-1,
+OUT_DTYPE_MAP = {
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+    "float8_e4m3fn": torch.bfloat16,
+    "float8_e5m2": torch.bfloat16,
+    "s8": torch.bfloat16,
 }
-
-RELATIVE_THRESHOLD_MAP = {
-    torch.float16: 1e-2,
-    torch.bfloat16: 2e-2,
-    torch.float8_e4m3fn: 3e-2,
-    torch.float8_e5m2: 3e-2,
-    torch.int8: 3e-2,
-}
-
-
-def _print_tensor_desc(name, tensor: Tuple[torch.Tensor, List[torch.Tensor]]):
-    if isinstance(tensor, torch.Tensor):
-        print(f"{name}: {tensor.shape} of {tensor.dtype} at {tensor.device}")
-    elif isinstance(tensor, List):
-        print(
-            f"{name}: {tensor[0].shape} of {tensor[0].dtype} at {tensor[0].device} of group {(len(tensor))}"
-        )
-
 
 if __name__ == "__main__":
-    TP_GROUP = initialize_distributed()
-    RANK, WORLD_SIZE, NNODES = TP_GROUP.rank(), TP_GROUP.size(), flux.testing.NNODES()
-
     args = parse_args()
+    init_ep_group(args.E)
 
-    assert args.M % TP_GROUP.size() == 0
-    assert args.K % TP_GROUP.size() == 0
-    assert args.M % args.topk == 0
-    assert TP_GROUP.size() == args.T * args.E
-    local_K = args.K // args.T
-
-    ori_token_num = args.M // args.topk
-    generator = torch.Generator("cuda")
-    generator.manual_seed(12345)
-    random_seq_len, random_gate, token_index, topk_index, routing_idx = gate_func(
-        ori_token_num, args.G, args.topk, args.dist, generator
-    )
-
-    split_cpu = random_seq_len
-    n_experts_per_rank = args.G // args.E
-    ep_rank = TP_GROUP.rank() // args.T
-    tp_rank = TP_GROUP.rank() % args.T
-    eid_start = ep_rank * n_experts_per_rank
-    eid_end = eid_start + n_experts_per_rank
-    partial_split_cpu = split_cpu[eid_start:eid_end]
-    ep_rank_m_start = 0
-    for i in range(eid_start):
-        ep_rank_m_start += split_cpu[i]
-    M_cur_ep_rank = torch.sum(random_seq_len[eid_start:eid_end]).item()
-    ep_rank_m_end = ep_rank_m_start + M_cur_ep_rank
+    print("before flux_shm initialization")
+    flux.init_flux_shm(TP_GROUP)
+    torch.cuda.synchronize()
+    print("after flux_shm initialization")
 
     input_dtype = DTYPE_MAP[args.dtype]
     is_fp8 = flux.util.is_fp8_dtype(input_dtype)
     is_s8 = torch.int8 == input_dtype
     output_dtype = torch.bfloat16 if is_fp8 or is_s8 else input_dtype
+    generator = torch.Generator(device="cuda")
+    generator.manual_seed(12345)  # use the same random generator to generate the same distribution
+    moe_ctx = MoeMlp1Ctx(
+        TP_GROUP,
+        EP_GROUP,
+        b=args.B,
+        s=args.S,
+        h=args.H,
+        ffn_size=args.ffn_hidden_size,
+        nexperts=args.G,
+        topk=args.topk,
+        input_dtype=input_dtype,
+        output_dtype=output_dtype,
+        dist=args.dist,
+        fast_accum=args.fast_accum,
+        weight_groups=1,
+        drop_token=args.drop_token,
+        debug=args.debug,
+        generator=generator,
+        stable=args.stable_index,
+    )
 
-    weight_scale = 0.5 / 255.0 if is_s8 else 1
-    if is_s8:
-        data_config = [
-            ((M_cur_ep_rank, local_K), input_dtype, (127, 0)),  # input
-            ((n_experts_per_rank, args.N, local_K), input_dtype, (127, 0)),  # weight
-            ((n_experts_per_rank, args.N), torch.float32, (weight_scale, 0)),  # weight_scale
-        ]
-    else:
-        data_config = [
-            ((M_cur_ep_rank, local_K), input_dtype, (0.1, 0)),  # input
-            ((n_experts_per_rank, args.N, local_K), input_dtype, (0.1, 0)),  # weight
-            ((n_experts_per_rank,), torch.float32, (weight_scale, 0)),  # weight_scale
-        ]
-    input_scale = 1 / 255.0 if is_s8 else 1
-    input_scale_shape = M_cur_ep_rank if is_s8 else 1
-    data_config += [
-        ((input_scale_shape,), torch.float32, (input_scale, 0)),  # input_scale
-        ((M_cur_ep_rank,), torch.float32, (1, 0)),  # output_scale
-    ]
+    if TP_GROUP.rank() == 0:
+        print(
+            f"Splits:{moe_ctx.splits_cpu.tolist()}, Shape:{moe_ctx.splits_cpu.shape}, Sum:{sum(moe_ctx.splits_cpu.tolist())}"
+        )
 
-    generator = generate_data(data_config)
-    inputs, weights, weight_scales, input_scales, output_vec_scales = [
-        *zip(*[list(next(generator)) for _ in range(args.input_groups)])
-    ]
-    if args.E == 1 and flux.util.get_arch() >= 90:
-        [x.fill_(1) for x in output_vec_scales]
-
-    if args.debug:
-        for _input, _weight in zip(inputs, weights):
-            _input.fill_(0)
-            _weight.fill_(1)
-            _input[:, 0] = torch.arange(1, M_cur_ep_rank + 1, dtype=torch.float32) % (
-                M_cur_ep_rank // TP_GROUP.size()
-            )
-
-        for input_scale in input_scales:
-            if input_scale is not None:
-                input_scale.fill_(1)
-        for weight_scale in weight_scales:
-            if weight_scale is not None:
-                weight_scale.fill_(1)
-        for output_vec_scale in output_vec_scales:
-            if output_vec_scale is not None:
-                output_vec_scale.fill_(2)
-
-    if args.input_groups == 1:
-        inputs = inputs[0]
-        weights = weights[0]
-        input_scales = input_scales[0]
-        weight_scales = weight_scales[0]
-        output_vec_scales = output_vec_scales[0]
-        _print_tensor_desc("input", inputs)
-        _print_tensor_desc("weight", weights)
-    print("split_cpu:", random_seq_len)
-    _print_tensor_desc("token_index", token_index)
-    _print_tensor_desc("topk_index", topk_index)
-    _print_tensor_desc("weight_scale", weight_scales)
-    _print_tensor_desc("input_scale", input_scales)
-    _print_tensor_desc("routing_idx: ", routing_idx)
-    torch.distributed.barrier()
-
+    TP_GROUP.barrier()
+    torch.cuda.synchronize()
     with flux.group_profile(
-        name="moe_gather_rs_" + os.environ["TORCHELASTIC_RUN_ID"],
+        name="moe_ag_scatter_" + os.environ["TORCHELASTIC_RUN_ID"],
         do_prof=args.profile,
         group=TP_GROUP,
     ):
         perf_result_flux = perf_flux(
-            inputs,
-            weights,
-            split_cpu,
-            args.iters,
-            args.warmup_iters,
-            args.M,
-            args.topk,
-            routing_idx,
-            input_scales,
-            weight_scales,
-            output_vec_scales,
-            args.all_reduce,
-            args.use_read_mode,
+            moe_ctx, args.warmup_iters, args.iters, args.gather_input
         )
-
-        perf_result_torch = perf_torch(
-            inputs,
-            weights,
-            split_cpu,
-            args.iters,
-            args.warmup_iters,
-            token_index,
-            topk_index,
-            args.topk,
-            input_scales,
-            weight_scales,
-            output_vec_scales,
-            args.all_reduce,
-        )
+        perf_result_torch = perf_torch(moe_ctx, args.warmup_iters, args.iters, args.gather_input)
 
     if TP_GROUP.rank() == 0:
         flux.testing.print_grouped_gemm_sol_time_ms(
-            args.M,
-            args.N,
-            local_K,
-            n_experts_per_rank,
-            input_dtype,
-            num_groups=args.input_groups,
+            moe_ctx.ntokens * moe_ctx.topk,
+            moe_ctx.ffn_size_shard,
+            moe_ctx.h,
+            args.G // args.E,  # E
+            input_dtype=input_dtype,
         )
-    TP_GROUP.barrier()
     if should_log_to_rds():
-        set_global_args("moe_gather_rs", args)
+        set_global_args("moe_ag_scatter", args)
     flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_torch))
     flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_flux))
-    atol, rtol = ABSOLUTE_THRESHOLD_MAP[input_dtype], RELATIVE_THRESHOLD_MAP[input_dtype]
-    TP_GROUP.barrier()
 
-    def check_result():
-        print(f"#{TP_GROUP.rank()} Threshold = Atol:{atol}  Rtol:{rtol}")
-        print(f"flux  output shape: {flux_output.size()}")
-        print(f"torch output shape: {torch_output.size()}")
-
-        try:
-            flux.torch_allclose(flux_output, torch_output, atol=atol, rtol=rtol)
-        except Exception as e:
-            torch.save(flux_output, f"flux_output_{TP_GROUP.rank()}.pt")
-            torch.save(torch_output, f"torch_output_{TP_GROUP.rank()}.pt")
-            print("❌ flux and torch not matches")
-            raise e
+    if input_dtype == torch.float16:
+        atol, rtol = 1e-2, 1e-3
+    elif input_dtype == torch.bfloat16:
+        atol, rtol = 1e-2, 1.5e-2
+    elif input_dtype == torch.int8:
+        atol, rtol = 1e-9, 1e-9  # bitwise match
+    elif is_fp8:
+        if args.fast_accum:
+            atol, rtol = 1e-2, 3 / 2**7
         else:
-            print("✅ flux and torch matches")
+            atol, rtol = 1e-2, 1.5e-2
+    else:
+        raise ValueError(f"Unsupported dtype {input_dtype}")
 
+    def check_result(perf_out_x, perf_out_y, name_x: str, name_y: str):
+        print(f"Checking RANK #{TP_GROUP.rank()}...")
+        if args.gather_input:
+            assert flux.testing.bitwise_eq(perf_out_x.gathered_input, perf_out_y.gathered_input)
+        for x, y in zip(perf_out_x.outputs, perf_out_y.outputs):
+            print("output shape", x.size())
+            if flux.testing.bitwise_eq(x, y):
+                print(f"✅ {name_x} and torch bitwise match")
+            else:
+                print(f"❌ {name_x} and torch not bitwise match")
+            try:
+                flux.torch_allclose(x, y, atol=atol, rtol=rtol)
+            except Exception as e:
+                torch.save(x, f"{name_x}_{TP_GROUP.rank()}.pt")
+                torch.save(y, f"{name_y}_{TP_GROUP.rank()}.pt")
+                torch.save(moe_ctx, f"moe_ctx_{TP_GROUP.rank()}.pt")
+                print(f"❌ {name_x} check failed")
+                raise e
+            else:
+                print(f"✅ {name_x} check passed")
 
-    torch_output = perf_result_torch.output
-    flux_output = perf_result_flux.output
-    flux.exec_in_rank_order(TP_GROUP, check_result)
+    flux.exec_in_rank_order(
+        TP_GROUP, lambda: check_result(perf_result_flux, perf_result_torch, "flux", "torch")
+    )
+
+    TP_GROUP.barrier()
+    torch.cuda.synchronize()
