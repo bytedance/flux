@@ -195,7 +195,9 @@ class MoeMlp1Ctx:
 class MoeAgScatterWithTorch(object):
     @staticmethod
     def comm_impl(ctx, TP_GROUP):
-        all_gather_into_tensor_with_fp8(ctx.inputs, ctx.inputs_shard, group=TP_GROUP)
+        if ctx.naive_impl:
+            all_gather_into_tensor_with_fp8(ctx.inputs, ctx.inputs_shard, group=TP_GROUP)
+            return
         if ctx.is_s8:
             if ctx.input_scale is not None:
                 for i in range(ctx.weight_groups):
@@ -205,12 +207,14 @@ class MoeAgScatterWithTorch(object):
 
     @staticmethod
     def scatter_impl(ctx):
-        if flux.is_fp8_dtype(ctx.inputs.dtype):
-            ctx.scatter_inputs.view(torch.uint8).copy_(
-                torch.index_select(ctx.inputs.view(torch.uint8), dim=0, index=ctx.gather_index)
-            )
-        else:
-            ctx.scatter_inputs.copy_(torch.index_select(ctx.inputs, dim=0, index=ctx.gather_index))
+        if ctx.naive_impl:
+            if flux.is_fp8_dtype(ctx.inputs.dtype):
+                ctx.scatter_inputs.view(torch.uint8).copy_(
+                    torch.index_select(ctx.inputs.view(torch.uint8), dim=0, index=ctx.gather_index)
+                )
+            else:
+                ctx.scatter_inputs.copy_(torch.index_select(ctx.inputs, dim=0, index=ctx.gather_index))
+            return
 
         if ctx.is_s8 and ctx.input_scale is not None:
             for n in range(ctx.weight_groups):
@@ -219,7 +223,7 @@ class MoeAgScatterWithTorch(object):
                 )
 
     @staticmethod
-    def gemm_impl(ctx, gemm_only_op):
+    def gemm_impl(ctx, gemm_only_op = None):
         offset = 0
         expert_id_offset = ctx.nexperts_ep * ctx.ep_rank
         input_offset = torch.sum(ctx.splits_cpu[:expert_id_offset])
@@ -227,6 +231,15 @@ class MoeAgScatterWithTorch(object):
             nxt_offset = offset + ctx.splits_cpu[exp_id + expert_id_offset]
             if nxt_offset - offset > 0:
                 exp_input = ctx.scatter_inputs[offset + input_offset : nxt_offset + input_offset]
+                # if ctx.naive_impl:
+                #     out = ctx.output[offset:nxt_offset]
+                #     torch.matmul(
+                #         exp_input,
+                #         ctx.weights[exp_id].t(),
+                #         out=out,
+                #     )
+                #     return
+
                 for i in range(ctx.weight_groups):
                     out = ctx.outputs[i][offset:nxt_offset]
                     if flux.is_fp8_dtype(exp_input.dtype):
@@ -256,7 +269,7 @@ class MoeAgScatterWithTorch(object):
                     # TODO(houqi.1993) xperf_gpt has no output_scale. so don't know the order of output_scale and bias, leave it as bias first.
                     if ctx.bias is not None:
                         out.add_(ctx.bias[i][exp_id])
-                    if not ctx.is_s8:
+                    if not ctx.is_s8 and ctx.output_scale is not None:
                         out.mul_(ctx.output_scale[i][exp_id])
 
             offset = nxt_offset

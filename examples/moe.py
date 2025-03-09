@@ -2,7 +2,7 @@ import os
 import torch
 from torch import nn
 import flux
-from flux.testing import gen_moe_gating_args
+from flux.testing import gen_moe_gating_args, moe_gather_rs_forward_torch, MoeAgScatterWithTorch
 
 
 RANK = int(os.environ.get("RANK", 0))
@@ -35,6 +35,13 @@ flux.init_flux_shm(TP_GROUP)
 init_ep_group(ep_size=2)
 
 class MoeMlp1Ctx():
+    is_s8 = False
+    fast_accum = False
+    weight_groups = 1
+    bias = None
+    output_scale = None
+    naive_impl = True
+
     h = 4096
     ffn_size = 14336
     nexperts = 8
@@ -70,17 +77,50 @@ class MoeMlp1Ctx():
     splits_cpu = moe_gating_args.splits_gpu.to("cpu")
     scatter_index = moe_gating_args.scatter_index
     gather_index = moe_gating_args.gather_index
+    topk_index = moe_gating_args.topk_index
+    eid_start = nexperts_ep * ep_rank
+    ep_rank_m_start = torch.sum(splits_cpu[:eid_start])
     nrows_ep = torch.sum(splits_cpu[nexperts_ep * ep_rank : nexperts_ep * (ep_rank + 1)])
 
     # Dummy inputs and weights for MoE layer 0
+    inputs = (torch.rand((ntokens, h), dtype=data_type, device=device))
     inputs_shard = (torch.rand((ntokens_shard, h), dtype=data_type, device=device) * 0.02 * (tp_rank + 1))
-    weights = (torch.rand((nexperts_ep, ffn_size_shard, h), dtype=data_type, device=device,) * 0.01 * (tp_rank + 1))
+    weights = [(torch.rand((nexperts_ep, ffn_size_shard, h), dtype=data_type, device=device,) * 0.01 * (tp_rank + 1))]
 
     # Dummy weights and buffers for MoE layer 1
     _weight = torch.rand((nexperts_ep, h, ffn_size_shard), dtype=data_type).cuda() - 0.5
     scatter_inputs = torch.zeros((ntokens * topk, h), dtype=data_type, device=device)
     output = torch.zeros((nrows_ep, ffn_size_shard), dtype=data_type, device=device)
+    # outputs = [output]
 
+class MoE_layer_torch(torch.nn.Module):
+    def __init__(self, ctx):
+        super().__init__()
+        self.ctx = ctx
+        # self.gemm_only_op = flux.GemmOnly(self.ctx.data_type, self.ctx.data_type)
+
+    def forward(self):
+        MoeAgScatterWithTorch.comm_impl(self.ctx, TP_GROUP)
+        MoeAgScatterWithTorch.scatter_impl(self.ctx)
+        MoeAgScatterWithTorch.gemm_impl(self.ctx)
+
+        self.ctx.output = torch.nn.functional.gelu(self.ctx.output)
+
+        mlp_output = moe_gather_rs_forward_torch(
+            TP_GROUP,
+            self.ctx.ntokens * self.ctx.topk,
+            self.ctx.eid_start,
+            self.ctx.ep_rank_m_start,
+            self.ctx.ep_rank_m_start + self.ctx.nrows_ep,
+            self.ctx.output, # layer0's output is layer1's input
+            self.ctx._weight,
+            self.ctx.splits_cpu,
+            self.ctx.gather_index,
+            self.ctx.topk_index,
+            self.ctx.topk,
+        )
+
+        return mlp_output
 
 class MoE_layer_flux(torch.nn.Module):
     def __init__(self, ctx):
@@ -110,7 +150,7 @@ class MoE_layer_flux(torch.nn.Module):
         # MLP layer 0 (dispatch and GEMM0)
         self.flux_ag_op.forward(
             inputs_shard=self.ctx.inputs_shard,
-            weights=self.ctx.weights,
+            weights=self.ctx.weights[0],
             splits_gpu=self.ctx.splits_gpu,
             scatter_index=self.ctx.scatter_index,
             outputs_buf=self.ctx.output,
@@ -133,5 +173,11 @@ class MoE_layer_flux(torch.nn.Module):
 if __name__ == "__main__":
 
     moe_ctx = MoeMlp1Ctx()
+    torch_moe = MoE_layer_torch(moe_ctx).cuda().to(torch.bfloat16)
     flux_moe = MoE_layer_flux(moe_ctx).cuda().to(torch.bfloat16)
-    output = flux_moe()
+    torch_output = torch_moe()
+    flux_output = flux_moe()
+
+    if RANK == 0:
+        print("torch_output on RANK 0: ", torch_output)
+        print("Flux_output on RANK 0: ", flux_output)
