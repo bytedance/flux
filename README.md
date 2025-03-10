@@ -84,6 +84,7 @@ python3 test/python/gemm_only/test_gemm_only.py 4096 12288 6144 --dtype=float16
 ```
 
 You can check out the documentations for more details!
+
 * For a more detailed usage on MoE kernels, please refer to [Flux MoE Usage](https://github.com/bytedance/flux/blob/main/docs/moe_usage.md). Try some [examples](https://github.com/bytedance/flux/blob/main/examples) as a quick start. A [minimal MoE layer](https://github.com/bytedance/flux/blob/main/examples/moe_flux_only.py) can be implemented within only a few tens of lines of code using Flux!
 * For some performance numbers, please refer to [Performance Doc](https://github.com/bytedance/flux/blob/main/docs/performance.md).
 * To learn more about the design principles of Flux, please refer to [Design Doc](https://github.com/bytedance/flux/blob/main/docs/design.md).
