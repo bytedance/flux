@@ -35,9 +35,9 @@ def moe_gather_rs_forward_torch(
     token_index: torch.Tensor,
     topk_index: torch.Tensor,
     topk: int,
-    input_scales: Union[torch.Tensor, List[torch.Tensor]],
-    weight_scales: Union[torch.Tensor, List[torch.Tensor]],
-    output_vec_scales: Union[torch.Tensor, List[torch.Tensor]],
+    input_scales: Union[torch.Tensor, List[torch.Tensor]] = None,
+    weight_scales: Union[torch.Tensor, List[torch.Tensor]] = None,
+    output_vec_scales: Union[torch.Tensor, List[torch.Tensor]] = None,
     do_all_reduce: bool = False,
     fast_acc: bool = False,
 ):
@@ -76,9 +76,9 @@ def moe_gather_rs_forward_torch(
             Mi = split_cpu[exp_id + eid_start]
             exp_input = input[acc : acc + Mi]
             if not is_s8:
-                scale_v = weight_scale[exp_id].item() * input_scale[0].item()
+                scale_v = weight_scale[exp_id].item() * input_scale[0].item() if input_scale is not None else 1
             else:
-                scale_v = weight_scale[exp_id, None, :] * input_scale[acc : acc + Mi, None]
+                scale_v = weight_scale[exp_id, None, :] * input_scale[acc : acc + Mi, None] if input_scale is not None else 1
             acc += Mi
             if is_fp8:
                 output_buf = torch.empty(Mi, N, dtype=torch.bfloat16).to(input.device)
@@ -93,8 +93,8 @@ def moe_gather_rs_forward_torch(
         output = torch.concat(output_list)
         # print(output.size())
         # print(output_vec_scale.size())
-        assert output.size(0) == output_vec_scale.size(0)
-        output = (output * output_vec_scale.unsqueeze(1)).to(output_type)
+        # assert output.size(0) == output_vec_scale.size(0)
+        output = (output * output_vec_scale.unsqueeze(1)).to(output_type) if output_vec_scale is not None else output
 
         new_index = (
             topk * token_index[ep_rank_m_start:ep_rank_m_end]
