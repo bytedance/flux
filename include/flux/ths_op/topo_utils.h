@@ -1,6 +1,6 @@
-//===- topo_utls.h ------------------------------------------------------ C++ ---===//
+//===- topo_utils.h ----------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,20 +16,17 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-
-#include <nccl.h>
+#include "flux/ths_op/flux_shm.h"
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
 
 namespace bytedance::flux::topo_utils {
-
-ncclComm_t create_nccl_comm_with_processgroup(c10::intrusive_ptr<c10d::ProcessGroup> pg);
 
 bool is_topo_initialized();
 /**
  * call this function multi times, you will got some warnings and only runs once really
  * @param group: this should be a local group. if not, split it to a local group from outside
  */
-void initialize_topo(c10::intrusive_ptr<c10d::ProcessGroup> group);
+void initialize_topo(bytedance::flux::Group *pg);
 void initialize_topo(const std::vector<int> &device_ids);
 
 // has any NV-link supported GPU exists

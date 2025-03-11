@@ -1,6 +1,6 @@
 ################################################################################
 #
-# Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+# Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,15 +14,12 @@
 # limitations under the License.
 #
 ################################################################################
-__version__ = "1.0.4"
-
+__version__ = "1.1.1"
 from .cpp_mod import *
-from .ag_gemm import *
 
-if not isinstance(cpp_mod.AgRingMode, cpp_mod.NotCompiled):
+if not isinstance(cpp_mod.AGRingMode, cpp_mod.NotCompiled):
     from .ag_kernel_crossnode import *
 
 from .gemm_rs_sm80 import *
 from .util import *
 from .dist_utils import *
-

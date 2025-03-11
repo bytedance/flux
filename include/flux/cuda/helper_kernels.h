@@ -1,6 +1,6 @@
 //===- helper_kernels.h ------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -34,5 +34,9 @@ void uniform_initialize(
     void *stream = nullptr);
 
 void cudaipc_barrier_all_on_stream_impl(
-    cudaStream_t stream, int32_t **sync_buffer_ptr, int rank, int world_size);
+    cudaStream_t stream,
+    int32_t **sync_buffer_ptr,
+    int rank,
+    int world_size,
+    bool ring_mode = false);
 }  // namespace bytedance::flux

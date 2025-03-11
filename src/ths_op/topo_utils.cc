@@ -1,6 +1,6 @@
 //===- topo_utils.cc -------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,7 +20,6 @@
 #include <array>
 #include <cstdio>
 #include <mutex>
-#include <numeric>
 #include <ostream>
 #include <vector>
 #include <set>
@@ -32,10 +31,9 @@
 #include "flux/cuda/cuda_stub.h"
 #include "flux/cuda/nvml_stub.h"
 #include "flux/flux.h"
-#include "flux/ths_op/util.h"
 #include "flux/utils.h"
-#include "torch/csrc/distributed/c10d/Utils.hpp"
 #include "flux/cuda/cuda_common.h"
+#include "flux/ths_op/flux_shm.h"
 
 #define MAX_BUSID_SIZE 16
 #define MAXPATHSIZE 1024
@@ -137,7 +135,7 @@ get_numa_id(const std::string &path) {
 static bool
 init_topo(const std::vector<CUdevice> &gpu_device_ids, TopoInfo &topo_info) {
   int world_size = gpu_device_ids.size();
-  CHECK(world_size > 0);
+  FLUX_CHECK_GT(world_size, 0);
   topo_info.world_size = world_size;
 
   std::vector<int> numa_ids;
@@ -167,7 +165,7 @@ init_topo(const std::vector<CUdevice> &gpu_device_ids, TopoInfo &topo_info) {
       numa_world_sizes.push_back(std::count_if(
           numa_ids.begin(), numa_ids.end(), [numa_id](int x) { return x == numa_id; }));
     }
-    CHECK(numa_world_sizes.size() > 0);
+    FLUX_CHECK_GT(numa_world_sizes.size(), 0);
     bool is_even_distributed = is_all_values_the_same(numa_world_sizes);
     if (!is_even_distributed) {
       LOG(WARNING) << "nodes is not even distributed across NUMA cores";
@@ -234,22 +232,22 @@ init_topo(const std::vector<CUdevice> &gpu_device_ids, TopoInfo &topo_info) {
 }
 
 std::vector<CUdevice>
-get_processs_group_devices(c10::intrusive_ptr<c10d::ProcessGroup> pg) {
-  int world_size = pg->getSize();
-  CHECK(world_size > 0);
+get_processs_group_devices(Group *pg) {
+  int world_size = pg->get_size();
+  FLUX_CHECK_GT(world_size, 0);
 
   CUdevice gpu_device_id;
   std::vector<CUdevice> gpu_device_ids(world_size, -1);
   CU_CHECK(cuda_stub().cuCtxGetDevice(&gpu_device_id));
   // allgather gpu_device_id
-  allgather_cpu(pg, &gpu_device_id, gpu_device_ids.data(), sizeof(int));
+  pg->all_gather_cpu(&gpu_device_id, gpu_device_ids.data(), sizeof(CUdevice));
   std::set<CUdevice> gpu_device_set{gpu_device_ids.begin(), gpu_device_ids.end()};
   FLUX_CHECK_EQ(gpu_device_ids.size(), gpu_device_set.size());
   return gpu_device_ids;
 }
 
 bool
-init_topo(c10::intrusive_ptr<c10d::ProcessGroup> pg, TopoInfo &topo_info) {
+init_topo(Group *pg, TopoInfo &topo_info) {
   return init_topo(get_processs_group_devices(pg), topo_info);
 }
 
@@ -258,38 +256,6 @@ static TopoInfo topo_info;
 static bool initialized = false;
 static std::mutex mutex;
 }  // namespace
-
-ncclComm_t
-create_nccl_comm_with_processgroup(c10::intrusive_ptr<c10d::ProcessGroup> pg) {
-  //-- NCCL--
-  ncclComm_t nccl_comm;
-  int rank = pg->getRank();
-  auto stream = c10::cuda::getCurrentCUDAStream();
-  void *hptr_id = nullptr;
-  CUDA_CHECK(cudaMallocHost(&hptr_id, sizeof(ncclUniqueId)));
-
-  ncclUniqueId &id = *static_cast<ncclUniqueId *>(hptr_id);
-  if (rank == 0) {
-    ncclGetUniqueId(&id);
-  }
-
-  std::vector<at::Tensor> src_gpus{at::empty(
-      {sizeof(ncclUniqueId)},
-      at::TensorOptions()
-          .dtype(at::ScalarType::Byte)
-          .device(at::kCUDA)
-          .device_index(c10::cuda::current_device()))};
-  c10::cuda::memcpy_and_sync(
-      src_gpus[0].data_ptr(), hptr_id, sizeof(ncclUniqueId), cudaMemcpyHostToDevice, stream);
-
-  auto work = pg->broadcast(src_gpus);
-  work->wait();
-  c10::cuda::memcpy_and_sync(
-      hptr_id, src_gpus[0].data_ptr(), sizeof(ncclUniqueId), cudaMemcpyDeviceToHost, stream);
-  NCCL_CHECK(ncclCommInitRank(&nccl_comm, pg->getSize(), id, rank));
-  CUDA_CHECK(cudaFreeHost(hptr_id));
-  return nccl_comm;
-}
 
 bool
 is_topo_initialized() {
@@ -312,8 +278,14 @@ initialize_topo(const std::vector<int> &gpu_device_ids) {
 }
 
 void
-initialize_topo(c10::intrusive_ptr<c10d::ProcessGroup> group) {
+initialize_topo(Group *group) {
   initialize_topo(get_processs_group_devices(group));
+}
+
+void
+initialize_topo(c10::intrusive_ptr<c10d::ProcessGroup> pg) {
+  auto group = std::unique_ptr<Group>(new C10dProcessGroup("", pg));
+  initialize_topo(group.get());
 }
 
 bool

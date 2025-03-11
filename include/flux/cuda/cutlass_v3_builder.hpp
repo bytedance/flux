@@ -1,6 +1,6 @@
 //===- cutlass_v3_builder.hpp ------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -25,7 +25,7 @@
 #include "flux/op_registry.h"
 #include "flux/cuda/cuda_common.h"
 #include "flux/cuda/gemm_impls/gemm_operator_base_default_impl.hpp"
-#include "cutlass/conv/convolution.h"
+
 #include "cutlass/cutlass.h"
 #include "cutlass/numeric_types.h"
 #include "cutlass/bfloat16.h"
@@ -72,8 +72,10 @@
 #include "cutlass/epilogue/collective/detail.hpp"
 #include "cutlass/epilogue/collective/sm70_epilogue_vectorized.hpp"
 #include "cutlass/epilogue/dispatch_policy.hpp"
+#include "cutlass/epilogue/thread/activation.h"
 #include "cutlass/epilogue/fusion/sm90_visitor_load_tma_warpspecialized.hpp"
 #include "cutlass/epilogue/thread/linear_combination.h"
+#include "flux/cuda/sm90_mma_array_tma_gmma_ss_warpspecialized_fp8.hpp"
 
 namespace bytedance::flux {
 namespace cutlass_v3_builder {
@@ -220,6 +222,11 @@ struct BaseEpilogueParams : detail::ToTypesTupleMixin<BaseEpilogueParams> {
     return make_declval<cute::conditional_t<cute::is_void_v<ElementC>, ElementD, ElementC>>();
   }
   auto
+  layout_c_unvoid() const {
+    return make_declval<
+        cute::conditional_t<cute::is_void_v<GmemLayoutC>, GmemLayoutD, GmemLayoutC>>();
+  }
+  auto
   stride_c() const {
     return make_declval<cutlass::gemm::TagToStrideC_t<GmemLayoutC>>();
   }
@@ -280,7 +287,9 @@ template <
     class CopyOpS2R,
     class CopyOpS2G,
     class SmemLayoutAtomD,
-    class CopyOpR2S>
+    class CopyOpR2S,
+    class CopyAtomC,
+    class CopyOpR2R>
 struct Sm90EpilogueParams : BaseParams, detail::ToTypesTupleMixin<Sm90EpilogueParams> {
   static_assert(
       detail::is_base_epilogue_params<BaseParams>::value,
@@ -298,6 +307,8 @@ struct Sm90EpilogueParams : BaseParams, detail::ToTypesTupleMixin<Sm90EpiloguePa
   DEFINE_PARAMS_FIELD(copy_op_s2g, CopyOpS2G, 8)
   DEFINE_PARAMS_FIELD(smem_layout_atom_d, SmemLayoutAtomD, 9)
   DEFINE_PARAMS_FIELD(copy_op_r2s, CopyOpR2S, 10)
+  DEFINE_PARAMS_FIELD(copy_atom_c, CopyAtomC, 11)
+  DEFINE_PARAMS_FIELD(copy_op_r2r, CopyOpR2R, 12)
 };
 
 #undef DEFINE_PARAMS_FIELD
@@ -411,12 +422,18 @@ default_kernel_schedule(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
   using ElementA = decltype(to_cutlass_element(dt_conf.a()));
   using ElementB = decltype(to_cutlass_element(dt_conf.b()));
   constexpr bool is_input_fp8 = builder::detail::is_input_fp8<ElementA, ElementB>();
-  if constexpr (is_grouped_gemm_impl(meta.impl())) {
+  if constexpr (is_grouped_gemm_impl(meta.impl())) {  // Group GEMM
     return make_declval<cute::conditional_t<
         is_input_fp8,
         cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperativeFP8FastAccum,
         cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperative>>();
-  } else {
+  } else if constexpr (is_input_fp8 and v3_meta.block_scale()) {  // Groupwise Scaled GEMM
+    // TODO(wenlei.bao): add hparams with ScaleGranularityM
+    return make_declval<cute::conditional_t<
+        v3_meta.fast_accum(),
+        cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum<>,
+        cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum<1>>>();
+  } else {  // Dense GEMM
     return make_declval<cute::conditional_t<
         is_input_fp8 and v3_meta.fast_accum(),
         cute::conditional_t<
@@ -431,12 +448,7 @@ default_kernel_schedule(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
 }
 }  // namespace detail
 
-template <
-    class GemmMetaT,
-    class GemmHParamsT,
-    class KernelSchedule_ = void,
-    int EpiSmemSize = 0,
-    __CUTE_REQUIRES(is_gemm_meta_v<GemmMetaT> and is_gemm_hparams_v<GemmHParamsT>)>
+template <class GemmMetaT, class GemmHParamsT, class KernelSchedule_ = void, int EpiSmemSize = 0>
 auto
 default_mainloop_params(
     GemmMetaT meta,
@@ -448,6 +460,7 @@ default_mainloop_params(
   } else {
     auto dt_conf = make_gemm_dtype_config(meta.dtype());
     auto base_params = base_mainloop_params(meta, hparams);
+    auto v3_meta = to_gemm_v3_meta(meta.impl_spec());
     auto v3_params = to_gemm_v3_hparams(hparams.impl_spec());
 
     using KernelSchedule = cute::conditional_t<
@@ -549,8 +562,11 @@ default_sm80_epilogue_params(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
 template <class... Ts, class... Us>
 auto
 default_epilogue_schedule(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
+  constexpr auto v3_meta = to_gemm_v3_meta(meta.impl_spec());
   constexpr auto v3_hparams = to_gemm_v3_hparams(hparams.impl_spec());
-  if constexpr (v3_hparams.kernel_schedule() == _PingPong{}) {
+  if constexpr (v3_meta.block_scale()) {
+    return make_declval<cutlass::epilogue::TmaWarpSpecializedCooperative>();
+  } else if constexpr (v3_hparams.kernel_schedule() == _PingPong{}) {
     return make_declval<cutlass::epilogue::TmaWarpSpecialized>();
   } else {
     return make_declval<cutlass::epilogue::TmaWarpSpecializedCooperative>();
@@ -562,45 +578,36 @@ auto
 default_sm90_epilogue_params(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
   using namespace cutlass::epilogue;
   BaseEpilogueParams base_params = base_epilogue_params(meta, hparams);
+  auto v3_meta = to_gemm_v3_meta(meta.impl_spec());
+  auto v3_hparams = to_gemm_v3_hparams(hparams.impl_spec());
+
   using ElementC = decltype(base_params.element_c());
+  using LayoutC = decltype(base_params.gmem_layout_c());
   using ElementD = decltype(base_params.element_d());
-  using ElementCUnVoid = decltype(base_params.element_c_unvoid());
+  using ElementCNonVoid = decltype(base_params.element_c_unvoid());
+  using LayoutCNonVoid = decltype(base_params.layout_c_unvoid());
   using ElementAccumulator = decltype(base_params.element_accumulator());
 
-  auto select_evt_d = []() {
-    constexpr auto RoundStyle = cutlass::FloatRoundStyle::round_to_nearest;
-    using namespace cutlass::epilogue::fusion;
+  using ElementBlockScale = cute::conditional_t<v3_meta.block_scale(), ElementAccumulator, float>;
 
-    using ElementCompute = ElementD;
-    using EVT_Compute0 = Sm90EVT<
-        Sm90Compute<
-            cutlass::multiplies,
-            ElementD,
-            ElementCompute,
-            RoundStyle>,                          // alpha * acc
-        Sm90ScalarBroadcast<ElementAccumulator>,  // alpha
-        Sm90AccFetch                              // acc
-        >;
-    if constexpr (cute::is_void_v<ElementC>) {
-      return make_declval<EVT_Compute0>();
-    } else {
-      using EVT_Compute1 = Sm90EVT<  // D
-          Sm90Compute<
-              cutlass::multiply_add,
-              ElementD,
-              ElementCompute,
-              RoundStyle>,  // beta * C + (alpha * acc)
-          cutlass::epilogue::fusion::Sm90ScalarBroadcast<ElementAccumulator>,  // beta
-          cutlass::epilogue::fusion::Sm90SrcFetch<ElementCUnVoid>,             // C
-          EVT_Compute0>;
-      return make_declval<EVT_Compute1>();
-    }
-  };
-
-  using EVT_D = decltype(select_evt_d());
   using EpilogueSchedule = decltype(default_epilogue_schedule(meta, hparams));
 
-  auto v3_hparams = to_gemm_v3_hparams(hparams.impl_spec());
+  using ElementCompute = cute::conditional_t<v3_meta.block_scale(), float, ElementD>;
+
+  using EpilogueFusion = cute::conditional_t<
+      v3_meta.block_scale(),
+      cutlass::epilogue::fusion::ScaledLinCombPerRowBiasEltActAmaxAux<
+          LayoutC,
+          cutlass::epilogue::thread::Identity,
+          ElementD,
+          /*ElementCompute=*/ElementCompute,
+          /*ElementAux=*/ElementCNonVoid,
+          /*ElementAmax=*/float,
+          /*ElementBias=*/float,
+          ElementCNonVoid>,
+      cutlass::epilogue::fusion::
+          LinearCombination<ElementD, ElementAccumulator, ElementC, ElementAccumulator>>;
+
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
       cutlass::arch::Sm90,
       cutlass::arch::OpClassTensorOp,
@@ -608,7 +615,7 @@ default_sm90_epilogue_params(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
       decltype(v3_hparams.cluster_shape()),
       cutlass::epilogue::collective::EpilogueTileAuto,
       ElementAccumulator,
-      /*ElementCompute=*/ElementD,
+      /*ElementCompute=*/ElementCompute,
       decltype(base_params.element_c()),
       decltype(base_params.gmem_layout_c()),
       base_params.alignment_c(),
@@ -616,7 +623,7 @@ default_sm90_epilogue_params(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
       decltype(base_params.gmem_layout_d()),
       base_params.alignment_d(),
       EpilogueSchedule,
-      EVT_D>::CollectiveOp;
+      EpilogueFusion>::CollectiveOp;
 
   return Sm90EpilogueParams<
       decltype(base_params),
@@ -629,7 +636,9 @@ default_sm90_epilogue_params(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
       typename CollectiveEpilogue::CopyOpS2R,
       typename CollectiveEpilogue::CopyOpS2G,
       typename CollectiveEpilogue::SmemLayoutAtomD,
-      typename CollectiveEpilogue::CopyOpR2S>();
+      typename CollectiveEpilogue::CopyOpR2S,
+      typename CollectiveEpilogue::CopyAtomC,
+      typename CollectiveEpilogue::CopyOpR2R>();
 }
 }  // namespace detail
 
@@ -701,7 +710,9 @@ build_collective_epilogue(Sm90EpilogueParams<Ts...> params) {
       decltype(params.copy_op_s2r()),
       decltype(params.copy_op_s2g()),
       decltype(params.smem_layout_atom_d()),
-      decltype(params.copy_op_r2s())>;
+      decltype(params.copy_op_r2s()),
+      decltype(params.copy_atom_c()),
+      decltype(params.copy_op_r2r())>;
   return make_declval<Epilogue>();
 }
 

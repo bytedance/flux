@@ -1,6 +1,6 @@
 //===- cuda_common.h ---------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -27,6 +27,8 @@
 #include "cutlass/layout/matrix.h"
 #include "cutlass/numeric_types.h"
 #include <type_traits>
+#include "cuda_fp16.h"
+#include "cuda_bf16.h"
 
 /**
  * Panic wrapper for unwinding CUTLASS errors
@@ -67,7 +69,10 @@
 #ifndef CUDA_MEM_ALIGN
 #define CUDA_MEM_ALIGN(x) ((x + 31) / 32 * 32)
 #endif  // CUDA_MEM_ALIGN
-
+#define FETCH_128bit(pointer) (reinterpret_cast<float4 *>(pointer))[0]
+#define FETCH_64bit(pointer) (reinterpret_cast<float2 *>(pointer))[0]
+#define FETCH_32bit(pointer) (reinterpret_cast<float *>(pointer))[0]
+#define OFFSET(row, col, ld) ((row) * ld + col)
 namespace bytedance {
 namespace flux {
 
@@ -84,6 +89,10 @@ to_cuda_dtype(cute::C<E> dtype) {
     return make_declval<__half>();
   } else if constexpr (dtype == _FP32{}) {
     return make_declval<float>();
+  } else if constexpr (dtype == _S8{}) {
+    return make_declval<int8_t>();
+  } else if constexpr (dtype == _S32{}) {
+    return make_declval<int32_t>();
   } else {
     static_assert(cutlass::detail::dependent_false<cute::C<E>>, "unsupported dtype!");
   }
@@ -92,18 +101,22 @@ to_cuda_dtype(cute::C<E> dtype) {
 template <DataTypeEnum E>
 auto
 to_cutlass_element(cute::C<E> dtype) {
-  if constexpr (dtype == _FP32{}) {
+  if constexpr (dtype == _Void{}) {
+    return make_declval<void>();
+  } else if constexpr (dtype == _FP32{}) {
     return make_declval<float>();
-  } else if constexpr (dtype == _BF16{}) {
-    return make_declval<cutlass::bfloat16_t>();
   } else if constexpr (dtype == _FP16{}) {
     return make_declval<cutlass::half_t>();
+  } else if constexpr (dtype == _BF16{}) {
+    return make_declval<cutlass::bfloat16_t>();
   } else if constexpr (dtype == _E4M3{}) {
     return make_declval<cutlass::float_e4m3_t>();
   } else if constexpr (dtype == _E5M2{}) {
     return make_declval<cutlass::float_e5m2_t>();
-  } else if constexpr (dtype == _Void{}) {
-    return make_declval<void>();
+  } else if constexpr (dtype == _S32{}) {
+    return make_declval<int32_t>();
+  } else if constexpr (dtype == _S8{}) {
+    return make_declval<int8_t>();
   } else {
     static_assert(cutlass::detail::dependent_false<cute::C<E>>, "unsupported dtype!");
   }
@@ -201,6 +214,42 @@ struct GpuTimer {
   }
 };
 
+template <typename Element>
+CUTLASS_HOST_DEVICE float
+element_to_float(Element x) {
+  if constexpr (std::is_same_v<Element, __half>) {
+    return __half2float(x);
+  } else if constexpr (std::is_same_v<Element, __nv_bfloat16>) {
+    return __bfloat162float(x);
+  } else {
+    static_assert(cutlass::detail::dependent_false<Element>, "unsupported Element");
+  }
+}
+
+template <typename Element>
+CUTLASS_HOST_DEVICE Element
+float_to_element(float x) {
+  if constexpr (std::is_same_v<Element, __half>) {
+    return __float2half(x);
+  } else if constexpr (std::is_same_v<Element, __nv_bfloat16>) {
+    return __float2bfloat16(x);
+  } else {
+    static_assert(cutlass::detail::dependent_false<Element>, "unsupported Element");
+  }
+}
+
+template <typename Element>
+CUTLASS_HOST_DEVICE Element
+floats_to_element(float x, float y) {
+  if constexpr (std::is_same_v<Element, __half2>) {
+    return __floats2half2_rn(x, y);
+  } else if constexpr (std::is_same_v<Element, __nv_bfloat162>) {
+    return __floats2bfloat162_rn(x, y);
+  } else {
+    static_assert(cutlass::detail::dependent_false<Element>, "unsupported Element");
+  }
+}
+
 // exit if error
 void ensure_nvml_init();
 
@@ -209,7 +258,17 @@ const char *get_gpu_device_name(int devid);
 // exit if error
 unsigned get_pcie_gen(int devid);
 // exit if error
-int get_sm_count();
+int get_sm_count(int device_id = -1);
+
+int get_highest_cuda_stream_priority();
+
+void copy_continous_aligned(
+    void *dst,
+    const void *src,
+    size_t nbytes,
+    int threadblock_count,
+    int thread_count,
+    cudaStream_t stream);
 
 }  // namespace flux
 }  // namespace bytedance

@@ -1,6 +1,6 @@
 //===- flux.h ----------------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,19 +16,19 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
+#include <algorithm>
 #include <assert.h>
+#include <cctype>
 #include <cstdint>
-#include <chrono>
-#include <ostream>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
-#include <utility>
-#include <type_traits>
-#include <variant>
-#include <tuple>
 #include <string>
-#include <iostream>
-#include <algorithm>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <mutex>
 #include "cute/algorithm/tuple_algorithms.hpp"
 #include "cute/config.hpp"
 #include "cute/container/tuple.hpp"
@@ -48,9 +48,12 @@
 
 namespace bytedance {
 namespace flux {
-
+// kMaxLocalWorldSize is the maximum number of peers that
+// p2p protocal supports
 constexpr int kMaxLocalWorldSize = 8;
 constexpr int kMaxWorldSize = 32;
+static_assert(kMaxWorldSize % kMaxLocalWorldSize == 0);
+constexpr int kMaxNodes = 8;
 using index_t = int64_t;
 
 // Print a type in compiling error message
@@ -132,6 +135,12 @@ class CheckFail {
   if (auto x = (lhs), y = (decltype(x))(rhs); FLUX_UNLIKELY(x % y != 0))                          \
   ::bytedance::flux::detail::CheckFail() << __FILE__ << ":" << __LINE__ << " Check failed: " << x \
                                          << "(" #lhs ") % " << y << "(" #rhs ") != 0"
+
+#define CALL_ONCE(call_once_body)                        \
+  do {                                                   \
+    static std::once_flag __flag__;                      \
+    std::call_once(__flag__, [&]() { call_once_body; }); \
+  } while (0)
 
 // Convert T&,T&&, const T&... to basic T
 template <typename T>
@@ -451,19 +460,17 @@ tuple_has_elem(cute::tuple<Ts...> const &tup, Elem const &e) {
 /////////////////////////////////////////////////////
 // Enum classes
 /////////////////////////////////////////////////////
-enum class DataTypeEnum : int8_t { Void, FP16, BF16, FP32, E4M3, E5M2 };
+enum class DataTypeEnum : int8_t { Void, FP16, BF16, FP32, E4M3, E5M2, S8, S32 };
 enum class ArchEnum : int { Sm80 = 80, Sm89 = 89, Sm90 = 90 };
 enum class CommOpEnum : int8_t {
-  CommNone,       // gemm only, wo/ communication
-  AllGather,      // tp allgather + gemm, comm not fused into gemm kernel
-  ReduceScatter,  // gemm + tp reduce-scatter
-  Gather,         // MoE tp, gemm + gather
-  GatherStore,    // MoE tp, gemm + gather + store rs intermediates
-  GatherRS,       // MoE tp, gemm + gather + rs
-  AGKernel,       // tp allgather + gemm, comm fused into gemm kernel
-  All2AllStore,   // MoE ep, gemm + store all2all intermediates
-  AGScatter,      // MoE tp, ag + scatter + gemm
+  CommNone,                   // gemm only, wo/ communication
+  AllGather,                  // tp allgather + gemm, comm not fused into gemm kernel
+  ReduceScatter,              // gemm + tp reduce-scatter
+  GatherRS,                   // MoE tp, gemm + gather + rs
+  AGKernel,                   // tp allgather + gemm, comm fused into gemm kernel
+  AGScatter,                  // MoE tp, ag + scatter + gemm
 };
+
 enum class GemmLayoutEnum : int8_t { RRR, RCR, RCC };
 enum class ImplEnum : int8_t { GemmV2, GemmV3, GemmGroupedV2, GemmGroupedV3 };
 
@@ -481,11 +488,8 @@ enum class GemmKernelScheduleEnum : int8_t { Cooperative, PingPong };
 using _CommNone = cute::C<CommOpEnum::CommNone>;
 using _AllGather = cute::C<CommOpEnum::AllGather>;
 using _ReduceScatter = cute::C<CommOpEnum::ReduceScatter>;
-using _Gather = cute::C<CommOpEnum::Gather>;
-using _GatherStore = cute::C<CommOpEnum::GatherStore>;
 using _GatherRS = cute::C<CommOpEnum::GatherRS>;
 using _AGKernel = cute::C<CommOpEnum::AGKernel>;
-using _All2AllStore = cute::C<CommOpEnum::All2AllStore>;
 using _AGScatter = cute::C<CommOpEnum::AGScatter>;
 
 using _IntraNode = cute::C<CommKindEnum::IntraNode>;
@@ -496,11 +500,13 @@ using _GemmDefault = cute::C<GemmKindEnum::GemmDefault>;
 using _GemmStreamK = cute::C<GemmKindEnum::GemmStreamK>;
 
 using _Void = cute::C<DataTypeEnum::Void>;
+using _FP32 = cute::C<DataTypeEnum::FP32>;
 using _FP16 = cute::C<DataTypeEnum::FP16>;
 using _BF16 = cute::C<DataTypeEnum::BF16>;
-using _FP32 = cute::C<DataTypeEnum::FP32>;
 using _E4M3 = cute::C<DataTypeEnum::E4M3>;
 using _E5M2 = cute::C<DataTypeEnum::E5M2>;
+using _S32 = cute::C<DataTypeEnum::S32>;
+using _S8 = cute::C<DataTypeEnum::S8>;
 
 using _RRR = cute::C<GemmLayoutEnum::RRR>;
 using _RCR = cute::C<GemmLayoutEnum::RCR>;
@@ -589,6 +595,12 @@ is_fp8_dtype(DType const &dt) {
 }
 
 template <class DType, __CUTE_REQUIRES(is_of_type_v<DType, DataTypeEnum>)>
+constexpr bool
+is_s8_dtype(DType const &dt) {
+  return dt == _S8{};
+}
+
+template <class DType, __CUTE_REQUIRES(is_of_type_v<DType, DataTypeEnum>)>
 constexpr int
 sizeof_dtype(DType const &dt) {
   // This function can be used in both compile time and runtime by
@@ -598,7 +610,7 @@ sizeof_dtype(DType const &dt) {
     return 2;
   } else if (dt == _FP32{}) {
     return 4;
-  } else if (is_fp8_dtype(dt)) {
+  } else if (is_fp8_dtype(dt) || is_s8_dtype(dt)) {
     return 1;
   } else if (dt == _Void{}) {
     return 0;
@@ -680,10 +692,7 @@ enum_to_string(CommOpEnum comm_op) {
     case CommOpEnum::AllGather: return "AllGather";
     case CommOpEnum::AGKernel: return "AGKernel";
     case CommOpEnum::ReduceScatter: return "ReduceScatter";
-    case CommOpEnum::Gather: return "Gather";
-    case CommOpEnum::GatherStore: return "GatherStore";
     case CommOpEnum::GatherRS: return "GatherRS";
-    case CommOpEnum::All2AllStore: return "All2AllStore";
     case CommOpEnum::AGScatter: return "AGScatter";
     default: return "UNK";
   }
@@ -712,11 +721,13 @@ inline char const *
 enum_to_string(DataTypeEnum dtype) {
   switch (dtype) {
     case DataTypeEnum::Void: return "Void";
+    case DataTypeEnum::FP32: return "FP32";
     case DataTypeEnum::FP16: return "FP16";
     case DataTypeEnum::BF16: return "BF16";
-    case DataTypeEnum::FP32: return "FP32";
     case DataTypeEnum::E4M3: return "E4M3";
     case DataTypeEnum::E5M2: return "E5M2";
+    case DataTypeEnum::S32: return "S32";
+    case DataTypeEnum::S8: return "S8";
     default: return "UNK";
   }
 }
@@ -826,6 +837,14 @@ to_make_expr(cute::C<v> const &val) {
   return cute::move(ss).str();
 }
 
+template <auto v, __CUTE_REQUIRES(cute::is_same_v<bool, decltype(v)>)>
+std::string
+to_make_expr(cute::C<v> const &val) {
+  std::ostringstream ss;
+  ss << (v ? "_True{}" : "_False{}");
+  return cute::move(ss).str();
+}
+
 inline std::string
 to_make_expr(bool val) {
   return val ? "true" : "false";
@@ -855,7 +874,7 @@ template <int v>
 std::string
 to_make_expr(cute::C<v> const &val) {
   std::ostringstream ss;
-  ss << val;
+  ss << val << "{}";
   return cute::move(ss).str();
 }
 
@@ -885,6 +904,132 @@ to_make_expr(cute::tuple<Ts...> const &tup) {
   return detail::to_make_expression_tuple_impl(std::make_index_sequence<sizeof...(Ts)>{}, tup);
 }
 
+// forward declaration for TupleCompare using
+template <class... Ts>
+constexpr bool operator<(cute::tuple<Ts...> const &lhs, cute::tuple<Ts...> const &rhs);
+
+///////////////////////////////////////////////////////////////
+// to_make_constexpr
+//   translate an type-erased runtime value to code that can create
+//   its constant value form. e.g. 1 -> cute::Int<1>{}
+///////////////////////////////////////////////////////////////
+template <class EnumT, __CUTE_REQUIRES(is_flux_enum_v<EnumT>)>
+std::string
+to_make_constexpr(EnumT const &val) {
+  std::ostringstream ss;
+  ss << "_" << val << "{}";
+  return cute::move(ss).str();
+}
+
+template <auto v>
+std::string
+to_make_constexpr(cute::C<v> const &val) {
+  return to_make_expr(val);
+}
+
+inline std::string
+to_make_constexpr(bool val) {
+  return val ? "_True{}" : "_False{}";
+}
+
+template <class T, __CUTE_REQUIRES(cute::is_std_integral<T>::value)>
+std::string
+to_make_constexpr(T val) {
+  std::ostringstream ss;
+  ss << "cute::Int<" << val << ">{}";
+  return cute::move(ss).str();
+}
+
+template <class T, __CUTE_REQUIRES(cute::is_same_v<T, Auto> or cute::is_same_v<T, None>)>
+std::string
+to_make_constexpr(T const &val) {
+  return to_make_expr(val);
+}
+
+template <class... T>
+std::enable_if_t<(sizeof...(T) > 0), std::string>
+to_make_constexpr(std::variant<T...> const &var) {
+  std::ostringstream ss;
+  ((std::holds_alternative<T>(var) ? void(ss << to_make_constexpr(std::get<T>(var))) : void(0)),
+   ...);
+  return cute::move(ss).str();
+}
+
+namespace detail {
+template <std::size_t... Is, class... Ts>
+std::string
+to_make_constexpr_tuple_impl(std::index_sequence<Is...>, cute::tuple<Ts...> const &tup) {
+  std::ostringstream ss;
+  ss << "cute::make_tuple(";
+  ((ss << (Is == 0 ? "" : ",") << to_make_constexpr(cute::get<Is>(tup))), ...);
+  ss << ")";
+  return cute::move(ss).str();
+}
+}  // namespace detail
+
+template <class... Ts>
+std::string
+to_make_constexpr(cute::tuple<Ts...> const &tup) {
+  return detail::to_make_constexpr_tuple_impl(std::make_index_sequence<sizeof...(Ts)>{}, tup);
+}
+
+///////////////////////////////////////////////////////////////
+// to_kernel_name
+//   translate an object to its representation in kernel name
+///////////////////////////////////////////////////////////////
+template <class EnumT, __CUTE_REQUIRES(is_flux_enum_v<EnumT>)>
+std::string
+to_kernel_name(EnumT const &val) {
+  std::string str = enum_to_string(val);
+  std::transform(
+      str.begin(), str.end(), str.begin(), [](unsigned char c) { return std::tolower(c); });
+  return str;
+}
+
+inline std::string
+to_kernel_name(bool val) {
+  return val ? "true" : "false";
+}
+
+inline std::string
+to_kernel_name(int val) {
+  return std::to_string(val);
+}
+
+inline std::string
+to_kernel_name(long val) {
+  return std::to_string(val);
+}
+
+inline std::string
+to_kernel_name(None const &) {
+  return "nil";
+}
+
+template <class... T>
+std::enable_if_t<(sizeof...(T) > 0), std::string>
+to_kernel_name(std::variant<T...> const &var) {
+  std::ostringstream ss;
+  ((std::holds_alternative<T>(var) ? void(ss << to_kernel_name(std::get<T>(var))) : void(0)), ...);
+  return cute::move(ss).str();
+}
+
+namespace detail {
+template <std::size_t... Is, class... Ts>
+std::string
+to_kernel_name_tuple_impl(std::index_sequence<Is...>, cute::tuple<Ts...> const &tup) {
+  std::ostringstream ss;
+  ((ss << (Is == 0 ? "" : "x") << to_kernel_name(cute::get<Is>(tup))), ...);
+  return cute::move(ss).str();
+}
+}  // namespace detail
+
+template <class... Ts>
+std::string
+to_kernel_name(cute::tuple<Ts...> const &tup) {
+  return detail::to_kernel_name_tuple_impl(std::make_index_sequence<sizeof...(Ts)>{}, tup);
+}
+
 ///////////////////////////////////////////////////////////////
 // General comparator
 ///////////////////////////////////////////////////////////////
@@ -896,6 +1041,9 @@ struct TupleCompare {
     if constexpr (I == Size) {
       return false;
     } else {
+      // since GCC-12, gcc respect namespace for operator such as <
+      using cute::operator<;
+      using bytedance::flux::operator<;
       return bool(cute::get<I>(t) < cute::get<I>(u)) ||
              (!bool(cute::get<I>(u) < cute::get<I>(t)) &&
               TupleCompare<Tp, Up, I + 1, Size>::less(t, u));
@@ -994,6 +1142,21 @@ struct FluxNamedTupleBase : cute::tuple<Ts...> {
     os << ')';
   }
 
+  template <std::size_t... Is>
+  void
+  to_make_constexpr_fields_impl(std::ostream &os, std::index_sequence<Is...>) const {
+    static_assert(sizeof...(Is) == num_fields());
+    ((os << (Is == 0 ? '(' : ',') << to_make_constexpr(cute::get<Is>(as_tuple()))), ...);
+    os << ')';
+  }
+
+  template <std::size_t... Is>
+  void
+  to_kernel_name_fields_impl(std::ostream &os, std::index_sequence<Is...>) const {
+    static_assert(sizeof...(Is) == num_fields());
+    (((Is == 0 ? os : (os << '_')) << to_kernel_name(cute::get<Is>(as_tuple()))), ...);
+  }
+
  public:
   constexpr FluxNamedTupleBase() {
     check_length();
@@ -1014,6 +1177,21 @@ struct FluxNamedTupleBase : cute::tuple<Ts...> {
     std::stringstream ss;
     ss << "make_" << lower_name();
     obj.to_make_expr_fields_impl(ss, std::make_index_sequence<num_fields()>{});
+    return std::move(ss).str();
+  }
+
+  friend std::string
+  to_make_constexpr(FluxNamedTupleBase const &obj) {
+    std::stringstream ss;
+    ss << "make_" << lower_name();
+    obj.to_make_constexpr_fields_impl(ss, std::make_index_sequence<num_fields()>{});
+    return std::move(ss).str();
+  }
+
+  friend std::string
+  to_kernel_name(FluxNamedTupleBase const &obj) {
+    std::stringstream ss;
+    obj.to_kernel_name_fields_impl(ss, std::make_index_sequence<num_fields()>{});
     return std::move(ss).str();
   }
 };
@@ -1066,8 +1244,7 @@ unify_type(std::variant<Ts...> const &val) {
 // for a given class template which derives from FluxNamedTuple,
 // get the type of the return value of calling unify_type on it
 template <
-    template <class... Ts>
-    class Tpl,
+    template <class... Ts> class Tpl,
     __CUTE_REQUIRES(detail::is_flux_named_tuple<Tpl<>>::value)>
 using unified_type_t = decltype(unify_type(make_declval<Tpl<>>()));
 

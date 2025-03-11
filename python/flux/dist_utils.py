@@ -1,6 +1,6 @@
 ################################################################################
 #
-# Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+# Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -15,12 +15,14 @@
 #
 ################################################################################
 
-import os
 import datetime
+import os
+import random
+from typing import Callable
+
 import numpy as np
 import torch
 import torch.distributed
-from typing import Callable
 
 
 class DistEnv:
@@ -49,6 +51,7 @@ class DistEnv:
         torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
         torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
         np.random.seed(seed)
+        random.seed(seed)
 
     def init_global_group(self) -> None:
         torch.distributed.init_process_group(

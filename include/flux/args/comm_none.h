@@ -1,6 +1,6 @@
 //===- comm_none.h ------------------------------------------------ C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -30,6 +30,63 @@ struct GemmOnlyArguments {
   void const *weight;
   void const *bias;
   void *output;
+};
+
+// GEMM with dequantization
+// Dequant[i, j] = scale_a[i] * scale_b[j] * accumulator[i, j]
+// D = Dequant + bias
+// Accumulator dtype can be different from scale, Dequant calculation is based on scale dtype,
+// D/bias dtype can be different from Dequant.
+// For example:
+//    Dequant and scale_a/scale_b: fp32
+//    accumulator: s32
+//    D and bias: bf16
+struct S8GemmDequantArguments {
+  int m;
+  int n;
+  int k;
+  float alpha;
+  float beta;
+  void const *A;        // m * k
+  void const *B;        // k * n
+  void const *bias;     // bias, 1 * n
+  void const *scale_A;  // m * 1
+  void const *scale_B;  // 1 * n
+  void *D;              // output: m * n
+};
+
+// Block/Group-wise scaling GEMM
+// Aux = ((alpha * scale_a * scale_b) * (blockscale_A * blockscale_B * A @ B) + ((beta * scale_c) *
+// C) + bias D = (Aux) if Aux is fp8:
+//   abs_max_output = max( abs(aux) | (for every aux in Aux) )
+//   Aux = scale_aux * Aux
+// if D is fp8 type:
+//   abs_max_output = max( abs(d) | (for every d in D) )
+//   D = scale_d * D
+struct BlockScaleGemmArguments {
+  // gemm args
+  int m;
+  int n;
+  int k;
+  int l;
+  void const *A;
+  void const *B;
+  uint32_t mma_promotion_interval = 4;
+  void const *blockscale_A;
+  void const *blockscale_B;
+  void const *C;
+  void *D;
+  // epilogue args
+  float alpha = 1.0f;
+  float beta = 0.0f;
+
+  float scale_a = 1.0f;
+  float scale_b = 1.0f;
+  float scale_c = 1.0f;
+  float scale_d = 1.0f;
+  float scale_aux = 1.0f;
+
+  void const *bias = nullptr;
 };
 
 // FP8 GEMM
@@ -63,8 +120,8 @@ struct GemmFP8Arguments {
   float const *scaleAux;  // require if Aux is fp8
 };
 
-struct GemmGroupedOpArguments {
-  void *problem_sizes_device;
+struct GemmGroupedV2Arguments {
+  void *problem_sizes;  // cutlass::gemm::GemmCoord*
   int problem_count;
   float alpha;
   float beta;
@@ -72,11 +129,18 @@ struct GemmGroupedOpArguments {
   void **ptr_B;
   void **ptr_C;
   void **ptr_D;
-  int64_t *lda;
-  int64_t *ldb;
-  int64_t *ldc;
-  int64_t *ldd;
-  void *problem_sizes_host;
+  // for FP8 arguments
+  void **ptr_Aux = nullptr;     // m * n
+  void **ptr_Vector = nullptr;  // bias: 1 * n
+  float *abs_max_Aux = nullptr;
+  float *abs_max_D = nullptr;
+  // scaling tensors
+  float const **scaleA = nullptr;
+  float const **scaleB = nullptr;
+  float const *scaleC = nullptr;
+  float const *scaleD = nullptr;    // require if D is fp8
+  float const *scaleAux = nullptr;  // require if Aux is fp8
+  int sm_margin = 0;
 };
 
 struct GemmGroupedV3Arguments {
@@ -89,6 +153,7 @@ struct GemmGroupedV3Arguments {
   void const **ptr_C;
   void **ptr_D;
   float **ptr_alpha = nullptr;
+  int sm_margin = 0;
 };
 
 }  // namespace bytedance::flux

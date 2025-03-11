@@ -1,0 +1,27 @@
+---
+Language:        Cpp
+BasedOnStyle:  Google
+IndentWidth:     2
+TabWidth:        2
+ColumnLimit: 99
+ContinuationIndentWidth: 4
+AccessModifierOffset: -1  # The private/protected/public has no indent in class
+Standard:  c++17
+AllowShortBlocksOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowAllParametersOfDeclarationOnNextLine: true
+BinPackParameters: false
+BinPackArguments: false
+AlignAfterOpenBracket: AlwaysBreak
+AlwaysBreakTemplateDeclarations: true
+AlwaysBreakAfterDefinitionReturnType: All
+DerivePointerAlignment: false
+PointerAlignment: Right
+
+# clang-format 3.9+
+SortIncludes: false
+ReflowComments: true
+...

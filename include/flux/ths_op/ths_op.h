@@ -1,6 +1,6 @@
 //===- ths_op.h --------------------------------------------------- C++ ---===//
 //
-// Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+// Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -22,23 +22,19 @@
 #include "flux/gemm_hparams.h"
 #include "flux/gemm_meta.h"
 #include "flux/op_registry.h"
-#include "./util.h"
-#include "flux_shm.h"
+#include "flux/ths_op/util.h"
+#include "flux/ths_op/flux_shm.h"
 #include <ATen/core/ivalue.h>
-#include <pybind11/pybind11.h>
 #include <c10/core/ScalarType.h>
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
-#include <torch/extension.h>
-
-#define FLUX_TORCH_EXTENSION_NAME flux_ths_pybind
 
 namespace bytedance {
 namespace flux {
 namespace ths_op {
 
 DataTypeEnum from_torch_dtype(at::ScalarType torch_dtype);
-bool is_fp8_torch_dtype(at::ScalarType torch_dtype);
-size_t torch_dtype_size(at::ScalarType torch_dtype);
+at::ScalarType to_torch_dtype(DataTypeEnum dtype);
+bool is_s8_torch_dtype(at::ScalarType torch_dtype);
 // used by MoE
 torch::Tensor setup_shared_memory(
     int64_t rank, int64_t world_size, torch::Tensor local_data, std::vector<void *> *host_ptrs);
@@ -102,26 +98,6 @@ class ProfilingContext : public torch::CustomClassHolder {
   UnifiedGemmHParams record_best(UnifiedGemmMeta const &meta, RuntimeConfig const &rt_conf);
 };
 
-namespace py = pybind11;
-
-// Registry of functions that register
-// functions into module
-class ThsOpsInitRegistry {
- public:
-  using OpInitFunc = std::function<void(py::module &)>;
-  static ThsOpsInitRegistry &instance();
-  void register_one(std::string name, OpInitFunc &&func);
-  void initialize_all(py::module &m) const;
-
- private:
-  std::map<std::string, OpInitFunc> registry_;
-  mutable std::mutex register_mutex_;
-
-  ThsOpsInitRegistry() {}
-  ThsOpsInitRegistry(const ThsOpsInitRegistry &) = delete;
-  ThsOpsInitRegistry &operator=(const ThsOpsInitRegistry &) = delete;
-};
-
 struct DistEnvTP : public DistEnv {
   c10::intrusive_ptr<c10d::ProcessGroup> tp_group;
   DistEnvTP(c10::intrusive_ptr<c10d::ProcessGroup> tp_group, int nnodes = 1);
@@ -163,11 +139,50 @@ struct MoeArguments : public torch::CustomClassHolder {
       c10::ScalarType output_dtype);
 };
 
+/** torch::empty filled with uninitialized data but not if torch.use_deterministic_algorithms() and
+  torch.utils.deterministic.fill_uninitialized_memory are both set to True. use this c++ utility to
+  skip tensor initialization for better performance.
+  ref: https://pytorch.org/docs/stable/generated/torch.empty.html
+  Usage:
+    TorchDeterministicGuard _();
+    auto tensor = torch::empty(...);
+ */
+class TorchDeterministicGuard {
+ public:
+  TorchDeterministicGuard(bool use_deterministic_algorithms);
+  // set back deterministic state. if already run exit(), won't set deterministic back again
+  ~TorchDeterministicGuard();
+  // set back deterministic on manual run exit().
+  void exit();
+
+ private:
+  class TorchDeterministicGuardImpl;
+  TorchDeterministicGuardImpl *impl_ = nullptr;
+};
+
+// torch::empty zero data if torch.use_deterministic_algorithms() is set to True, which is slow.
+// use this c++ utility to skip tensor initialization for better performance.
+template <typename... T>
+torch::Tensor
+empty_with_uninitialized_data(T... args) {
+  TorchDeterministicGuard _(false);
+  return torch::empty(args...);
+}
+
+// used CUDA core to copy torch::Tensor instead of cudaMemcpyAsync. to avoid conflict with other
+// cudaMemcpyAsync activities. usually small torch::Tensor is copied with this
+void copy_tensor_with_kernel_async(
+    const torch::Tensor src, torch::Tensor dst, cudaStream_t stream);
+
 bool bitwise_check(torch::Tensor A, torch::Tensor B);
 void uniform_initialize(torch::Tensor tensor, uint64_t seed, double min, double max);
 void cudaipc_barrier_all_on_stream(
     cudaStream_t stream, std::vector<torch::Tensor> &sync_buffer, int rank);
 void lazy_init_buffer_tensor(torch::Tensor *tensor, int64_t buffer_size);
+#ifdef FLUX_SHM_USE_NVSHMEM
+torch::Tensor topk_scatter_reduce(
+    std::vector<torch::Tensor> inputs, torch::Tensor scatter_idx, int64_t TOPK);
+#endif
 }  // namespace ths_op
 }  // namespace flux
 }  // namespace bytedance

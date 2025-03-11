@@ -1,6 +1,6 @@
 ################################################################################
 #
-# Copyright 2023 ByteDance Ltd. and/or its affiliates. All rights reserved.
+# Copyright 2025 ByteDance Ltd. and/or its affiliates. All rights reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -16,17 +16,19 @@
 ################################################################################
 
 import argparse
-from functools import partial
-import os
-import torch
-import time
-import datetime
-import numpy as np
-import flux
-from typing import List
-import itertools
 import dataclasses
-from flux import pynvshmem
+import datetime
+import itertools
+import os
+import time
+from functools import partial
+from typing import List
+
+import numpy as np
+import torch
+
+import flux
+import flux.testing
 
 RANK = int(os.environ.get("RANK", 0))
 LOCAL_RANK = int(os.environ.get("LOCAL_RANK", 0))
@@ -64,18 +66,30 @@ class TuningConfig:
     has_bias: bool
 
 
-def gen_tuning_space():
+def gen_tuning_space(dtype, check: bool):
     space: List[TuningConfig] = []
     ## Training shapes
     # space_M = [4096]
     # space_N = [10240, 24576, 8192, 57344, 28672]
     # space_K = [8192]
-    space_M = [64, 256, 512, 1024, 2048, 4096, 8192]
-    space_N = [16384, 49152]
-    space_K = [12288]
-    space_transpose_weight = [True, False]
-    space_dtype = [torch.bfloat16, torch.float16]
-    space_has_bias = [False, True]
+    ## EP Serving
+    # space_M = [512, 256, 128, 64]
+    space_M = [512, 256, 128, 64] if dtype == torch.int8 else [4096, 64, 256, 512, 1024, 2048, 8192]
+    space_N = [10240] if dtype == torch.int8 else [49152, 16384]
+    space_K = [8192 if dtype == torch.int8 else 12288]
+    space_transpose_weight = [False] if dtype == torch.int8 else [True, False]
+    space_dtype = [dtype] if dtype == torch.int8 else [torch.bfloat16, torch.float16]
+    space_has_bias = [True] if dtype == torch.int8 else [False, True]
+
+    ## Check only config for CI to save time
+    if check:
+        space_M = [space_M[0]]
+        space_N = [space_N[0]]
+        space_K = [space_K[0]]
+        space_transpose_weight = [space_transpose_weight[0]]
+        space_dtype = [space_dtype[0]]
+        space_has_bias = [space_has_bias[0]]
+
     for M, N, K, transpose_weight, dtype, has_bias in itertools.product(
         space_M,
         space_N,
@@ -96,7 +110,14 @@ def gen_tuning_space():
     return space
 
 
-def get_torch_output(input: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor):
+def get_torch_output(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    is_s8_dequant: bool,
+):
     local_M = input.size(0)
     M = local_M * TP_GROUP.size()
 
@@ -107,8 +128,25 @@ def get_torch_output(input: torch.Tensor, weight: torch.Tensor, bias: torch.Tens
         device=torch.cuda.current_device(),
         requires_grad=False,
     )
+    full_input_scale = (
+        torch.zeros(
+            (M, 1), dtype=input_scale.dtype, device=torch.cuda.current_device(), requires_grad=False
+        )
+        if is_s8_dequant
+        else None
+    )
+    if is_s8_dequant:
+        torch.distributed.all_gather_into_tensor(full_input_scale, input_scale, group=TP_GROUP)
     torch.distributed.all_gather_into_tensor(full_input, input, group=TP_GROUP)
-    output = torch.matmul(full_input, weight.t())
+    torch.distributed.barrier()
+    if is_s8_dequant:
+        accum = flux.testing.matmul_int8(full_input, weight.t()).to(torch.float32)
+        output = full_input_scale * weight_scale * accum
+    else:
+        output = 1.0 * torch.matmul(full_input, weight.t())
+
+    if is_s8_dequant:
+        output = output.to(torch.bfloat16)
     if bias is not None:
         output += bias
     torch.distributed.barrier()
@@ -120,6 +158,9 @@ def run_flux_profiling(
     input: torch.Tensor,
     weight: torch.Tensor,
     bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    is_s8_dequant: bool,
     config: TuningConfig,
 ):
     local_M = input.size(0)
@@ -133,6 +174,7 @@ def run_flux_profiling(
         w = weight
         N = w.size(0)
 
+    output_dtype = torch.bfloat16 if is_s8_dequant else input.dtype
     ag_gemm_kernel = flux.AGKernel(
         TP_GROUP,
         NNODES,
@@ -140,11 +182,22 @@ def run_flux_profiling(
         N,
         K,
         input.dtype,
-        transpose_weight=config.transpose_weight,
-        local_copy=True,
+        output_dtype=output_dtype,
     )
 
-    output = ag_gemm_kernel.profiling(input, w, bias=bias, prof_ctx=prof_ctx)
+    output = ag_gemm_kernel.profiling(
+        input,
+        w,
+        bias=bias,
+        output=None,
+        input_scale=input_scale,
+        weight_scale=weight_scale,
+        output_scale=None,
+        fast_accum=False,
+        transpose_weight=config.transpose_weight,
+        gathered_input=None,
+        prof_ctx=prof_ctx,
+    )
     return output
 
 
@@ -154,21 +207,45 @@ def tune_one_config(prof_ctx: flux.ProfilingContext, config: TuningConfig):
     local_M = config.M // TP_GROUP.size()
     local_N = config.N // TP_GROUP.size()
 
+    is_s8_dequant = config.dtype == torch.int8
+
     # input: [M, K], weight: [N, K]
-    input = (
-        torch.rand((local_M, config.K), dtype=config.dtype).cuda() / 100 * ((TP_GROUP.rank() + 1))
-    )
-    weight = (
-        torch.rand((local_N, config.K), dtype=config.dtype).cuda() / 100 * ((TP_GROUP.rank() + 1))
-    )
+    input = None
+    weight = None
+    if is_s8_dequant:
+        input = torch.randint(-120, 120, (local_M, config.K), dtype=torch.int8).cuda()
+        weight = torch.randint(-120, 120, (local_N, config.K), dtype=torch.int8).cuda()
+    else:
+        input = (
+            torch.rand((local_M, config.K), dtype=config.dtype).cuda()
+            / 100
+            * ((TP_GROUP.rank() + 1))
+        )
+        weight = (
+            torch.rand((local_N, config.K), dtype=config.dtype).cuda()
+            / 100
+            * ((TP_GROUP.rank() + 1))
+        )
+
+    input_scale = None
+    weight_scale = None
+
+    if is_s8_dequant:
+        input_scale = torch.rand((local_M, 1), dtype=torch.float32).cuda()
+        weight_scale = torch.rand((1, local_N), dtype=torch.float32).cuda()
 
     bias = None
     if config.has_bias:
-        bias = torch.rand((config.M, local_N), dtype=input.dtype, device=input.device)
+        if is_s8_dequant:
+            bias = torch.rand((1, local_N), dtype=torch.bfloat16, device=input.device)
+        else:
+            bias = torch.rand((config.M, local_N), dtype=input.dtype, device=input.device)
 
-    torch_output = get_torch_output(input, weight, bias)
+    torch_output = get_torch_output(input, weight, bias, input_scale, weight_scale, is_s8_dequant)
     torch.distributed.barrier()
-    flux_output = run_flux_profiling(prof_ctx, input, weight, bias, config)
+    flux_output = run_flux_profiling(
+        prof_ctx, input, weight, bias, input_scale, weight_scale, is_s8_dequant, config
+    )
     torch.distributed.barrier()
     torch.cuda.current_stream().synchronize()
 
@@ -190,8 +267,21 @@ def parse_args():
     parser.add_argument(
         "--output_dir", default="", type=str, help="Directory to store generated files"
     )
+    parser.add_argument("--dtype", default="bfloat16", type=str, help="data type")
+    parser.add_argument(
+        "--check",
+        default=False,
+        action="store_true",
+        help="Check several sizes for functional test",
+    )
     return parser.parse_args()
 
+
+DTYPE_MAP = {
+    "bf16": torch.bfloat16,
+    "fp16": torch.float16,
+    "s8": torch.int8,
+}
 
 if __name__ == "__main__":
     args = parse_args()
@@ -205,7 +295,8 @@ if __name__ == "__main__":
     arch: int = flux.get_arch()
     name: str = f"config_ag_gemm_kernel_sm{arch}_tp{WORLD_SIZE}_nnodes{NNODES}"
     prof_ctx = flux.ProfilingContext(name)
-    config_space = gen_tuning_space()
+    dtype = DTYPE_MAP[args.dtype]
+    config_space = gen_tuning_space(dtype, args.check)
     for i, config in enumerate(config_space):
         if TP_GROUP.rank() == 0:
             print(f"==== #{i + 1}/{len(config_space)} Tuning for {config}")
