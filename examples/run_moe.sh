@@ -13,9 +13,9 @@ export NCCL_DEBUG=WARN
 ../launch.sh moe_layer1.py
 
 # A minimal MoE layer - Compare torch and Flux:
-../launch.sh moe.py
+# ../launch.sh moe.py
 
 # A minimal MoE layer with only flux:
-../launch.sh moe_flux_only.py
+# ../launch.sh moe_flux_only.py
 
 # For a complete and more detailed implementation of the MoE layer, please refer to docs/moe_usage.md
