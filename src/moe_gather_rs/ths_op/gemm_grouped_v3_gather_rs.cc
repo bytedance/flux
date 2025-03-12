@@ -643,15 +643,17 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
           return flag;
         } else {
           // bf16 filter based on the gather_rs_ctas && topk
+          // TODO(ZSL): cleanup the code 
           auto comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams.comm_spec());
-          return comm_params.gather_rs_ctas() == gather_rs_ctas &&
-                 comm_params.n_dim() == N;
+          return comm_params.n_dim() == N;
         }
       };
 
       OpRegistry::OpPtr gemm_op;
       if (hparams.has_value()) {
         gemm_op = OpRegistry::instance().get_op(meta, hparams.value());
+        auto& comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams->comm_spec());
+        gather_rs_ctas = comm_params.gather_rs_ctas();
       } else {
         gemm_op = OpRegistry::instance().get_op(meta, rt_conf, hparams_filter);
       }
