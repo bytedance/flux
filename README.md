@@ -34,6 +34,9 @@ pip3 install packaging
 pip3 install ninja
 pip3 install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
+git clone --recursive https://github.com/bytedance/flux.git && cd flux
+# Install dependencies
+bash ./install_deps.sh
 ./build.sh --clean-all
 ./build.sh --arch "80;89;90" --nvshmem --package
 ```
