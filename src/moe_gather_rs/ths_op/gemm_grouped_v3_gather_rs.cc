@@ -485,15 +485,6 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
 
     return args;
   }
-  int
-  dispatch_split(int64_t n_dim) {
-    if (n_dim == 7168)
-      return 7;
-    else if (n_dim == 1152)
-      return 9;
-    else
-      return 8;
-  }
 
  public:
   GemmGroupedV3GatherRSOpImpl(
@@ -520,7 +511,8 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
         << "Tp world size x Ep world size != World size";
     CHECK(this->total_num_experts % this->ep_world_size == 0)
         << "The number of experts is not divisible by the EP world size";
-    this->SPLITS = this->dispatch_split(n_dim);
+    // TODO(ZSL): the SPLITS should be tuned.
+    this->SPLITS = 8;
     this->num_experts = this->total_num_experts / this->ep_world_size;
     this->gather_rs_stream.push_back(at::cuda::getStreamFromPool());
     this->splits_cum_sum.resize(total_num_experts + 1, 0);
@@ -647,13 +639,13 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
         if (dt_conf.is_input_fp8()) {
           auto comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams.comm_spec());
           bool flag = comm_params.gather_rs_ctas() == gather_rs_ctas &&
-                      comm_params.n_dim_per_split() == N / SPLITS;
+                      comm_params.n_dim() == N;
           return flag;
         } else {
           // bf16 filter based on the gather_rs_ctas && topk
           auto comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams.comm_spec());
           return comm_params.gather_rs_ctas() == gather_rs_ctas &&
-                 comm_params.n_dim_per_split() == N / SPLITS;
+                 comm_params.n_dim() == N;
         }
       };
 
@@ -870,7 +862,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
           float total_elapsed = 0;
           auto cp_hparams = hparams;
           auto comm_params = std::get<unified_type_t<GatherRSHParams>>(cp_hparams.comm_spec());
-          if (comm_params.n_dim_per_split() != N / SPLITS) {
+          if (comm_params.n_dim() != N) {
             return;
           }
           auto stream = c10::cuda::getCurrentCUDAStream();

@@ -127,7 +127,7 @@ message GemmHparams {
   }
   message GatherRSHParams {
     optional int32 gather_rs_ctas = 1 [default = 20];
-    optional int32 n_dim_per_split = 2 [default = 1024];
+    optional int32 n_dim = 2 [default = 1024];
   }
   oneof impl_spec {
     GemmV2HParams gemm_v2_hparams = 1;

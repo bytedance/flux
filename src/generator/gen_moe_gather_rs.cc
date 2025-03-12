@@ -33,13 +33,7 @@ struct GemmGroupedV2GatherRS_Space {
       cute::make_tuple(_RCR{}),  // TODO(houqi.1993) only RCR is supported
       cute::make_tuple(_GemmGroupedV2{}),
       cute::make_tuple(make_gemm_v2_meta(_False{})),
-      cute::make_tuple(
-          // make_gather_rs_meta(cute::Int<10>{}),
-          // make_gather_rs_meta(cute::Int<8>{}),
-          // make_gather_rs_meta(cute::Int<6>{}),
-          // make_gather_rs_meta(cute::Int<5>{}),
-          // make_gather_rs_meta(cute::Int<4>{}),
-          make_gather_rs_meta(cute::Int<1>{})));
+      cute::make_tuple(make_gather_rs_meta(cute::Int<1>{})));
 
   static constexpr auto AllGemmHParams_FP16 = make_space_gemm_hparams();
 
@@ -54,13 +48,7 @@ struct GemmGroupedV2GatherRS_Space {
       cute::make_tuple(_RCR{}),
       cute::make_tuple(_GemmGroupedV2{}),
       cute::make_tuple(make_gemm_v2_meta(_True{}), make_gemm_v2_meta(_False{})),
-      cute::make_tuple(
-          // make_gather_rs_meta(cute::Int<10>{}),
-          // make_gather_rs_meta(cute::Int<8>{}),
-          // make_gather_rs_meta(cute::Int<6>{}),
-          // make_gather_rs_meta(cute::Int<5>{}),
-          // make_gather_rs_meta(cute::Int<4>{}),
-          make_gather_rs_meta(cute::Int<1>{})));
+      cute::make_tuple(make_gather_rs_meta(cute::Int<1>{})));
 
   static constexpr auto AllGemmHParams_FP8 = make_space_gemm_hparams(
       cute::make_tuple(Auto{}),
@@ -99,12 +87,12 @@ struct GemmGroupedV3GatherRSTS_Space {
   static constexpr auto AllGemmHParams_FP16 = make_space_gemm_hparams(
       cute::make_tuple(make_gemm_v3_hparams(Shape<_1, _1, _1>{})),
       cute::make_tuple(
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<1024>{}),
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<768>{}),
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<640>{}),
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<512>{}),
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<384>{}),
-          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<256>{})),
+          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<8192>{}),
+          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<6144>{}),
+          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<5120>{}),
+          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<4096>{}),
+          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<3072>{}),
+          make_gather_rs_hparams(cute::Int<28>{}, cute::Int<2048>{})),
       cute::make_tuple(Shape<_128, _256, _64>{}));
 
   static constexpr auto AllGemmMeta_FP8 = make_space_gemm_meta(
@@ -123,9 +111,9 @@ struct GemmGroupedV3GatherRSTS_Space {
   static constexpr auto AllGemmHParams_FP8 = make_space_gemm_hparams(
       cute::make_tuple(make_gemm_v3_hparams(Shape<_2, _1, _1>{})),
       make_tuple(
-          make_gather_rs_hparams(cute::Int<32>{}, cute::Int<1024>{}),
-          make_gather_rs_hparams(cute::Int<32>{}, cute::Int<512>{}),
-          make_gather_rs_hparams(cute::Int<32>{}, cute::Int<256>{})));
+          make_gather_rs_hparams(cute::Int<32>{}, cute::Int<4096>{}),
+          make_gather_rs_hparams(cute::Int<32>{}, cute::Int<3072>{}),
+          make_gather_rs_hparams(cute::Int<32>{}, cute::Int<2048>{})));
 
   static auto
   get_space() {
