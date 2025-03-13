@@ -635,18 +635,8 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
       auto rt_conf = make_runtime_config(N, cute::ceil_div(globalM, this->num_experts), K);
 
       auto hparams_filter = [&](UnifiedGemmHParams const &hparams) {
-        auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
-        if (dt_conf.is_input_fp8()) {
-          auto comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams.comm_spec());
-          bool flag = comm_params.gather_rs_ctas() == gather_rs_ctas &&
-                      comm_params.n_dim() == N;
-          return flag;
-        } else {
-          // bf16 filter based on the gather_rs_ctas && topk
-          // TODO(ZSL): cleanup the code 
-          auto comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams.comm_spec());
-          return comm_params.n_dim() == N;
-        }
+        auto comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams.comm_spec());
+        return comm_params.n_dim() == N;
       };
 
       OpRegistry::OpPtr gemm_op;
