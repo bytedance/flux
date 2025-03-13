@@ -1,3 +1,16 @@
+diff -ruN ./cutlass/include/cutlass/cuda_host_adapter.hpp ./cutlass_new/include/cutlass/cuda_host_adapter.hpp
+--- ./cutlass/include/cutlass/cuda_host_adapter.hpp	2025-03-13 00:00:00.000000000 +0800
++++ ./cutlass_new/include/cutlass/cuda_host_adapter.hpp	2025-03-13 00:00:00.000000000 +0800
+@@ -104,8 +104,7 @@
+ 
+ #else // defined(CUTLASS_ENABLE_DIRECT_CUDA_DRIVER_CALL)
+ 
+-#if ((__CUDACC_VER_MAJOR__ >= 13) ||                               \
+-    ((__CUDACC_VER_MAJOR__ == 12) && (__CUDACC_VER_MINOR__ >= 5))) \
++#if (__CUDACC_VER_MAJOR__ >= 13)
+ 
+ #define CUTLASS_CUDA_DRIVER_WRAPPER_DECL(func, ver)             \
+   template <typename... Args>                                   \
 diff -ruN ./cutlass/CHANGELOG.md ./cutlass_new/CHANGELOG.md
 --- ./cutlass/CHANGELOG.md	2025-02-27 17:58:48.340210718 +0000
 +++ ./cutlass_new/CHANGELOG.md	2025-02-27 17:27:43.091450322 +0000
