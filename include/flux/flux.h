@@ -1041,9 +1041,11 @@ struct TupleCompare {
     if constexpr (I == Size) {
       return false;
     } else {
+#if __GNUC__ >= 12
       // since GCC-12, gcc respect namespace for operator such as <
       using cute::operator<;
       using bytedance::flux::operator<;
+#endif
       return bool(cute::get<I>(t) < cute::get<I>(u)) ||
              (!bool(cute::get<I>(u) < cute::get<I>(t)) &&
               TupleCompare<Tp, Up, I + 1, Size>::less(t, u));
