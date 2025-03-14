@@ -39,7 +39,7 @@ The kernels used on Hopper architecture are `GemmGroupedV3AGScatter` and `GemmGr
 
 The `splits_gpu` and `splits_cpu` are used to specify the number of tokens that are distributed across experts. The sum of `splits_gpu` and `splits_cpu` should be equal to `n_tokens*topk`. The `scatter_index` is used to specify the index of the position that each token is assigned to. The `scatter_index` is a 2D tensor with shape [n_tokens, topk].
 
-Then the MoE layer can be used as a independent module and be plugged into any frameworks you are using. To understand more on the detailed design principles of the kernels, please refer to [Design Guide](https://github.com/ZSL98/flux/blob/comet_clean/docs/design.md).
+Then the MoE layer can be used as a independent module and be plugged into any frameworks you are using. To understand more on the detailed design principles of the kernels, please refer to [Design Guide](https://github.com/bytedance/flux/blob/main/docs/design.md).
 
 ## Compare with native pytorch code
 
