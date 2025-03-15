@@ -961,7 +961,7 @@ class GemmGroupedV2GatherRSOp::GemmGroupedV2GatherRSOpImpl {
           float total_elapsed = 0;
           auto cp_hparams = hparams;
           auto comm_params = std::get<unified_type_t<GatherRSHParams>>(cp_hparams.comm_spec());
-          if (comm_params.n_dim_per_split() != N / this->n_split) {
+          if (comm_params.n_dim() != N) {
             return;
           }
           auto stream = c10::cuda::getCurrentCUDAStream();
