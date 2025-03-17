@@ -46,7 +46,7 @@ class MoeMlp1Ctx():
 
     h = 4096
     ffn_size = 14336
-    nexperts = 16
+    nexperts = 8
     topk = 2
     ntokens = 1024
     tp_rank = TP_GROUP.rank()
