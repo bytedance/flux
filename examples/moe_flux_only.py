@@ -26,6 +26,7 @@ def init_ep_group(ep_size: int):
             EP_GROUP = group
 
 flux.init_flux_shm(TP_GROUP)
+# The line below indicates EP=4
 init_ep_group(ep_size=4)
 
 class MoeMlp1Ctx():
@@ -33,7 +34,7 @@ class MoeMlp1Ctx():
 
     h = 4096
     ffn_size = 14336
-    nexperts = 16
+    nexperts = 8
     topk = 2
     ntokens = 1024
     tp_rank = TP_GROUP.rank()

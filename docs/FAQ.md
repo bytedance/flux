@@ -10,6 +10,7 @@
     - MoE layer0 (AllGather + Scatter + GroupGEMM) in `src/moe_ag_scatter`
     - MoE layer1 (GroupGEMM + Gather + Topk-reduce + ReduceScatter) in `src/moe_gather_rs`
 
+    Flux supports MoE kernels with tensor parallelism/expert parallelism/tensor+expert parallelism. You can get a minimal example of a MoE layer with EP=4 in `examples/moe_flux_only.py` (Note that sequence parallelism is enabled and the ffn_tp_size is 2). There is also an illustration as `docs/assets/toy_example.png` for this toy example to help you understand the workflow in this TP+EP MoE case better. In this case, the communication of EP is also overlapped by GroupGEMM in Flux's implementation.
     Detailed information about the kernels can be found in the [Design Guide](https://github.com/bytedance/flux/blob/main/docs/design.md).
 
 #### Connection problems
