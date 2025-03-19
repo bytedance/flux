@@ -1,8 +1,48 @@
-# Flux
+<div align="center">
+ 👋 Hi, everyone!
+    <br>
+    We are <b>ByteDance Seed team.</b>
+</div>
+
+<p align="center">
+  You can get to know us better through the following channels👇
+  <br>
+  <a href="https://team.doubao.com/">
+    <img src="https://img.shields.io/badge/Website-%231e37ff?style=for-the-badge&logo=bytedance&logoColor=white"></a>
+  <a href="https://github.com/user-attachments/assets/93481cda-a7f3-47f3-b333-fe6b3da86b78">
+    <img src="https://img.shields.io/badge/WeChat-07C160?style=for-the-badge&logo=wechat&logoColor=white"></a>
+ <a href="https://www.xiaohongshu.com/user/profile/668e7e15000000000303157d?xsec_token=ABl2-aqekpytY6A8TuxjrwnZskU-6BsMRE_ufQQaSAvjc%3D&xsec_source=pc_search">
+    <img src="https://img.shields.io/badge/Xiaohongshu-%23FF2442?style=for-the-badge&logo=xiaohongshu&logoColor=white"></a>
+  <a href="https://www.zhihu.com/org/dou-bao-da-mo-xing-tuan-dui/">
+    <img src="https://img.shields.io/badge/zhihu-%230084FF?style=for-the-badge&logo=zhihu&logoColor=white"></a>
+</p>
+
+![seed logo](https://github.com/user-attachments/assets/c42e675e-497c-4508-8bb9-093ad4d1f216)
+
+# Flux: Fine-grained Computation-communication Overlapping GPU Kernel Library
+
+<p align="center">
+  <a href="https://github.com/bytedance/flux">
+    <img src="https://img.shields.io/badge/Flux-Project Page-yellow"></a>
+  <a href="https://arxiv.org/pdf/2502.19811">
+    <img src="https://img.shields.io/badge/Flux-Tech Report-red"></a>
+  <a href="XXX">
+    <img src="https://img.shields.io/badge/License-Apache-blue"></a>
+  <br>
+  <a href="https://github.com/user-attachments/assets/d3fcb3bf-466b-4efe-8c3f-5f85258202ae">
+    <img src="https://img.shields.io/badge/Flux-Wechat Communication Group-07C160"></a>
+
+</p>
 
 Flux is a communication-overlapping library for dense/MoE models on GPUs, providing high-performance and pluggable kernels to support various parallelisms in model training/inference.
 
 Flux's efficient kernels are compatible with Pytorch and can be integrated into existing frameworks easily, supporting various Nvidia GPU architectures and data types.
+
+Welcome to join the [Wechat](https://github.com/bytedance/flux/blob/main/docs/assets/comet_wechat_group.JPG) group and stay tuned!
+
+# News
+[2025/03/10]🔥We have released **COMET: Computation-communication Overlapping for Mixture-of-Experts**.
+
 
 ## Getting started
 Install Flux either from source or from PyPI.
@@ -32,9 +72,6 @@ pip3 install packaging
 pip3 install ninja
 pip3 install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-git clone --recursive https://github.com/bytedance/flux.git && cd flux
-# Install dependencies
-bash ./install_deps.sh
 ./build.sh --clean-all
 ./build.sh --arch "80;89;90" --nvshmem --package
 ```
@@ -91,7 +128,11 @@ You can check out the documentations for more details!
 * To learn more about the design principles of Flux, please refer to [Design Doc](https://github.com/bytedance/flux/blob/main/docs/design.md).
 
 
-## Citations
+## [License](./LICENSE)
+
+The Flux Project is under the Apache License v2.0.
+
+## Citation
 
 If you use Flux in a scientific publication, we encourage you to add the following reference
 to the related papers:
@@ -121,6 +162,8 @@ to the related papers:
 * [ArXiv Paper (Flux)](http://arxiv.org/abs/2406.06858)
 * [ArXiv Paper (Comet)](https://arxiv.org/abs/2502.19811)
 
-## [License](./LICENSE)
 
-The Flux Project is under the Apache License v2.0.
+# About [ByteDance Seed Team](https://team.doubao.com/)
+
+Founded in 2023, ByteDance Seed Team is dedicated to crafting the industry's most advanced AI foundation models. The team aspires to become a world-class research team and make significant contributions to the advancement of science and society.
+
