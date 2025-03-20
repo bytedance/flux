@@ -116,22 +116,22 @@ struct GatherRSHParams : FluxNamedTupleBase<GatherRSHParams, Ts...> {
 
   static constexpr char const *Name = "GatherRSHParams";
   static constexpr char const *LowerName = "gather_rs_hparams";
-  static constexpr std::array<char const *, 2> Fields = {"gather_rs_ctas", "n_dim_per_split"};
+  static constexpr std::array<char const *, 2> Fields = {"gather_rs_ctas", "n_dim"};
 
   FLUX_NAMED_TUPLE_DEFINE_FIELD(gather_rs_ctas, 0)
-  FLUX_NAMED_TUPLE_DEFINE_FIELD(n_dim_per_split, 1)
+  FLUX_NAMED_TUPLE_DEFINE_FIELD(n_dim, 1)
 
   friend GatherRSHParams<int, int>
   unify_type(GatherRSHParams const &obj) {
-    return cute::make_tuple(int(obj.gather_rs_ctas()), int(obj.n_dim_per_split()));
+    return cute::make_tuple(int(obj.gather_rs_ctas()), int(obj.n_dim()));
   }
 };
 
-template <class GatherRSCTAs = cute::Int<20>, class NDIM_PER_S = cute::_1024>
-constexpr GatherRSHParams<GatherRSCTAs, NDIM_PER_S>
+template <class GatherRSCTAs = cute::Int<20>, class NDIM = cute::_1024>
+constexpr GatherRSHParams<GatherRSCTAs, NDIM>
 make_gather_rs_hparams(
-    GatherRSCTAs const &nctas = cute::Int<20>{}, NDIM_PER_S ndim_per_s = cute::_1024{}) {
-  return {cute::make_tuple(nctas, ndim_per_s)};
+    GatherRSCTAs const &nctas = cute::Int<20>{}, NDIM ndim = cute::_1024{}) {
+  return {cute::make_tuple(nctas, ndim)};
 }
 
 template <class... Ts>

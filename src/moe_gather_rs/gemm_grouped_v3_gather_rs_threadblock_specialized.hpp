@@ -40,7 +40,8 @@ struct GemmGroupedV3GatherRSTS_Kernel : public GemmGroupedV3BaseKernel<GemmMetaT
   static constexpr int32_t GATHER_RS_N_CTAS = hparams.comm_spec().gather_rs_ctas();
   static constexpr int32_t TOPK = meta.comm_spec().topk();
   static constexpr int32_t GATHER_RS_BLOCK_M = 24;
-  static constexpr int32_t GATHER_RS_BLOCK_N = hparams.comm_spec().n_dim_per_split();
+  // static constexpr int32_t GATHER_RS_BLOCK_N = hparams.comm_spec().n_dim() / hparams.comm_spec().split_n_dim();
+  static constexpr int32_t GATHER_RS_BLOCK_N = hparams.comm_spec().n_dim() / 8;
   static constexpr auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
 
   static_assert(meta.comm_op() == _GatherRS{}, "requires _GatherRS{}");

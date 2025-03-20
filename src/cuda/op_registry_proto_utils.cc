@@ -147,7 +147,7 @@ ToUnifiedGemmHparams(const proto::GemmHparams &hparams) {
     if (hparams.has_gather_rs_hparams()) {
       const auto &gather_rs_hparams = hparams.gather_rs_hparams();
       return make_gather_rs_hparams(
-          gather_rs_hparams.gather_rs_ctas(), gather_rs_hparams.n_dim_per_split());
+          gather_rs_hparams.gather_rs_ctas(), gather_rs_hparams.n_dim());
     }
     return None{};
   }();
