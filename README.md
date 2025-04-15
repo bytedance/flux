@@ -38,8 +38,6 @@ Flux is a communication-overlapping library for dense/MoE models on GPUs, provid
 
 Flux's efficient kernels are compatible with Pytorch and can be integrated into existing frameworks easily, supporting various Nvidia GPU architectures and data types.
 
-Welcome to join the [Wechat](https://github.com/bytedance/flux/blob/main/docs/assets/comet_wechat_group.JPG) group and stay tuned!
-
 # News
 [2025/03/10]🔥We have released **COMET: Computation-communication Overlapping for Mixture-of-Experts**.
 
