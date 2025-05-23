@@ -167,10 +167,10 @@ class MoE_layer_flux(torch.nn.Module):
 
         # MLP layer 1 (GEMM1 and combine)
         mlp_output = self.flux_rs_op.forward_gather_rs(
-            self.ctx.intermediate_output,
-            self.ctx.weight1,
-            self.ctx.splits_cpu,
-            self.ctx.scatter_index.view(-1),
+            input=self.ctx.intermediate_output,
+            weight=self.ctx.weight1,
+            splits_cpu=self.ctx.splits_cpu,
+            rounting_idx=self.ctx.scatter_index.view(-1),
         )
 
         return mlp_output
