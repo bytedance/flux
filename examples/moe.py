@@ -141,8 +141,13 @@ class MoE_layer_flux(torch.nn.Module):
             input_dtype=ctx.data_type,
             output_dtype=ctx.data_type,
         )
-        self.flux_ag_op = flux.GemmGroupedV3AGScatter(tp_env=tp_env, moe_args=moe_args)
-        self.flux_rs_op = flux.GemmGroupedV3GatherRS(ctx.nexperts, flux_m_max, ctx.h, ctx.topk, RANK, WORLD_SIZE, ctx.ffn_tp_size, ctx.ep_size, 1)
+
+        if flux.util.get_arch() >= 90:
+            self.flux_ag_op = flux.GemmGroupedV3AGScatter(tp_env=tp_env, moe_args=moe_args)
+            self.flux_rs_op = flux.GemmGroupedV3GatherRS(ctx.nexperts, flux_m_max, ctx.h, ctx.topk, RANK, WORLD_SIZE, ctx.ffn_tp_size, ctx.ep_size, 1)
+        else:
+            self.flux_ag_op = flux.GemmGroupedV2AGScatterOp(tp_env=tp_env, moe_args=moe_args)
+            self.flux_rs_op = flux.GemmGroupedV2GatherRSOp(TP_GROUP, ctx.nexperts, flux_m_max, ctx.h, ctx.topk, ctx.data_type, ctx.ffn_tp_size, ctx.ep_size, 1)
 
     def forward(self):
 
@@ -165,7 +170,7 @@ class MoE_layer_flux(torch.nn.Module):
             input=self.ctx.intermediate_output,
             weight=self.ctx.weight1,
             splits_cpu=self.ctx.splits_cpu,
-            routing_idx=self.ctx.scatter_index.view(-1),
+            scatter_idx=self.ctx.scatter_index.view(-1),
         )
 
         return mlp_output
