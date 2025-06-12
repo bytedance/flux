@@ -267,7 +267,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir", default="", type=str, help="Directory to store generated files"
     )
-    parser.add_argument("--dtype", default="bfloat16", type=str, help="data type")
+    parser.add_argument("--dtype", default="bf16", type=str, help="data type")
     parser.add_argument(
         "--check",
         default=False,
