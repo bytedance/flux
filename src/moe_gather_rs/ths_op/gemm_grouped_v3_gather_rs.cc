@@ -583,9 +583,9 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
     }
     CHECK(globalM % this->world_size == 0);
     CHECK(globalM % this->topk == 0);
-    CHECK(globalM <= this->max_m) << "routing_idx.size(0) " << globalM << " larger than max_m"
+    CHECK(globalM <= this->max_m) << "routing_idx.size(0) " << globalM << " larger than max_m "
                                   << this->max_m
-                                  << ", Please set env JANUS_FLUX_M_MAX appropriately\n";
+                                  << "; please set max_m appropriately in the constructor.\n";
     CHECK(M <= globalM) << "input.size(0) " << M << " larger than routing_idx.size(0)\n";
     CHECK(N == this->n_dim) << "weight.size(1) != n_dim";
     this->drop_token = splits_cpu.size(0) == this->total_num_experts + 1;
