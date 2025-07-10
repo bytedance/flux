@@ -2,7 +2,7 @@
 
 ## Integrate an MoE layer
 Flux kernels are pluggable and can be used to implement an MoE layer easily. The following code snippet shows how to implement an MoE layer using the Flux kernels.
-Readers can refer to the `MoE_layer_flux` class in `Megatron-LM/test/unit_tests/transformer/moe/test_moe.py` for detailed implementation. We give a general and simplified flow for Hopper architecture here.
+Readers can refer to the `MoE_layer_flux` class in https://github.com/ZSL98/Megatron-LM/blob/main/tests/unit_tests/transformer/moe/test_moe.py for detailed implementation. We give a general and simplified flow for Hopper architecture here.
 
 ```python
 class MoE_layer_flux(torch.nn.Module):
