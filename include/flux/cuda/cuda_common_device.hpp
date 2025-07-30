@@ -17,13 +17,15 @@
 
 #pragma once
 
+
 #include "cute/util/debug.hpp"
 #include "cute/util/print.hpp"
 #include "cutlass/detail/helper_macros.hpp"
 #include <cstddef>
 #include <cstring>
 
-#if defined(CUDA_VERSION) && CUDA_VERSION > 12080
+#include <cuda.h>
+#if defined(CUDA_VERSION) && CUDA_VERSION >= 12080
 #include <cuda/atomic>
 #else
 #include <cuda/std/atomic>
