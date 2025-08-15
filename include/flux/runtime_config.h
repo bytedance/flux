@@ -59,6 +59,27 @@ make_all_gather_runtime_config(int world_size = 1, int nnodes = 1, int ring_mode
   return cute::make_tuple(world_size, nnodes, ring_mode);
 }
 
+// for PreAttnAllToAllTranspose and PostAttnAllToAllTranspose
+template <class... Ts>
+struct AllToAllTransposeRuntimeConfigTpl
+    : FluxNamedTupleBase<AllToAllTransposeRuntimeConfigTpl, Ts...> {
+  using Base = FluxNamedTupleBase<AllToAllTransposeRuntimeConfigTpl, Ts...>;
+  static constexpr char const *Name = "AllToAllTransposeRuntimeConfig";
+  static constexpr char const *LowerName = "all_to_all_transpose_runtime_config";
+  static constexpr std::array<char const *, 3> Fields = {"world_size", "nnodes", "ring_mode"};
+  FLUX_NAMED_TUPLE_DEFINE_FIELD(world_size, 0)
+  FLUX_NAMED_TUPLE_DEFINE_FIELD(nnodes, 1)
+  FLUX_NAMED_TUPLE_DEFINE_FIELD(ring_mode, 2)
+
+  constexpr AllToAllTransposeRuntimeConfigTpl(cute::tuple<Ts...> const &tup) : Base(tup) {}
+};
+
+using AllToAllTransposeRuntimeConfig = AllToAllTransposeRuntimeConfigTpl<int, int, int>;
+
+inline AllToAllTransposeRuntimeConfig
+make_all_to_all_transpose_runtime_config(int world_size = 1, int nnodes = 1, int ring_mode = 0) {
+  return cute::make_tuple(world_size, nnodes, ring_mode);
+}
 
 using UnifiedCommRuntimeConfig =
     std::variant<None, ReduceScatterRuntimeConfig, AllGatherRuntimeConfig>;

@@ -16,13 +16,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "ag_gemm/ths_op/all_gather_gemm_op.h"
-#include "ag_gemm/ths_op/all_gather_gemm_op_crossnode.h"
+#include "ag_gemm/ths_op/all_gather_gemm_op_internode.h"
 #include "flux/ths_op/flux_shm.h"
 #include "flux/ths_op/ths_pybind.h"
 namespace bytedance::flux::ths_op {
 
 using AllGatherGemmOpCls = TorchClassWrapper<AllGatherGemmOp>;
-using AllGatherGemmOpCrossNodeCls = TorchClassWrapper<AllGatherGemmOpCrossNode>;
+using AllGatherGemmOpInterNodeCls = TorchClassWrapper<AllGatherGemmOpInterNode>;
 
 namespace py = pybind11;
 
@@ -102,7 +102,7 @@ static int _ [[maybe_unused]] = []() {
             py::arg("gathered_input") = py::none(),
             py::arg("prof_ctx") = nullptr);
 
-    py::class_<AllGatherGemmOpCrossNodeCls>(m, "AGKernelCrossNode")
+    py::class_<AllGatherGemmOpInterNodeCls>(m, "AGKernelInterNode")
         .def(
             py::init([](c10::intrusive_ptr<c10d::ProcessGroup> tp_group,
                         c10::intrusive_ptr<c10d::ProcessGroup> intra_node_group,
@@ -115,7 +115,7 @@ static int _ [[maybe_unused]] = []() {
                         bool transpose_weight = true,
                         bool local_copy = false,
                         c10::optional<AGRingMode> ring_mode_ = c10::nullopt) {
-              return new AllGatherGemmOpCrossNodeCls(
+              return new AllGatherGemmOpInterNodeCls(
                   std::make_shared<C10dProcessGroup>("", tp_group),
                   std::make_shared<C10dProcessGroup>("", intra_node_group),
                   nnodes,
@@ -139,10 +139,10 @@ static int _ [[maybe_unused]] = []() {
             py::arg("transpose_weight") = true,
             py::arg("local_copy") = false,
             py::arg("ring_mode") = py::none())
-        .def("reset_signals", &AllGatherGemmOpCrossNodeCls::reset_signals)
-        .def("copy_local", &AllGatherGemmOpCrossNodeCls::copy_local)
-        .def("gemm_only", &AllGatherGemmOpCrossNodeCls::gemm_only)
-        .def("forward", &AllGatherGemmOpCrossNodeCls::forward);
+        .def("reset_signals", &AllGatherGemmOpInterNodeCls::reset_signals)
+        .def("copy_local", &AllGatherGemmOpInterNodeCls::copy_local)
+        .def("gemm_only", &AllGatherGemmOpInterNodeCls::gemm_only)
+        .def("forward", &AllGatherGemmOpInterNodeCls::forward);
   });
 
   return 0;

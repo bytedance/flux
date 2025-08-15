@@ -16,8 +16,10 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-#include <cstdint>
 #include <cutlass/layout/matrix.h>
+
+#include <cstdint>
+
 #include "cutlass_impls/default_ag_scatter_gemm_grouped_with_absmax.h"
 #include "flux/args/moe_ag_scatter.h"
 #include "flux/cuda/cuda_common.h"

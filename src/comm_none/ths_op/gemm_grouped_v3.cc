@@ -16,26 +16,26 @@
 //===----------------------------------------------------------------------===//
 
 #include "comm_none/ths_op/gemm_grouped_v3.h"
+
+#include <ATen/core/List.h>
+#include <ATen/core/jit_type.h>
+#include <ATen/ops/empty.h>
+#include <c10/core/ScalarType.h>
+#include <c10/cuda/CUDAStream.h>
+#include <c10/util/intrusive_ptr.h>
+#include <cuda_runtime_api.h>
+#include <torch/all.h>
+
+#include <cstdlib>
+
+#include "flux/args/comm_none.h"
+#include "flux/cuda/cuda_common.h"
+#include "flux/flux.h"
 #include "flux/gemm_meta.h"
 #include "flux/gemm_operator_base.h"
 #include "flux/op_registry.h"
 #include "flux/ths_op/ths_op.h"
-#include "flux/cuda/cuda_common.h"
-#include "flux/args/comm_none.h"
-#include "flux/flux.h"
 #include "flux/ths_op/util.h"
-#include "torch/all.h"
-#include "cutlass/gemm/gemm.h"
-#include <ATen/core/List.h>
-#include <ATen/ops/empty.h>
-#include <c10/core/ScalarType.h>
-#include <c10/util/intrusive_ptr.h>
-#include <cuda_runtime_api.h>
-#include <ATen/core/jit_type.h>
-#include <c10/cuda/CUDAStream.h>
-#include <numa.h>
-#include <cstdlib>
-#include "cutlass/util/packed_stride.hpp"
 
 namespace bytedance::flux::ths_op {
 
@@ -91,7 +91,7 @@ class GemmGroupedV3::GemmGroupedV3Impl {
         << "splits 0-dim mismatch: " << splits_cpu.size(0) << " != " << E;
 
     auto output_type = this->_st;
-    bool is_fp8 = c10::isFloat8Type(this->_st);
+    bool is_fp8 = is_fp8_torch_dtype(this->_st);
     if (is_fp8) {
       output_type = at::ScalarType::BFloat16;
     }
@@ -116,8 +116,8 @@ class GemmGroupedV3::GemmGroupedV3Impl {
     std::vector<void *> ptr_D;
     {
       // initialize args vectors
-      uint8_t const *ptr_A_cur = reinterpret_cast<uint8_t const *>(input.const_data_ptr());
-      uint8_t const *ptr_B_cur = reinterpret_cast<uint8_t const *>(weight.const_data_ptr());
+      uint8_t const *ptr_A_cur = reinterpret_cast<uint8_t *>(input.data_ptr());
+      uint8_t const *ptr_B_cur = reinterpret_cast<uint8_t *>(weight.data_ptr());
       uint8_t *ptr_D_cur = reinterpret_cast<uint8_t *>(output.data_ptr());
 
       for (int i = 0; i < this->num_experts; ++i) {
@@ -148,10 +148,12 @@ class GemmGroupedV3::GemmGroupedV3Impl {
         .ptr_D = ptr_D.data()};
 
     ArchEnum arch = get_arch();
+    SMCoreEnum sm_core = get_sm_core();
     auto dtype = from_torch_dtype(this->_st);
     auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(dtype));
     auto v3_meta = make_gemm_v3_meta(_False{});
-    auto meta = make_gemm_meta(dt_conf, arch, _CommNone{}, _RCC{}, _GemmGroupedV3{}(), v3_meta);
+    auto meta =
+        make_gemm_meta(dt_conf, arch, sm_core, _CommNone{}, _RCC{}, _GemmGroupedV3{}(), v3_meta);
     auto rt_conf = make_runtime_config(N, cute::ceil_div(M, args.problem_count), K);
     OpRegistry::OpPtr gemm_op;
     if (hparams.has_value()) {
@@ -183,11 +185,12 @@ class GemmGroupedV3::GemmGroupedV3Impl {
     int E = weight.size(0);
     int N = weight.size(1);
     ArchEnum arch = get_arch();
+    SMCoreEnum sm_core = get_sm_core();
     auto dtype = from_torch_dtype(this->_st);
     auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(dtype));
     auto v3_meta = make_gemm_v3_meta(_False{});
     auto meta = unify_type(
-        make_gemm_meta(dt_conf, arch, _CommNone{}, _RCC{}, _GemmGroupedV3{}(), v3_meta));
+        make_gemm_meta(dt_conf, arch, sm_core, _CommNone{}, _RCC{}, _GemmGroupedV3{}(), v3_meta));
     auto rt_conf = make_runtime_config(N, cute::ceil_div(M, this->num_experts), K);
 
     ProfilingContext tmp_ctx("__tmp__");

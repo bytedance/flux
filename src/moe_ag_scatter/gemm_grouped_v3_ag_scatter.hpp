@@ -327,17 +327,17 @@ class GemmGroupedV3AGScatter_Device
       scheduler.raster_order = TileScheduler::RasterOrderOptions::AlongN;
     }
 
-    auto gemm_args = GemmArguments{
-        /*mode=*/cutlass::gemm::GemmUniversalMode::kGrouped,
-        {args.problem_count, problem_sizes_device, problem_sizes_host},
-        /*MMA*/
-        {ptr_A, ptr_Stride_A, ptr_B, ptr_Stride_B},
-        /*Epilogue*/
-        {epi_params, ptr_C, ptr_Stride_C, ptr_D, ptr_Stride_D, ptr_scatter_D},
-        hw_info,
-        /*scheduler=*/scheduler,
-        /*GatherA=*/gather_A,
-        /*AGFetcherA=*/ag_fetcher_A};
+    auto gemm_args =
+        GemmArguments{/*mode=*/cutlass::gemm::GemmUniversalMode::kGrouped,
+                      {args.problem_count, problem_sizes_device, problem_sizes_host},
+                      /*MMA*/
+                      {ptr_A, ptr_Stride_A, ptr_B, ptr_Stride_B},
+                      /*Epilogue*/
+                      {epi_params, ptr_C, ptr_Stride_C, ptr_D, ptr_Stride_D, ptr_scatter_D},
+                      hw_info,
+                      /*scheduler=*/scheduler,
+                      /*GatherA=*/gather_A,
+                      /*AGFetcherA=*/ag_fetcher_A};
 
     return gemm_args;
   }

@@ -16,8 +16,10 @@
 ################################################################################
 
 import ctypes
+import functools
 import importlib
 import logging
+import os
 from pathlib import Path
 
 import torch
@@ -25,24 +27,50 @@ import torch
 FLUX_TORCH_EXTENSION_NAME = "flux_ths_pybind"
 
 
-def _preload_libs(libname):
-    libpath = Path(__file__).parent / "lib" / libname
+def _preload_libs(libname, extra_path=None):
+    libdirs = [Path(__file__).parent / "lib"]
+    if extra_path is not None:
+        libdirs.append(extra_path)
+
+    for libdir in libdirs:
+        try:
+            ctypes.CDLL(libdir / libname)
+            return
+        except OSError:
+            pass
+
+    logging.debug(f"failed to load {libname} from {libdirs}. try load from LD_LIBRARY_PATH")
+    ctypes.CDLL(libname)
+
+
+def _nvshmem_home_by_pip():
     try:
-        ctypes.CDLL(libpath)
-    except OSError as e:
-        # Try to load from the LD_LIBRARY_PATH
-        logging.debug(f"failed to load {libpath}:\n {e}")
-        ctypes.CDLL(libname)
+        import nvidia.nvshmem
+
+        return nvidia.nvshmem.__path__[0]
+    except Exception:
+        raise Exception(
+            f"please install nvshmem by `pip3 install nvidia-nvshmem-cu12` or set NVSHMEM_HOME to an existing NVSHMEM"
+        )
+
+
+@functools.lru_cache()
+def _nvshmem_home():
+    return os.getenv("NVSHMEM_HOME", _nvshmem_home_by_pip())
 
 
 def _load_deps():
     try:
-        _preload_libs("libnvshmem_host.so.3")
-        _preload_libs("nvshmem_bootstrap_uid.so")
-        _preload_libs("nvshmem_transport_ibrc.so.3")
+        _preload_libs("libnvshmem_host.so.3", Path(_nvshmem_home()) / "lib")
+        _preload_libs("nvshmem_bootstrap_uid.so.3", Path(_nvshmem_home()) / "lib")
+        _preload_libs("nvshmem_transport_ibrc.so.3", Path(_nvshmem_home()) / "lib")
     except Exception as e:
         logging.warning("Failed to load NVSHMEM libs")
     _preload_libs("libflux_cuda.so")
+    try:
+        _preload_libs("libflux_triton_aot.so")
+    except Exception as e:
+        logging.debug("Failed to load triton_aot libs")
     _preload_libs("libflux_cuda_ths_op.so")
 
 
@@ -71,6 +99,15 @@ bitwise_check = flux_mod.bitwise_check
 uniform_initialize = flux_mod.uniform_initialize
 load_tuning_record = flux_mod.load_tuning_record
 create_tensor_list = flux_mod.flux_create_tensor_list
+
+_nvshmem_team_split_strided = _get_flux_member("_nvshmem_team_split_strided")
+_nvshmem_team_split_2d = _get_flux_member("_nvshmem_team_split_2d")
+_nvshmem_team_destroy = _get_flux_member("_nvshmem_team_destroy")
+_nvshmem_team_get_config = _get_flux_member("_nvshmem_team_get_config")
+_nvshmem_team_translate_pe = _get_flux_member("_nvshmem_team_translate_pe")
+_nvshmem_team_npes = _get_flux_member("_nvshmem_team_npes")
+_nvshmem_team_my_pe = _get_flux_member("_nvshmem_team_my_pe")
+
 GroupBarrier = flux_mod.GroupBarrier
 
 calc_scatter_index = _get_flux_member("calc_scatter_index")
@@ -91,7 +128,7 @@ GemmGroupedV3 = _get_flux_member("GemmGroupedV3")
 GemmRS = _get_flux_member("GemmRS")
 get_gemm_rs_threadblock_segments_info = _get_flux_member("get_gemm_rs_threadblock_segments_info")
 calc_gemm_rs_threadblock_segments_info = _get_flux_member("calc_gemm_rs_threadblock_segments_info")
-GemmRSAcrossNode = _get_flux_member("GemmRSAcrossNode")
+GemmRSInterNode = _get_flux_member("GemmRSInterNode")
 
 # allgather op
 AGRingMode = _get_flux_member("AGRingMode")
@@ -118,7 +155,7 @@ if not isinstance(ReduceScatterOption, NotCompiled):
 
 # AG+GEMM
 AGKernel = _get_flux_member("AGKernel")
-AGKernelCrossNode = _get_flux_member("AGKernelCrossNode")
+AGKernelInterNode = _get_flux_member("AGKernelInterNode")
 
 # MOE ag-scatter
 GemmGroupedV2AGScatterOp = _get_flux_member("GemmGroupedV2AGScatterOp")
@@ -128,9 +165,35 @@ prepare_moe_ag_scatter_args = _get_flux_member("prepare_moe_ag_scatter_args")
 # MOE gather-rs
 GemmGroupedV2GatherRSOp = _get_flux_member("GemmGroupedV2GatherRSOp")
 TopkReduceScatterOp = _get_flux_member("TopkReduceScatterOp")
+calc_moe_triton_blocked_gather_a = getattr(
+    flux_mod, "calc_moe_triton_blocked_gather_a", NotCompiled()
+)
 GemmGroupedV3GatherRS = _get_flux_member("GemmGroupedV3GatherRS")
 topk_scatter_reduce = _get_flux_member("topk_scatter_reduce")
 All2AllOp = _get_flux_member("All2AllOp")
+
+# inplace cast
+inplace_cast_fp32_to_bf16 = _get_flux_member("inplace_cast_fp32_to_bf16")
+InplaceCast = _get_flux_member("InplaceCast")
+
+# quantization
+Quantization = _get_flux_member("Quantization")
+
+# All2AllTranspose
+A2ARingMode = _get_flux_member("A2ARingMode")
+AllToAllOption = _get_flux_member("AllToAllOption")
+
+# Gemm + All2AllTranspose
+PreAttnAllToAllCommOp = _get_flux_member("PreAttnAllToAllCommOp")
+GemmAllToAllTranspose = _get_flux_member("GemmAllToAllTranspose")
+
+# All2AllTranspose + Gemm
+AllToAllTransposeGemm = _get_flux_member("AllToAllTransposeGemm")
+DisScatterForward = _get_flux_member("DisScatterForward")
+DisScatterBackward = _get_flux_member("DisScatterBackward")
+All2AllInference = _get_flux_member("All2AllInference")
+All2AllSingle = _get_flux_member("All2AllSingle")
+AsyncSendRecv = _get_flux_member("AsyncSendRecv")
 
 __all__ = [
     "bsr_reduce",
@@ -149,12 +212,14 @@ __all__ = [
     "ReduceScatterOption",
     "RingMode",
     "GemmRS",
-    "GemmRSAcrossNode",
+    "GemmRSInterNode",
     "AGKernel",
-    "AGKernelCrossNode",
+    "AGKernelInterNode",
+    "AllToAllTransposeGemm",
     "All2AllOp",
     "GemmOnly",
     "BlockScaleGemm",
+    "GemmAllToAllTranspose",
     "GemmGroupedV2",
     "GemmGroupedV3",
     "GemmGroupedV3AGScatter",
@@ -163,10 +228,29 @@ __all__ = [
     "prepare_moe_ag_scatter_args",
     "GemmGroupedV2GatherRSOp",
     "TopkReduceScatterOp",
+    "InplaceCast",
+    "Quantization",
     "AGRingMode",
+    "A2ARingMode",
     "AllGatherOption",
     "AllGatherOp",
+    "AllToAllOption",
+    "inplace_cast_fp32_to_bf16",
     "get_gemm_rs_threadblock_segments_info",
     "calc_gemm_rs_threadblock_segments_info",
     "calc_scatter_index",
+    "calc_moe_triton_blocked_gather_a",
+    "DisScatterForward",
+    "DisScatterBackward",
+    "All2AllInference",
+    "PreAttnAllToAllCommOp",
+    "All2AllSingle",
+    "AsyncSendRecv",
+    "_nvshmem_team_split_strided",
+    "_nvshmem_team_split_2d",
+    "_nvshmem_team_destroy",
+    "_nvshmem_team_get_config",
+    "_nvshmem_team_translate_pe",
+    "_nvshmem_team_npes",
+    "_nvshmem_team_my_pe",
 ]

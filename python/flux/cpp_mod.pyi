@@ -38,6 +38,7 @@ def flux_create_shm_tensor_list(
 def topk_scatter_reduce(
     inputs: List[torch.Tensor], scatter_index: torch.Tensor, topk: int
 ) -> torch.Tensor: ...
+def inplace_cast_fp32_to_bf16(data: torch.Tensor) -> None: ...
 
 class SegmentInfo:
     @property
@@ -102,6 +103,24 @@ class AGRingMode:
         dict[str, AGRingMode]
     ]  # value = {'All2All': <AGRingMode.All2All: 0>, 'Ring1D': <AGRingMode.Ring1D: 1>, 'Ring2D': <AGRingMode.Ring2D: 2>}
 
+class PreAttnAllToAllCommOp:
+    """
+    Members:
+
+      All2All
+
+      Ring1D
+
+      Ring2D
+    """
+
+    A2ATranspose: typing.ClassVar[
+        PreAttnAllToAllCommOp
+    ]  # value = <PreAttnAllToAllCommOp.A2ATranspose: 0>
+    QKVPackA2A: typing.ClassVar[
+        PreAttnAllToAllCommOp
+    ]  # value = <PreAttnAllToAllCommOp.QKVPackA2A: 1>
+    __members__: typing.ClassVar[dict[str, PreAttnAllToAllCommOp]]
 
 class AllGatherOption:
     """
@@ -142,6 +161,27 @@ class ReduceScatterOption:
     n_split: Optional[int]
     num_blocks: Optional[int]
     ring_mode: Optional[RingMode]
+
+class A2ARingMode(Enum):
+    All2All = ...
+    Ring1D = ...
+    Ring2D = ...
+
+class AllToAllOption:
+    """
+    input_buffer_copied: if input is ready. default to False.
+    use_cuda_core: default to True.
+    fuse_sync: fuse sync into copy function.
+    use_read: true for pull mode, false for push mode. Only push mode is supported currently.
+    mode: use AlltoAll mode or ring mode(Ring1D or Ring2D). Only AlltoAll is supported currently.
+    """
+
+    def __init__(self) -> None: ...
+    input_buffer_copied: Optional[bool]
+    use_cuda_core: Optional[bool]
+    fuse_sync: Optional[bool]
+    use_read: Optional[bool]
+    mode: Optional[AGRingMode]
 
 def load_tuning_record(record: TuningRecord) -> None: ...
 
@@ -228,6 +268,7 @@ class BlockScaleGemm:
     def __init__(
         self,
         input_dtype: torch.dtype,
+        weight_dtype: torch.dtype,
         output_dtype: Optional[torch.dtype] = None,
     ): ...
     def forward(
@@ -344,7 +385,7 @@ class GemmRS:
         prof_ctx: Optional[ProfilingContext] = None,
     ) -> torch.Tensor: ...
 
-class GemmRSAcrossNode:
+class GemmRSInterNode:
     def __init__(
         self,
         rank: int,
@@ -441,7 +482,7 @@ class AGKernel:
         prof_ctx: Optional[ProfilingContext] = None,
     ) -> torch.Tensor: ...
 
-class AGKernelCrossNode:
+class AGKernelInterNode:
     def __init__(
         self,
         tp_group: dist.ProcessGroup,
@@ -461,6 +502,94 @@ class AGKernelCrossNode:
     def forward(self, input: torch.Tensor, weight: torch.Tensor) -> torch.Tensor: ...
     def gemm_only(
         self, input: torch.Tensor, full_input: torch.Tensor, weight: torch.Tensor
+    ) -> torch.Tensor: ...
+
+class AllToAllTransposeGemm:
+    def __init__(
+        self,
+        tp_group: dist.ProcessGroup,
+        nnodes: int,
+        bs: int,
+        num_head: int,
+        seq: int,
+        head_dim: int,
+        input_dtype: torch.dtype,
+        output_dtype: Optional[torch.dtype] = None,
+        a2a_only: bool = False,
+    ): ...
+    def forward(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+        output: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
+        transpose_weight: bool = False,
+        all_to_all_option: AllToAllOption = AllToAllOption(),
+        a2a_transpose_output: Optional[torch.Tensor] = None,
+        sm_margin: int = 0,
+    ) -> torch.Tensor:
+        """
+        only support BF16, support all_to_all_transpose and all_to_all_only for communication
+
+        About shapes: local_seq = seq / world_size, local_num_head = num_head / world_size, hidden_dim = head_dim * num_head
+        * input: [bs, local_num_head, seq, head_dim] if a2a_only = False, [bs, seq, local_num_head, hidden_dim] if a2a_only = True.
+        * weight: [N, hidden_dim] if not transpose_weight, [hidden_dim, N] if transpose_weight.
+        * bias: [bs * local_seq, N] for FP16 or BF16.
+        * output: [bs, local_seq, N]
+        * input_scale: None
+        * weight_scale: None
+        * output_scale: None
+
+        About Optional:
+        * output: optional for all modes. if set, the output will be written to this buffer.
+        * bias: optional for all modes. zero for None.
+        * input_scale/weight_scale: always None.
+        * output_scale: always None.
+        * a2a_transpose_output: if not set to None, the output of a2a transpose will be written to this buffer.
+        * sm_margin: Default to zero, if set, the corresponding number of sm will not be used in gemm.
+
+        About formula:
+        for a2a_only = False:
+            * a2a_transpose_output = PostAttnAllToAllTranspose(input), [bs, local_num_head, seq, head_dim] => [bs, local_seq, hidden_dim]
+            * output = a2a_transpose_output * weight, ([bs, local_seq, hidden_dim], [N, hidden_dim]) => [bs, local_seq, N]
+        for a2a_only = true:
+            * a2a_output = PostAttnAllToAllOnly(input), [bs, seq, local_num_head, head_dim] => [bs, local_seq, hidden_dim]
+            * output = a2a_output * weight, ([bs, local_seq, hidden_dim], [N, hidden_dim]) => [bs, local_seq, N]
+        """
+
+    def gemm_only(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+        output: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
+        transpose_weight: bool = False,
+        sm_margin: int = 0,
+    ) -> torch.Tensor: ...
+    def reset_signals(self) -> None: ...
+    def profiling(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+        output: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
+        transpose_weight: bool = False,
+        all_to_all_option: AllToAllOption = AllToAllOption(),
+        a2a_transpose_output: Optional[torch.Tensor] = None,
+        sm_margin: int = 0,
+        prof_ctx: Optional[ProfilingContext] = None,
     ) -> torch.Tensor: ...
 
 class All2AllOp:
@@ -529,6 +658,81 @@ class GemmGroupedV3AGScatter:
         prof_ctx: Optional[ProfilingContext] = None,
     ) -> List[torch.Tensor]: ...
 
+class GemmAllToAllTranspose:
+    def __init__(
+        self,
+        tp_group: dist.ProcessGroup,
+        nnodes: int,
+        bs: int,
+        seq: int,
+        hidden_dim: int,
+        head_dim: int,
+        n_dim: int,
+        input_dtype: torch.dtype,
+        output_dtype: Optional[torch.dtype] = None,
+        transpose_weight: bool = False,
+        gqa: int = 0,
+        comm_op: PreAttnAllToAllCommOp = PreAttnAllToAllCommOp.A2ATranspose,
+    ): ...
+    def forward(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
+        sm_margin: int = 0,
+    ) -> List[torch.Tensor]:
+        """
+        only support BF16
+
+        2 comm ops supported: A2ATranspose, QKVPackA2A
+
+        About shapes: num_head = N / head_dim, local_seq = seq / world_size, local_num_head = num_head / world_size
+        * input: [bs, local_seq, hidden_dim]
+        * weight: [N, hidden_dim] if not transpose_weight, [hidden_dim, N] if transpose_weight.
+        * bias: [bs * local_seq, N] for FP16 or BF16.
+        * input_scale: None
+        * weight_scale: None
+        * output_scale: None
+
+        About Optional:
+        * output: optional for all modes. if set, the output will be written to this buffer.
+        * bias: optional for all modes. zero for None.
+        * input_scale/weight_scale: always None.
+        * output_scale: always None.
+        * sm_margin: Default to zero, if set, the corresponding number of sm will not be used in gemm.
+
+        About formula:
+        for A2ATranspose:
+            * gemm_output = input * weight, ([bs, local_seq, hidden_dim], [N, hidden_dim]) => [bs, local_seq, N]
+            * [output, ] = PreAttnAllToAllTranspose(gemm_output), [bs, local_seq, N] => [bs, local_num_head, seq, head_dim]
+        for QKVPackA2A:
+            * gemm_output = input * weight, ([bs, local_seq, hidden_dim], [N, hidden_dim]) => [bs, local_seq, N]
+            * local_q_nheads = local_num_head // (gqa + 2) * gqa
+            * local_k_nheads = local_v_nheads = local_num_head // (gqa + 2)
+            * QKVPack_input = reshape(gemm_output), [bs, local_seq, N] => [bs, local_seq, num_head, head_dim]
+            * [out_q, out_k, out_v] = QKVPackAllToAll(QKVPack_input),
+                [bs, local_seq, local_num_head, head_dim] => [bs, seq, local_q_nheads, head_dim],
+                                                             [bs, seq, local_k_nheads, head_dim],
+                                                             [bs, seq, local_k_nheads, head_dim]
+        """
+
+    def profiling(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        bias: Optional[torch.Tensor] = None,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
+        sm_margin: int = 0,
+        prof_ctx: Optional[ProfilingContext] = None,
+    ) -> List[torch.Tensor]: ...
+
 class GemmGroupedV2AGScatterOp:
     def __init__(
         self,
@@ -573,6 +777,23 @@ class GemmGroupedV2AGScatterOp:
     for FP8  mode: output_BF16 = [[input_FP8 * weights_FP8]_FP32 * output_scale_FP32]_FP32.to(BF16)
 
     """
+    def forward_triton_aot(
+        self,
+        inputs_shard: torch.Tensor,
+        weights: torch.Tensor,
+        splits_gpu: torch.Tensor,
+        scatter_index: torch.Tensor,
+        input_scale: Optional[torch.Tensor] = None,
+        weight_scale: Optional[torch.Tensor] = None,
+        output_scale: Optional[torch.Tensor] = None,
+        outputs_buf: Optional[torch.Tensor] = None,
+        allgather_output: Optional[torch.Tensor] = None,
+        fast_accum: bool = False,
+        sm_margin: int = 0,
+        ag_option: AllGatherOption = AllGatherOption(),
+    ) -> torch.Tensor:
+        """as forward"""
+        ...
 
     def forward_multiple_weights(
         self,
@@ -737,6 +958,19 @@ class GemmGroupedV2GatherRSOp:
         sm_margin: int = 0,
         with_stream_sync: bool = False,
     ) -> torch.Tensor: ...
+    def forward_gather_rs_triton_aot(
+        self,
+        input: torch.Tensor,
+        weight: torch.Tensor,
+        splits_cpu: torch.Tensor,
+        routing_idx: torch.Tensor,
+        input_scale: torch.Tensor | None = None,
+        weight_scale: torch.Tensor | None = None,
+        output_vec_scale: torch.Tensor | None = None,
+        fast_accum: bool = False,
+        sm_margin: int = 0,
+        with_stream_sync: bool = False,
+    ) -> torch.Tensor: ...
     def profiling(
         self,
         input: torch.Tensor,
@@ -751,6 +985,25 @@ class GemmGroupedV2GatherRSOp:
         with_stream_sync: bool = False,
         prof_ctx: Optional[ProfilingContext] = None,
     ) -> torch.Tensor: ...
+
+class All2AllSingle:
+    def __init__(
+        self,
+        ep_group: dist.ProcessGroup,
+        max_split: int,
+        n_dim: int,
+        local_world_size: int,
+        input_dtype: torch.dtype,
+        ep_team: int,
+    ): ...
+    def forward(
+        self,
+        input: torch.Tensor,
+        output: torch.Tensor,
+        input_splits: torch.Tensor,
+        output_splits: torch.Tensor,
+        num_comm_sm: int,
+    ): ...
 
 class TopkReduceScatterOp:
     def __init__(
@@ -803,6 +1056,35 @@ def prepare_moe_ag_scatter_args(
     torch.Tensor,  # rank_end_index
 ]: ...
 
+class InplaceCast:
+    def __init__(self, data_size: int): ...
+    def from_fp32_to_bf16(self, input: torch.Tensor): ...
+
+class Quantization:
+    def __init__(
+        self,
+        input_dtype: torch.dtype,
+        output_dtype: torch.dtype,
+    ): ...
+    def quantize_vector_blockwise(
+        self,
+        input: torch.Tensor,
+        return_transpose: bool = True,
+        eps: float = 0.0,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]: ...
+    def quantize_square_blockwise(
+        self,
+        input: torch.Tensor,
+        return_transpose: bool = True,
+        eps: float = 0.0,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]: ...
+    def batch_quantize_square_blockwise(
+        self,
+        input: torch.Tensor,
+        return_transpose: bool = True,
+        eps: float = 0.0,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]: ...
+
 class AllGatherOp:
     def __init__(
         self,
@@ -828,3 +1110,150 @@ def calc_scatter_index(
     splits_gpu: torch.Tensor,
     num_expert: int,
 ) -> torch.Tensor: ...
+def calc_moe_triton_blocked_gather_a(
+    splits: torch.Tensor,
+    ep_start: int,
+    ep_nexperts: int,
+    gather_a_index: torch.Tensor,
+    expert_index: int,
+    stream: torch.cuda.Stream,
+): ...
+
+class DisScatterForward:
+    def __init__(
+        self,
+        total_num_experts: int,
+        max_m: int,
+        n_dim: int,
+        topk: int,
+        rank: int,
+        tp_world_size: int,
+        ep_world_size: int,
+        local_world_size: int,
+        moe_capacity_ratio: float,
+        duplicate_comm_buffer: int,
+        nvshmem_team: int,
+    ) -> None:
+        """Initializes the DisScatterForward operator.
+
+        This operator is responsible for scattering input tokens to the correct expert GPUs
+        in a distributed MoE (Mixture of Experts) layer. It uses NVSHMEM for communication.
+
+        Args:
+            nvshmem_team: you can refer to: https://docs.nvidia.com/nvshmem/api/gen/api/teams.html for pre-defined NVSHMEM team, or you can call _nvshmem_team_split_2d or _nvshmem_team_split_strided. if nvshmem_team is not NVSHMEM_TEAM_WORLD (0), you should set max_m_out to an value > 0
+            max_m_out: Maximum output size for the scatter operation. if nvshmem_team != NVSHMEM_TEAM_WORLD, set max_m_out
+        """
+        ...
+
+    def forward(
+        self,
+        input: torch.Tensor,
+        ag_exp_indices: torch.Tensor,
+        ag_scatter_idx: torch.Tensor,
+        splits_cpu: torch.Tensor,
+        ep_token_counts: torch.Tensor,
+        sm_margin: int,
+        copy_to_local_tensor: bool = True,
+    ) -> torch.Tensor: ...
+    def forward_gpu(
+        self,
+        input: torch.Tensor,
+        ag_exp_indices: torch.Tensor,
+        ag_scatter_idx: torch.Tensor,
+        splits: torch.Tensor,
+        ep_token_counts: torch.Tensor,
+        output_tensor: torch.Tensor,
+        sm_margin: int,
+        copy_to_local_tensor: bool = True,
+    ) -> torch.Tensor: ...
+    def pre_comm_index(
+        self,
+        ep_token_counts: torch.Tensor,
+        cur_topk_indices: torch.Tensor,
+        cur_topk_values: torch.Tensor,
+        ag_topk_indices: torch.Tensor,  # output
+        ag_topk_values: torch.Tensor,  # output
+        sm_margin: int,
+    ) -> None: ...
+    def profiling(
+        self,
+        input: torch.Tensor,
+        ag_exp_indices: torch.Tensor,
+        ag_scatter_idx: torch.Tensor,
+        splits_cpu: torch.Tensor,
+        ep_token_counts: torch.Tensor,
+        sm_margin: int,
+        opt_ctx: Optional[ProfilingContext] = None,
+    ) -> None: ...
+    def forward_gpu_no_cpy(
+        self,
+        input: torch.Tensor,
+        ag_exp_indices: torch.Tensor,
+        ag_scatter_idx: torch.Tensor,
+        splits: torch.Tensor,
+        ep_token_counts: torch.Tensor,
+        output_tensor: torch.Tensor,
+        sm_margin: int,
+        comm_buffer_id: int,
+    ) -> torch.Tensor: ...
+    def forward_no_cpy(
+        self,
+        input: torch.Tensor,
+        ag_exp_indices: torch.Tensor,
+        ag_scatter_idx: torch.Tensor,
+        splits_cpu: torch.Tensor,
+        ep_token_counts: torch.Tensor,
+        sm_margin: int,
+        comm_buffer_id: int,
+    ) -> torch.Tensor: ...
+
+def _nvshmem_team_translate_pe(src_team: int, src_pe: int, dest_team: int) -> int: ...
+def _nvshmem_team_get_config(team: int) -> "nvshmem_team_config_t":
+    """
+    Get the configuration of a team.
+    """
+    ...
+
+def _nvshmem_team_split_strided(
+    parent_team: int,
+    PE_start: int,
+    PE_stride: int,
+    PE_size: int,
+    config: Optional["nvshmem_team_config_t"] = None,
+    config_mask: int = 0,
+) -> int:
+    """
+    Split a team into a new team with a strided range of PEs.
+    """
+    ...
+
+def _nvshmem_team_split_2d(
+    parent_team: int,
+    xrange: int,
+    xaxis_config: Optional["nvshmem_team_config_t"] = None,
+    xaxis_mask: int = 0,
+    yaxis_config: Optional["nvshmem_team_config_t"] = None,
+    yaxis_mask: int = 0,
+) -> Tuple[int, int]:
+    """
+    Split a team into a new team with a strided range of PEs.
+    """
+    ...
+
+def _nvshmem_team_destroy(team: int) -> None:
+    """
+    Destroy a team.
+    """
+    ...
+
+def _nvshmem_team_n_pes(team: int) -> int:
+    """
+    Get the number of PEs in a team.
+    """
+    ...
+
+def _nvshmem_team_my_pe(team: int) -> int:
+    """
+    Get the PE ID of the current process in a team.
+    """
+    ...

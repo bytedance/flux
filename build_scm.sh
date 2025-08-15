@@ -29,18 +29,22 @@ NVCC_MINOR_VERSION=$(echo $NVCC_VERSION | cut -d'.' -f2)
 
 if [ "$NVCC_MAJOR_VERSION" -ge 12 ] && [ "$NVCC_MINOR_VERSION" -ge 4 ]; then
     ARCHS="80;89;90"
+    SM_CORES="108;92;78;132"
 elif [ "$NVCC_MAJOR_VERSION" -ge 12 ]; then
     ARCHS="80;90"
+    SM_CORES="108;78;132"
 else
     ARCHS="80"
+    SM_CORES="108"
 fi
 echo $ARCHS
+echo $SM_CORES
 
 # adapt to scm envs that must start with CUSTOM_
 # allow CUSTOM_JOBS to replace JOBS
 
 export $(env | grep '^CUSTOM_JOBS' | sed 's/^CUSTOM_JOBS/JOBS/g')
-./build.sh --arch ${ARCHS} --nvshmem --package
+./build.sh --arch ${ARCHS} --sm-cores $SM_CORES --nvshmem --package
 
 cd $SCRIPT_DIR
 mkdir -p output/python

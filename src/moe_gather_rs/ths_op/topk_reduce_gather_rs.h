@@ -17,6 +17,7 @@
 
 #pragma once
 #include <torch/all.h>
+
 #include "flux/args/moe_gather_rs.h"
 namespace bytedance::flux::ths_op {
 void topk_reduce_gather_rs(TopKReduceGatherRSArguments const &args, torch::Tensor output);
