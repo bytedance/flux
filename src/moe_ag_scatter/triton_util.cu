@@ -15,20 +15,16 @@
 //
 //===----------------------------------------------------------------------===//
 #include <climits>
+
 #include "cutlass/fast_math.h"
-#include "sort_util.h"
+#include "flux/cuda/cuda_common.h"
+#include "flux/cuda/cuda_common_device.hpp"
+#include "flux/cuda/reduce_utils.cuh"
 #include "triton_util.h"
 #include "workspace_util.h"
-#include "flux/cuda/cuda_common.h"
-#include "flux/cuda/reduce_utils.cuh"
-#include "flux/cuda/cuda_common_device.hpp"
 
 namespace bytedance::flux {
 namespace {
-__device__ __forceinline__ int64_t
-pad_to(int64_t sz, int64_t pad) {
-  return (sz + pad - 1) / pad * pad;
-}
 
 __global__ void
 get_moe_ag_scatter_args_kernel(

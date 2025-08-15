@@ -40,8 +40,7 @@ struct GemmGroupedV3GatherRSTS_Kernel : public GemmGroupedV3BaseKernel<GemmMetaT
   static constexpr int32_t GATHER_RS_N_CTAS = hparams.comm_spec().gather_rs_ctas();
   static constexpr int32_t TOPK = meta.comm_spec().topk();
   static constexpr int32_t GATHER_RS_BLOCK_M = 24;
-  // static constexpr int32_t GATHER_RS_BLOCK_N = hparams.comm_spec().n_dim() / hparams.comm_spec().split_n_dim();
-  static constexpr int32_t GATHER_RS_BLOCK_N = hparams.comm_spec().n_dim() / 8;
+  static constexpr int32_t GATHER_RS_BLOCK_N = hparams.comm_spec().n_dim_per_split();
   static constexpr auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
 
   static_assert(meta.comm_op() == _GatherRS{}, "requires _GatherRS{}");
@@ -148,36 +147,36 @@ class GemmGroupedV3GatherRSTS_Device
     FLUX_CHECK(args.n_dim % args.SPLITS == 0);
     // FLUX_CHECK((args.n_dim / args.SPLITS) % GATHER_RS_BLOCK_N == 0);
     FLUX_CHECK(args.topk == KernelBuilder::TOPK);
-    GemmArguments gemm_args{
-        /*mode=*/cutlass::gemm::GemmUniversalMode::kGrouped,
-        {args.problem_count, problem_sizes_device, problem_sizes_host},
-        /*MMA*/
-        {ptr_A, ptr_Stride_A, ptr_B, ptr_Stride_B},
-        /*Epilogue*/
-        {epi_params, ptr_C, ptr_Stride_C, ptr_D, ptr_Stride_D},
-        hw_info,
-        scheduler_args,
-        args.rank,
-        args.world_size,
-        args.topk,
-        output_scatter_ptrs,
-        ptr_inter_D,
-        ptr_routing_idx,
-        args.barrier,
-        args.SPLITS,
-        args.totalM,
-        args.n_dim,
-        args.tp_world_size,
-        args.ep_world_size,
-        args.globalM,
-        args.ep_m_start,
-        args.ep_m_end,
-        args.input_scale_ptr,
-        args.output_vec_scale_ptr,
-        args.input_groups,
-        args.ep_pos_filtered,
-        args.ep_token_idx_filtered,
-        args.ep_total_token_acc};
+    GemmArguments gemm_args{/*mode=*/cutlass::gemm::GemmUniversalMode::kGrouped,
+                            {args.problem_count, problem_sizes_device, problem_sizes_host},
+                            /*MMA*/
+                            {ptr_A, ptr_Stride_A, ptr_B, ptr_Stride_B},
+                            /*Epilogue*/
+                            {epi_params, ptr_C, ptr_Stride_C, ptr_D, ptr_Stride_D},
+                            hw_info,
+                            scheduler_args,
+                            args.rank,
+                            args.world_size,
+                            args.topk,
+                            output_scatter_ptrs,
+                            ptr_inter_D,
+                            ptr_routing_idx,
+                            args.barrier,
+                            args.SPLITS,
+                            args.totalM,
+                            args.n_dim,
+                            args.tp_world_size,
+                            args.ep_world_size,
+                            args.globalM,
+                            args.max_token_per_rank,
+                            args.ep_m_start,
+                            args.ep_m_end,
+                            args.input_scale_ptr,
+                            args.output_vec_scale_ptr,
+                            args.input_groups,
+                            args.ep_pos_filtered,
+                            args.ep_token_idx_filtered,
+                            args.ep_total_token_acc};
 
     return gemm_args;
   }

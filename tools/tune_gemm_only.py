@@ -86,7 +86,7 @@ def run_flux_profiling(
         bias = torch.zeros([m, n], dtype=input.dtype, device=input.device, requires_grad=False)
 
     output = torch.empty([m, n], dtype=input.dtype, device=input.device, requires_grad=False)
-    op = flux.GemmOnly(weight.dtype, transpose_weight=config.transpose_weight)
+    op = flux.GemmOnly(weight.dtype, weight.dtype, transpose_weight=config.transpose_weight)
 
     output = op.profiling(input, weight, bias=bias, output_buf=output, prof_ctx=prof_ctx)
     return output.cpu()

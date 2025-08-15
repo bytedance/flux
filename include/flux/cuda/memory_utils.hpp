@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <cute/tensor.hpp>
 #include "cute/arch/copy.hpp"
 #include "cute/arch/copy_sm90.hpp"
 #include "cute/arch/copy_sm90_tma.hpp"

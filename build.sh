@@ -7,26 +7,25 @@ export PATH=/usr/local/cuda/bin:$PATH
 CMAKE=${CMAKE:-cmake}
 
 ARCH=""
+SM_CORES=""
 BUILD_TEST="ON"
 BDIST_WHEEL="OFF"
 WITH_PROTOBUF="OFF"
 FLUX_DEBUG="OFF"
 ENABLE_NVSHMEM="OFF"
+WITH_TRITON_AOT="OFF"
 
 function clean_py() {
     rm -rf build/lib.*
     rm -rf python/lib
-    rm -rf python/flux/lib
-    rm -rf .eggs/
+    rm -rf .egg/
     rm -rf python/flux.egg-info
-    rm -rf python/byte_flux.egg-info
     rm -rf python/flux_ths_pybind.*
 }
 
 function clean_all() {
     clean_py
     rm -rf build/
-    rm -rf 3rdparty/nvshmem/build
     rm -rf 3rdparty/nccl/build
     rm -rf 3rdparty/protobuf/build
 }
@@ -39,6 +38,12 @@ while [[ $# -gt 0 ]]; do
     --arch)
         # Process the arch argument
         ARCH="$2"
+        shift # Skip the argument value
+        shift # Skip the argument key
+        ;;
+    --sm-cores)
+        # Process the sm-cores argument
+        SM_CORES="$2"
         shift # Skip the argument value
         shift # Skip the argument key
         ;;
@@ -74,6 +79,10 @@ while [[ $# -gt 0 ]]; do
         ;;
     --nvshmem)
         ENABLE_NVSHMEM="ON"
+        shift
+        ;;
+    --triton-aot)
+        WITH_TRITON_AOT="ON"
         shift
         ;;
     *)
@@ -151,7 +160,9 @@ function build_flux_cuda() {
     if [ ! -f CMakeCache.txt ] || [ -z ${FLUX_BUILD_SKIP_CMAKE} ]; then
         CMAKE_ARGS=(
             -DENABLE_NVSHMEM=${ENABLE_NVSHMEM}
+            -DNVSHMEM_HOME=${NVSHMEM_HOME}
             -DCUDAARCHS=${ARCH}
+            -DGPU_SM_CORES=${SM_CORES}
             -DCMAKE_EXPORT_COMPILE_COMMANDS=1
             -DBUILD_TEST=${BUILD_TEST}
             -DCMAKE_INSTALL_PREFIX=${LIBFLUX_PREFIX}
@@ -167,6 +178,12 @@ function build_flux_cuda() {
             CMAKE_ARGS+=(
                 -DFLUX_DEBUG=ON
             )
+        fi
+        if [ $WITH_TRITON_AOT == "ON" ]; then
+            CMAKE_ARGS+=(
+                -DWITH_TRITON_AOT=ON
+            )
+            export PYTHONPATH=$PYTHONPATH:$PROJECT_ROOT/python
         fi
         ${CMAKE} .. ${CMAKE_ARGS[@]}
     fi
@@ -203,9 +220,6 @@ function build_flux_py {
 
     pushd ${LIBDIR}
     if [ $ENABLE_NVSHMEM == "ON" ]; then
-        cp -s -f ../../../3rdparty/nvshmem/build/src/lib/nvshmem_bootstrap_uid.so .
-        cp -s -f ../../../3rdparty/nvshmem/build/src/lib/nvshmem_transport_ibrc.so.3 .
-        cp -s -f ../../../3rdparty/nvshmem/build/src/lib/libnvshmem_host.so.3 .
         export FLUX_SHM_USE_NVSHMEM=1
     fi
     popd
@@ -221,7 +235,21 @@ NCCL_ROOT=$PROJECT_ROOT/3rdparty/nccl
 build_nccl
 
 if [ $ENABLE_NVSHMEM == "ON" ]; then
-    ./build_nvshmem.sh ${build_args} --jobs ${JOBS}
+    if [ -n "$NVSHMEM_HOME" ]; then
+        echo "Found NVSHMEM_HOME from environment variable: $NVSHMEM_HOME. skip install..."
+    else
+        echo "NVSHMEM_HOME is not set, try using NVSHMEM from pip..."
+        # if not installed, install it from pip
+        if [ -z "$(pip3 list | grep nvidia-nvshmem-cu12)" ]; then
+            pip3 install nvidia-nvshmem-cu12==3.3.9
+        fi
+        NVSHMEM_HOME=$(python3 -c "import nvidia.nvshmem, pathlib; print(pathlib.Path(nvidia.nvshmem.__path__[0]))" 2>/dev/null)
+        pushd $NVSHMEM_HOME/lib
+        if [ ! -f libnvshmem_host.so ]; then
+            ln -s libnvshmem_host.so.3 libnvshmem_host.so
+        fi
+        popd
+    fi
 fi
 
 build_protobuf

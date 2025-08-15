@@ -363,7 +363,7 @@ class GemmRS::GemmRSImpl {
         no_nvlink(!has_nvlink()),
         rs_stream_(CreateReduceScatterStream()),  // private stream. never dup with gemm stream
         is_l20(is_l20_or_not()),
-        is_fp8_gemm(c10::isFloat8Type(input_dtype)),
+        is_fp8_gemm(is_fp8_torch_dtype(input_dtype)),
         is_s8_gemm(is_s8_dtype(from_torch_dtype(input_dtype))) {
     TORCH_CHECK(
         rank >= 0 && rank < world_size,
@@ -420,6 +420,7 @@ class GemmRS::GemmRSImpl {
   auto
   get_gemm_meta(bool has_bias, bool fast_accum = false) {
     ArchEnum arch = get_arch();
+    SMCoreEnum sm_core = get_sm_core();
     auto gemm_layout = transpose_weight ? _RRR{}() : _RCR{}();
     auto input_dtype = from_torch_dtype(this->input_dtype);
     auto output_dtype = from_torch_dtype(this->output_dtype);
@@ -432,6 +433,7 @@ class GemmRS::GemmRSImpl {
     auto meta = make_gemm_meta(
         dt_conf,
         arch,
+        sm_core,
         _ReduceScatter{},
         gemm_layout,
         is_gemm_v2 ? _GemmV2{}() : _GemmV3{}(),
@@ -439,7 +441,7 @@ class GemmRS::GemmRSImpl {
                    : UnifiedImplMeta(make_gemm_v3_meta(fast_accum, /*block_scale=*/false)),
         make_reduce_scatter_meta(
             this->fuse_reduction,
-            nnodes > 1        ? _AcrossNode{}()
+            nnodes > 1        ? _InterNode{}()
             : this->no_nvlink ? _IntraNodePcie{}()
                               : _IntraNode{}()));
     return meta;
@@ -541,8 +543,9 @@ class GemmRS::GemmRSImpl {
           op_args.world_size * sizeof(bytedance::flux::SegmentInfo),
           cudaMemcpyHostToDevice,
           stream));
-      FLUX_CHECK(at::cuda::CachingHostAllocator_recordEvent(
-          pinned_tensor.data_ptr(), pinned_tensor.storage().data_ptr().get_context(), stream));
+      FLUX_CHECK(
+          at::cuda::CachingHostAllocator_recordEvent(
+              pinned_tensor.data_ptr(), pinned_tensor.storage().data_ptr().get_context(), stream));
     }
   }
 

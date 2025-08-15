@@ -49,11 +49,38 @@ execute_process(
   COMMAND_ERROR_IS_FATAL ANY
 )
 
+if (WITH_TRITON_AOT)
+  execute_process(
+    COMMAND ${PYTHON_EXECUTABLE} -c "import triton; from packaging.version import Version; assert Version(triton.__version__) >= Version('3.0.0')"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    COMMAND_ERROR_IS_FATAL ANY
+  )
+  set(MOE_AG_SCATTER_KERNEL ${PROJECT_SOURCE_DIR}/python/flux_triton/kernels/moe_ag_scatter.py:moe_ag_scatter_grouped_gemm_kernel ${PROJECT_SOURCE_DIR}/python/flux_triton/kernels/moe_gather_rs.py:moe_gather_rs_grouped_gemm_kernel)
+  execute_process(
+    COMMAND ${PYTHON_EXECUTABLE} ${PROJECT_SOURCE_DIR}/python/flux_triton/tools/compile_aot.py --workspace ${CMAKE_CURRENT_SOURCE_DIR}/triton_aot_generated --kernels ${MOE_AG_SCATTER_KERNEL}  --library flux_triton_aot
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    COMMAND_ERROR_IS_FATAL ANY
+  )
+  add_subdirectory(triton_aot_generated)
+  include_directories(${CMAKE_CURRENT_SOURCE_DIR}/triton_aot_generated)
+  add_definitions(-DFLUX_WITH_TRITON_AOT)
+endif()
+
 add_subdirectory(comm_none)
 add_subdirectory(coll)
 add_subdirectory(ag_gemm)
 add_subdirectory(gemm_rs)
+add_subdirectory(gemm_a2a_transpose)
+add_subdirectory(a2a_transpose_gemm)
+add_subdirectory(inplace_cast)
+
+find_package(CUDAToolkit REQUIRED)
+if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.3")
+  add_subdirectory(quantization)
+endif()
+
 if(ENABLE_NVSHMEM)
+  # MoE OPs will not be open-sourced, so remain MoE OPs to be dependent on NVSHMEM
   add_subdirectory(moe_ag_scatter)
   add_subdirectory(moe_gather_rs)
 endif()

@@ -15,8 +15,9 @@
 //
 //===----------------------------------------------------------------------===//
 #pragma once
-#include <cstdint>
 #include <cuda_runtime_api.h>
+
+#include <cstdint>
 
 namespace bytedance::flux {
 void get_moe_ag_scatter_args(

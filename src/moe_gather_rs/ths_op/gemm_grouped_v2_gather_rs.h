@@ -18,6 +18,8 @@
 #pragma once
 #include <c10/core/ScalarType.h>
 #include <torch/all.h>
+
+#include "flux/ths_op/flux_shm.h"
 #include "flux/ths_op/ths_op.h"
 
 namespace bytedance::flux::ths_op {

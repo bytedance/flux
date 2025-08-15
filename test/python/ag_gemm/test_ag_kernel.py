@@ -38,6 +38,10 @@ import flux.testing
 from flux.testing.perf_db_helper import should_log_to_rds, set_global_args, log_perf
 from flux.util import bench_func, is_fp8_dtype
 
+try:
+    from flux.triton.ag_gemm import AgGemmTriton
+except Exception as e:
+    print("triton module import failed. skip...")
 
 print = partial(print, flush=True)
 
@@ -278,6 +282,73 @@ def perf_flux_no_overlap(
 
 
 @torch.no_grad()
+def perf_triton(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor],
+    input_scale: Optional[torch.Tensor],
+    weight_scale: Optional[torch.Tensor],
+    transpose_weight: bool = True,
+    gather_input: bool = False,
+    warmup: int = 5,
+    iters: int = 10,
+    fast_acc: bool = False,
+    verify: bool = False,
+):
+    local_M = input.size(0)
+    M = local_M * TP_GROUP.size()
+    K = input.size(1)
+    if transpose_weight:
+        w = weight.t().contiguous()
+        N = w.size(1)
+    else:
+        w = weight
+        N = w.size(0)
+
+    op = AgGemmTriton(TP_GROUP, weight.dtype, M, K, transpose_weight=transpose_weight)
+
+    full_input = (
+        zeros_with_fp8(
+            (M, K),
+            dtype=input.dtype,
+            device=torch.cuda.current_device(),
+            requires_grad=False,
+        )
+        if gather_input
+        else None
+    )
+
+    ag_option = flux.AllGatherOption()
+    ag_option.mode = RING_MODE_MAP[args.ring_mode]
+
+    (output, gathered_output), total_time_ms = bench_func(
+        lambda: op.forward(
+            input,
+            w.t(),
+            bias=bias,
+            input_scale=input_scale,
+            weight_scale=weight_scale,
+            output_scale=None,
+            gathered_input=full_input,
+            fast_accum=fast_acc,
+            ag_option=ag_option,
+        ),
+        iters,
+        warmup,
+    )
+    return PerfResult(
+        name=f"triton  #{TP_GROUP.rank()}",
+        output=output,
+        gathered_output=gathered_output,
+        total_ms=total_time_ms,
+        time1="gemm",
+        gemm_time_ms=0,
+        time2="comm",
+        comm_time_ms=0,
+    )
+
+
+@torch.no_grad()
 def perf_flux(
     input: torch.Tensor,
     weight: torch.Tensor,
@@ -329,6 +400,7 @@ def perf_flux(
     use_fp8_gemm = True if is_fp8 else False
     gemm_only_op = flux.GemmOnly(
         input_dtype=input_dtype,
+        weight_dtype=input_dtype,
         output_dtype=output_dtype,
         transpose_weight=transpose_weight,
         use_fp8_gemm=use_fp8_gemm,
@@ -520,6 +592,12 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--triton",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="run with triton kernels",
+    )
+    parser.add_argument(
         "--gather_input",
         default=False,
         action=argparse.BooleanOptionalAction,
@@ -645,6 +723,21 @@ if __name__ == "__main__":
             args.fastacc,
         )
 
+        if args.triton:
+            perf_res_triton = perf_triton(
+                input,
+                weight,
+                bias,
+                input_scale,
+                weight_scale,
+                args.transpose_weight,
+                args.gather_input,
+                args.warmup,
+                args.iters,
+                args.fastacc,
+                args.verify,
+            )
+
     if TP_GROUP.rank() == 0:
         flux.testing.print_gemm_sol_time(local_M, args.N, args.K, input_dtype)
 
@@ -655,6 +748,8 @@ if __name__ == "__main__":
             log_perf(perf_res_torch)
             log_perf(perf_res_flux)
             log_perf(perf_res_flux_no_overlap)
+            if args.triton:
+                log_perf(perf_res_triton)
         torch.distributed.barrier()
 
     torch_output = perf_res_torch.output
@@ -689,5 +784,31 @@ if __name__ == "__main__":
     else:
         print("✅ flux check passed")
 
+    if args.triton:
+        triton_output = perf_res_triton.output
+        is_bitwise_match = flux.bitwise_check(torch_output, triton_output)
+        print("torch vs triton bitwise match: ", is_bitwise_match)
+        if args.gather_input:
+            triton_gathered_data = perf_res_triton.gathered_output
+            try:
+                flux.torch_allclose(triton_gathered_data, flux_gathered_data, atol=1e-9, rtol=1e-9)
+            except Exception as e:
+                torch.save(triton_gathered_data, f"triton_gathered_data_{TP_GROUP.rank()}.pt")
+                torch.save(torch_gathered_data, f"torch_gathered_data_{TP_GROUP.rank()}.pt")
+                print("❌ triton gathered data check failed")
+                raise e
+            else:
+                print("✅ triton gathered data check passed")
+        try:
+            flux.torch_allclose(triton_output, torch_output, atol=atol, rtol=rtol)
+        except Exception as e:
+            torch.save(triton_output, f"triton_{TP_GROUP.rank()}.pt")
+            torch.save(torch_output, f"torch_{TP_GROUP.rank()}.pt")
+            print("❌ triton check failed")
+            raise e
+        else:
+            print("✅ triton check passed")
+
     TP_GROUP.barrier()
     torch.cuda.synchronize()
+    torch.distributed.destroy_process_group()

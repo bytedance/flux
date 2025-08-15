@@ -377,7 +377,7 @@ class GemmV3ReduceScatter_Device
         scheduler.raster_order = TileScheduler::RasterOrderOptions::AlongM;
       }
       // not set max_swizzle_size for better performance
-      // if constexpr (rs_meta.comm_kind() == _AcrossNode{}) {
+      // if constexpr (rs_meta.comm_kind() == _InterNode{}) {
       //   if constexpr (hparams.gemm_kind() != _GemmStreamK{}) {
       //     scheduler.max_swizzle_size = cute::min(m_tiles, min_tile_count);
       //   }
@@ -500,7 +500,7 @@ class GemmV3ReduceScatter_Device
       int m_per_local_rank = args.m / local_world_size;
       int m_tiles = cute::ceil_div(m_per_local_rank, m_tile_size);
 
-      if constexpr (rs_meta.comm_kind() == _AcrossNode{}) {
+      if constexpr (rs_meta.comm_kind() == _InterNode{}) {
         if constexpr (hparams.raster_order() == _RasterAlongN{}) {
           scheduler.raster_order = TileScheduler::RasterOrderOptions::AlongN;
         } else {
@@ -556,7 +556,7 @@ class GemmV3ReduceScatter_Device
   get_barrier_workspace_size(std::any const &var_args) const override {
     auto align_buffer = [](size_t size) { return (size + 127) / 128 * 128; };
     const auto &args = std::any_cast<GemmReduceScatterArguments>(var_args);
-    if constexpr (not(rs_meta.comm_kind() == _AcrossNode{} and meta.arch() == _Sm80{})) {
+    if constexpr (not(rs_meta.comm_kind() == _InterNode{} and meta.arch() == _Sm80{})) {
       auto [tile_m, tile_n, tile_k] = hparams.tile_shape();
       // for each tile, one flag for finished writing to local
       // another for finished fetching&reducing from other rank

@@ -723,13 +723,19 @@ run(Options<RasterOrderOptions> &options) {
   // ===== Get Op from Registry, and Profile =====
   printf("== Flux Registered Op ==\n");
 
-  using DType = decltype(make_gemm_dtype_config(_E4M3{}, _E4M3{}, _E4M3{}, _E4M3{}));
+  using DType = decltype(make_gemm_dtype_config(_E4M3{}, _E4M3{}, _Void{}, _BF16{}));
 
   auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(DType{}));
   // UnifiedImplMeta impl_spec = None{};
   // impl_spec = make_gemm_v3_meta(use_fast_accum, false);
   auto meta = make_gemm_meta(
-      dt_conf, get_arch(), _CommNone{}, _RCC{}, _GemmV3{}(), make_gemm_v3_meta(false, true));
+      dt_conf,
+      get_arch(),
+      get_sm_core(),
+      _CommNone{},
+      _RCC{},
+      _GemmV3{}(),
+      make_gemm_v3_meta(false, true));
 
   auto rt_conf = make_runtime_config(options.m, options.n, options.k);
   auto hparams = OpRegistry::instance().get_hparams(meta, rt_conf);

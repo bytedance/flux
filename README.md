@@ -93,10 +93,10 @@ pip install byte-flux
 
 
 #### Dependencies
-The core dependencies of Flux are NCCL, CUTLASS, and NVSHMEM, which are located under the 3rdparty folder.
+Flux depends on `NCCL` and `CUTLASS`, which are located under `3rdparty/`, and `NVSHMEM`, which you can install by pip.
 1. NCCL: Managed by git submodule automatically.
-2. NVSHMEM: Downloaded from https://developer.nvidia.com/nvshmem. The current version is 3.2.5-1.
-3. CUTLASS: Flux leverages CUTLASS to generate high-performance GEMM kernels. We currently use CUTLASS 3.7.0 and a tiny patch should be applied to CUTLASS.
+2. NVSHMEM: It's suggested that you install nvshmem by `pip install nvidia-nvshmem-cu12`; If you want to build nvshmem from source, you can download it from https://developer.nvidia.com/nvshmem. Flux is tested with nvshmem 3.2.5/3.3.9
+3. CUTLASS: Flux leverages CUTLASS to generate high-performance GEMM kernels. We currently use CUTLASS 4.0.0
 
 
 ## Quick Start
@@ -164,4 +164,3 @@ to the related papers:
 # About [ByteDance Seed Team](https://team.doubao.com/)
 
 Founded in 2023, ByteDance Seed Team is dedicated to crafting the industry's most advanced AI foundation models. The team aspires to become a world-class research team and make significant contributions to the advancement of science and society.
-

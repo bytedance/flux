@@ -23,6 +23,11 @@
 #define FLUX_TORCH_EXTENSION_NAME flux_ths_pybind
 
 #if (TORCH_VERSION_MAJOR >= 2 && TORCH_VERSION_MINOR < 4) || TORCH_VERSION_MAJOR < 2
+
+#if PY_VERSION_HEX < 0x030A0000
+#define Py_NewRef(op) (Py_INCREF(op), (PyObject *)(op))
+#endif
+
 #include <pybind11/pybind11.h>
 namespace pybind11 {
 namespace detail {
@@ -57,6 +62,8 @@ struct type_caster<at::ScalarType> {
 
 }  // namespace detail
 }  // namespace pybind11
+
+#undef Py_NewRef
 #endif
 
 namespace py = pybind11;

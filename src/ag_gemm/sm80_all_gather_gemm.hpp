@@ -375,8 +375,9 @@ class Sm80AGGemmWithEpilogueVisitorStreamk {
               args.ldc ? make_Coord_with_padding<LayoutC::kStrideRank>(args.ldc) : args.stride_c),
           params_D(
               args.ldd ? make_Coord_with_padding<LayoutC::kStrideRank>(args.ldd) : args.stride_d),
-          output_op(FusionCallbacks::to_underlying_arguments(
-              args.problem_size, args.epilogue, nullptr /*workspace*/)),
+          output_op(
+              FusionCallbacks::to_underlying_arguments(
+                  args.problem_size, args.epilogue, nullptr /*workspace*/)),
           mode(args.mode),
           ptr_A(const_cast<void *>(args.ptr_A)),
           ptr_B(const_cast<void *>(args.ptr_B)),

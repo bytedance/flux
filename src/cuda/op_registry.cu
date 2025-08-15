@@ -28,9 +28,10 @@ namespace flux {
 namespace {
 std::once_flag init_flag;
 ArchEnum arch;
+SMCoreEnum sm_core;
 
 void
-init_arch_tag() {
+init_device_properties() {
   int major, minor;
   cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, 0);
   cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, 0);
@@ -38,13 +39,30 @@ init_arch_tag() {
   FLUX_CHECK(arch_num == 80 || arch_num == 89 || arch_num == 90)
       << "unsupported arch: " << arch_num;
   arch = ArchEnum{arch_num};
+
+  int sm_count;
+  cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, 0);
+
+  switch (sm_count) {
+    case 92: sm_core = SMCoreEnum::L20; break;
+    case 108: sm_core = SMCoreEnum::A100; break;
+    case 78: sm_core = SMCoreEnum::H20; break;
+    case 132: sm_core = SMCoreEnum::H800; break;
+    default: FLUX_CHECK(false) << "Unsupported SM count for SMCoreEnum: " << sm_count; break;
+  }
 }
 }  // namespace
 
 ArchEnum
 get_arch() {
-  std::call_once(init_flag, init_arch_tag);
+  std::call_once(init_flag, init_device_properties);
   return arch;
+}
+
+SMCoreEnum
+get_sm_core() {
+  std::call_once(init_flag, init_device_properties);
+  return sm_core;
 }
 
 TuningConfigRegistry &

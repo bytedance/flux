@@ -15,16 +15,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "flux/cuda/cuda_common.h"
-#include "flux/flux.h"
 #include <cub/cub.cuh>
-#include "cutlass/array.h"
-#include "cutlass/functional.h"
-#include "cutlass/device_kernel.h"
-#include "cutlass/numeric_conversion.h"
+
 #include "cute/layout.hpp"
 #include "cute/tensor.hpp"
+#include "cutlass/array.h"
+#include "cutlass/device_kernel.h"
+#include "cutlass/functional.h"
+#include "cutlass/numeric_conversion.h"
+#include "flux/cuda/cuda_common.h"
 #include "flux/cuda/reduce_utils.cuh"
+#include "flux/flux.h"
 #include "moe_gather_rs/moe_utils.h"
 
 namespace bytedance::flux {
@@ -32,39 +33,61 @@ namespace bytedance::flux {
 template <const int NUM_THREADS>
 __global__ void
 ep_index_filter_kernel(
-    int32_t *scatter_idx,
-    int32_t *pos_filtered,
-    int32_t *token_idx_filtered,
-    int32_t *total_token_acc,
-    int32_t M,
+    int32_t *scatter_idx,          // input
+    int32_t *pos_filtered,         // output
+    int32_t *token_idx_filtered,   // output
+    int32_t *total_token_acc,      // output
+    int32_t *ep_n_tokens_cum_sum,  // input
+    int32_t *splits_gpu_cum_sum,   // input
+    int32_t *reduce_token_idx,     // output
+    int32_t max_token_per_rank,
     int32_t topk,
-    int32_t expert_rank_start,
-    int32_t expert_rank_end) {
+    int32_t total_num_experts,
+    int32_t world_size,
+    int32_t ep_world_size,
+    int32_t tp_world_size,
+    int32_t cur_rank,
+    int n_blocks_per_rank) {
   __shared__ int token_acc_shm[NUM_THREADS / 32];
   static_assert(NUM_THREADS % 32 == 0);
   int topk_acc = 0;
   int tid = threadIdx.x;
   int bid = blockIdx.x;
+  int bid_in_rank = bid % n_blocks_per_rank;
+  int rank_id = bid / n_blocks_per_rank;
   int wid = threadIdx.x / 32;
   int wtid = threadIdx.x % 32;
-  int token_idx = bid * blockDim.x + tid;
-  int total_token = M / topk;
+  // the token id within its rank
+  int local_token_idx = bid_in_rank * blockDim.x + tid;
+  int token_start_cur_rank = ep_n_tokens_cum_sum[rank_id];
+  int token_end_cur_rank = ep_n_tokens_cum_sum[rank_id + 1];
+  int n_token_cur_rank = token_end_cur_rank - token_start_cur_rank;
+  int cur_ep_rank = cur_rank / tp_world_size;
   int global_offset = -1;
   int local_offset = -1;
+  int num_experts_per_rank = total_num_experts / ep_world_size;
+  int expert_rank_start = splits_gpu_cum_sum[cur_ep_rank * num_experts_per_rank];
+  int expert_rank_end = splits_gpu_cum_sum[(cur_ep_rank + 1) * num_experts_per_rank];
   if (wtid == 0) {
+    // perform the reduction within the warp first
     token_acc_shm[wid] = 0;
   }
-  if (token_idx < total_token) {
+  if (local_token_idx < n_token_cur_rank) {
+    int global_token_idx = local_token_idx + token_start_cur_rank;
     for (int i = 0; i < topk; i++) {
-      int pos = token_idx * topk + i;
+      int pos = global_token_idx * topk + i;
       int scattered_pos = scatter_idx[pos];
       if (scattered_pos >= expert_rank_start && scattered_pos < expert_rank_end) {
-        pos_filtered[(topk + 1) * token_idx + topk_acc] = scattered_pos;
+        pos_filtered[(topk + 3) * global_token_idx + topk_acc] = scattered_pos;
         topk_acc += 1;
       }
     }
     if (topk_acc > 0) {
-      pos_filtered[token_idx * (topk + 1) + topk] = topk_acc;
+      // topk x [scatterd pos to be reduces] + [activated topk, local token idx to be write to,
+      // rank id]
+      pos_filtered[global_token_idx * (topk + 3) + topk] = topk_acc;
+      pos_filtered[global_token_idx * (topk + 3) + topk + 1] = local_token_idx;
+      pos_filtered[global_token_idx * (topk + 3) + topk + 2] = rank_id;
       local_offset = atomicAdd(&token_acc_shm[wid], 1);
     }
   }
@@ -74,7 +97,35 @@ ep_index_filter_kernel(
   global_offset = __shfl_sync(0xFFFFFFFF, global_offset, 0);
   // write
   if (local_offset >= 0) {
-    token_idx_filtered[global_offset + local_offset] = token_idx;
+    int global_token_idx = local_token_idx + token_start_cur_rank;
+    token_idx_filtered[global_offset + local_offset] = global_token_idx;
+  }
+  // perform the index computation for the topk_reduce kernel
+  if (rank_id == cur_rank && local_token_idx < n_token_cur_rank) {
+    int global_token_idx = local_token_idx + token_start_cur_rank;
+    int hit_rank = 0;
+    for (int tgt_rank = 0; tgt_rank < world_size; tgt_rank++) {
+      int tgt_ep_rank = tgt_rank / tp_world_size;
+      int tgt_rank_expert_start = splits_gpu_cum_sum[tgt_ep_rank * num_experts_per_rank];
+      int tgt_rank_expert_end = splits_gpu_cum_sum[(tgt_ep_rank + 1) * num_experts_per_rank];
+      int hit_topk = 0;
+      for (int top_id = 0; top_id < topk; top_id++) {
+        int pos = global_token_idx * topk + top_id;
+        int scattered_pos = scatter_idx[pos];
+        if (scattered_pos >= tgt_rank_expert_start && scattered_pos < tgt_rank_expert_end) {
+          hit_topk += 1;
+        }
+      }
+      if (hit_topk > 0) {
+        // when tp is enabled, the number of activated rank may be larger than topk
+        int pos = tgt_rank * max_token_per_rank + local_token_idx;
+        int write_pos = local_token_idx * (world_size + 1) + hit_rank;
+        reduce_token_idx[write_pos] = pos;
+        hit_rank += 1;
+      }
+    }
+    // there are `hit_rank` tokens to be reduced in the second round
+    reduce_token_idx[local_token_idx * (world_size + 1) + world_size] = hit_rank;
   }
 }
 
@@ -84,20 +135,148 @@ ep_index_filter_impl(
     int32_t *pos_filtered,
     int32_t *token_idx_filtered,
     int32_t *total_token_acc,
-    int32_t M,
+    int32_t *ep_n_tokens_cum_sum,
+    int32_t *splits_gpu_cum_sum,
+    int32_t *reduce_token_idx,
+    int32_t max_token_per_rank,
     int32_t topk,
-    int32_t eid_start,
-    int32_t eid_end,
+    int32_t total_num_experts,
+    int32_t world_size,
+    int32_t ep_world_size,
+    int32_t tp_world_size,
+    int32_t cur_rank,
     cudaStream_t stream) {
-  int token_num = M / topk;
-  assert(M % topk == 0);
-  const int num_threads = 512;
+  const int num_threads = 1024;
+  const int n_blocks_per_rank = (max_token_per_rank + num_threads - 1) / num_threads;
   dim3 block_dim(num_threads);
-  int block_num = (token_num + num_threads - 1) / num_threads;
-  dim3 grid_dim(block_num);
+  dim3 grid_dim(world_size * n_blocks_per_rank);
   ep_index_filter_kernel<num_threads><<<grid_dim, block_dim, 0, stream>>>(
-      scatter_idx, pos_filtered, token_idx_filtered, total_token_acc, M, topk, eid_start, eid_end);
+      scatter_idx,
+      pos_filtered,
+      token_idx_filtered,
+      total_token_acc,
+      ep_n_tokens_cum_sum,
+      splits_gpu_cum_sum,
+      reduce_token_idx,
+      max_token_per_rank,
+      topk,
+      total_num_experts,
+      world_size,
+      ep_world_size,
+      tp_world_size,
+      cur_rank,
+      n_blocks_per_rank);
 }
+
+////////////////////////////////////////////
+// copied from dis_scatter_backward, should be megerd in the future
+template <typename Element, const int NUM_THREADS, const int N_DIM, const int TOPK>
+__global__ void
+ep_topk_reduce_kernel(int M, int32_t *reduction_idx, Element *input, Element *output) {
+  constexpr int ELEMENT_SIZE = sizeof(Element);
+  constexpr int VEC_SIZE = 16;
+  constexpr int WARP_SIZE = 32;
+
+  constexpr int NUM_WARP = NUM_THREADS / WARP_SIZE;
+  static_assert(VEC_SIZE % ELEMENT_SIZE == 0);
+  constexpr int N_ELEMENT_PER_VEC = VEC_SIZE / ELEMENT_SIZE;
+  constexpr int N_ELEMENT_PER_ITER = WARP_SIZE * N_ELEMENT_PER_VEC;
+  static_assert(N_DIM % N_ELEMENT_PER_ITER == 0, "N_DIM must be divisible by N_ELEMENT_PER_ITER");
+  constexpr int N_UNROLL = N_DIM / N_ELEMENT_PER_ITER;
+  __shared__ Element *shared_buffer[TOPK * NUM_WARP];
+  float acc[N_ELEMENT_PER_VEC];
+  Element reg128[N_ELEMENT_PER_VEC];
+  int wtid = threadIdx.x % 32;
+  int wid = threadIdx.x / WARP_SIZE;
+  int bid = blockIdx.x;
+  int token_idx = wid + bid * NUM_WARP;
+  Element **ptr = &shared_buffer[TOPK * wid];
+  if (token_idx < M) {
+    int topk_remained = reduction_idx[token_idx * (TOPK + 1) + TOPK];
+    // preprocess the ptrs into shared memory
+    if (wtid < topk_remained) {
+      ptr[wtid] = input + reduction_idx[token_idx * (TOPK + 1) + wtid] * N_DIM;
+    }
+#pragma unroll
+    for (int n_iter = 0; n_iter < N_UNROLL; n_iter++) {
+#pragma unroll
+      for (int i = 0; i < N_ELEMENT_PER_VEC; i++) {
+        acc[i] = 0.0f;
+      }
+      for (int i = 0; i < topk_remained; i++) {
+        FETCH_128bit(&reg128[0]) =
+            FETCH_128bit(ptr[i] + n_iter * N_ELEMENT_PER_ITER + wtid * N_ELEMENT_PER_VEC);
+#pragma unroll
+        for (int i = 0; i < N_ELEMENT_PER_VEC; i++) {
+          acc[i] += element_to_float(reg128[i]);
+        }
+      }
+#pragma unroll
+      for (int i = 0; i < N_ELEMENT_PER_VEC; i++) {
+        reg128[i] = float_to_element<Element>(acc[i]);
+      }
+      FETCH_128bit(
+          output + N_DIM * token_idx + n_iter * N_ELEMENT_PER_ITER + wtid * N_ELEMENT_PER_VEC) =
+          FETCH_128bit(&reg128[0]);
+    }
+  }
+}
+
+void
+ep_topk_reduce_impl(
+    void *input,
+    void *output,
+    int32_t *reduce_token_idx,
+    int M,
+    int N,
+    int topk,
+    cudaStream_t stream) {
+  constexpr int NUM_THREADS = 1024;
+  static_assert(NUM_THREADS % 32 == 0);
+  constexpr int NUM_WARP = NUM_THREADS / 32;
+
+  dim3 block_dim(NUM_THREADS);
+  int n_threadblocks = (M + NUM_WARP - 1) / NUM_WARP;
+  dim3 grid_dim(n_threadblocks);
+  tuple_return_if(
+      tuple_cartesian_product(
+          cute::make_tuple(
+              cute::Int<1024>{},
+              cute::Int<2048>{},
+              cute::Int<3072>{},
+              cute::Int<4096>{},
+              cute::Int<5120>{},
+              cute::Int<6144>{},
+              cute::Int<7168>{},
+              cute::Int<8192>{},
+              cute::Int<10240>{}),
+          cute::make_tuple(
+              cute::_2{},
+              cute::_4{},
+              cute::_5{},
+              cute::_6{},
+              cute::Int<8>{},
+              cute::Int<10>{},
+              cute::Int<16>{})),  // topk
+      [&](auto tup) {
+        auto [cndim, ctopk] = tup;
+        return cndim == N and ctopk == topk;
+      },
+      [&](auto tup) {
+        auto [cndim, ctopk] = tup;
+        constexpr int TOPK = decltype(ctopk){};
+        constexpr int NDIM = decltype(cndim){};
+        // TODO: currently only suport BF16, but support other data types can be easily extended
+        using Element = nv_bfloat16;
+        Element *input_ptr = reinterpret_cast<Element *>(input);
+        Element *output_ptr = reinterpret_cast<Element *>(output);
+        ep_topk_reduce_kernel<Element, NUM_THREADS, NDIM, TOPK>
+            <<<grid_dim, block_dim, 0, stream>>>(M, reduce_token_idx, input_ptr, output_ptr);
+      },
+      [&]() { FLUX_CHECK(false) << "unsupported for topk=" << topk << " n_dim:" << N; });
+}
+
+///////////////////////////////////////////
 
 template <typename Element>
 struct topk_reduce_scatter_args {
@@ -598,8 +777,6 @@ calc_moe_triton_blocked_gather_a_kernel(
   for (int expert_id = blockIdx.x; expert_id < ep_count; expert_id += gridDim.x) {
     const int m_start = expert_id == 0 ? 0 : ep_splits_acc[expert_id - 1];
     const int m_start_pad = expert_id == 0 ? 0 : ep_splits_pad_acc[expert_id - 1];
-    const int m_end = ep_splits_acc[expert_id];
-    const int m_end_pad = ep_splits_pad_acc[expert_id];
     const int mlen = ep_splits[expert_id];
     const int tile_m_start = m_start_pad / block_size_m;
     const int tile_count = (mlen + block_size_m - 1) / block_size_m;

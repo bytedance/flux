@@ -66,10 +66,11 @@ test_memory_bound(int tp, int m, int n, int k, int iters, int gemm_type, int cop
   }
 
   auto arch = get_arch();
-
+  auto sm_core = get_sm_core();
   auto meta = make_gemm_meta(
       _FP16{},
       arch,
+      sm_core,
       _CommNone{},
       _RCR{},
       ((int)arch < (int)_Sm90{}()) ? _GemmV2{}() : _GemmV3{}());

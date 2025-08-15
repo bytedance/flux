@@ -34,9 +34,15 @@ struct Options {
   bool help;
   std::string dir;
   std::string archs;
+  std::string sm_cores;
   std::string output_file;
 
-  Options() : help(false), dir("./registers"), archs(""), output_file("./generated_ops.txt") {}
+  Options()
+      : help(false),
+        dir("./registers"),
+        archs(""),
+        sm_cores(""),
+        output_file("./generated_ops.txt") {}
   void
   parse(int argc, char const **args) {
     cutlass::CommandLine cmd(argc, args);
@@ -46,6 +52,7 @@ struct Options {
     }
     cmd.get_cmd_line_argument("dir", dir);
     cmd.get_cmd_line_argument("archs", archs);
+    cmd.get_cmd_line_argument("sm_cores", sm_cores);
     cmd.get_cmd_line_argument("output_file", output_file);
   }
 
@@ -56,7 +63,9 @@ struct Options {
         << "Options:\n\n"
         << "   --help           If specified, displays this usage statement\n\n"
         << "   --dir            Store generated op registry files under this dir\n\n"
-        << "   --archs          Comma seperated, only specified SM number will be compiled\n\n"
+        << "   --archs          Comma separated, only specified cuda arch will be compiled\n\n"
+        << "   --sm_cores       Comma separated, only specified SM core matched GPU will be "
+           "compiled\n\n"
         << "   --output_file    The filepaths of generated ops will be stored into this file";
     return out;
   }
@@ -267,6 +276,12 @@ main_template(
     archs.insert(ArchEnum(arch_num));
   }
 
+  std::set<int> sm_cores_set;
+  std::vector<std::string> sm_cores_vec = parse_semicolon_seperated(options.sm_cores);
+  for (const auto &sm_str : sm_cores_vec) {
+    sm_cores_set.insert(std::stoi(sm_str));
+  }
+
   std::ofstream ofile(options.output_file);
   if (!ofile.is_open()) {
     std::cerr << "Error opening file!" << std::endl;
@@ -286,6 +301,12 @@ main_template(
       if (archs.count(arch) <= 0) {
         continue;
       }
+
+      int actual_sm_cores = static_cast<int>(meta.sm_core());
+      if (sm_cores_set.count(actual_sm_cores) <= 0) {
+        continue;
+      }
+
       CodeGen gen(meta, hparams_list, impl_header, impl_name);
       std::string filename = gen.get_filename();
       std::string code = gen.gen_code();

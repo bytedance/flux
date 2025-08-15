@@ -64,8 +64,8 @@ pad_m_to_TPxTile(
     padded_scale = torch::empty({m_padded, input_scale->size(1)}, input_scale->options());
   }
   ::bytedance::flux::pad_m_to_TPxTile(
-      input.const_data_ptr(),
-      input_scale.has_value() ? input_scale->const_data_ptr() : nullptr,
+      input.data_ptr(),
+      input_scale.has_value() ? input_scale->data_ptr() : nullptr,
       output.data_ptr(),
       padded_scale.has_value() ? padded_scale->data_ptr() : nullptr,
       m_dim,

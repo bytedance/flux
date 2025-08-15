@@ -59,27 +59,20 @@ struct GemmV3CommNone_Kernel : public GemmV3BaseKernel<GemmMetaT, GemmHParamsT> 
   gemm_kernel() const {
     using CollectiveMma = decltype(this->default_collective_mma());
     using CollectiveEpilogue = decltype(this->default_collective_epilogue());
-    // TODO(wenlei.bao): unify below kernels
-    if constexpr (is_fp8_gemm and meta.impl_spec().block_scale()) {
-      return make_declval<cute::conditional_t<
-          hparams.gemm_kind() == _GemmStreamK{},
-          cutlass::gemm::kernel::GemmUniversal<
-              cute::Shape<int, int, int, int>,  // Indicates ProblemShape
-              CollectiveMma,
-              CollectiveEpilogue,
-              cutlass::gemm::StreamKScheduler>,
-          cutlass::gemm::kernel::GemmUniversal<
-              cute::Shape<int, int, int, int>,  // Indicates ProblemShape
-              CollectiveMma,
-              CollectiveEpilogue>>>();
-    } else {
-      using TileScheduler = decltype(this->tile_scheduler());
-      return make_declval<cutlass::gemm::kernel::GemmUniversal<
-          typename Base::ProblemShape,
-          CollectiveMma,
-          CollectiveEpilogue,
-          TileScheduler>>();
-    }
+    using TileScheduler = decltype(this->tile_scheduler());
+
+    constexpr bool use_block_scale = meta.impl_spec().block_scale();
+    constexpr bool use_stream_k = hparams.gemm_kind() == _GemmStreamK{};
+
+    using ProblemShape = cute::
+        conditional_t<is_fp8_gemm, typename Base::ProblemShapeMNKL, typename Base::ProblemShape>;
+
+    using Scheduler =
+        cute::conditional_t<use_stream_k, cutlass::gemm::StreamKScheduler, TileScheduler>;
+
+    return make_declval<
+        cutlass::gemm::kernel::
+            GemmUniversal<ProblemShape, CollectiveMma, CollectiveEpilogue, Scheduler>>();
   }
 };
 
@@ -189,14 +182,13 @@ class GemmV3CommNone_Device : public GemmV3BaseDevice<
     } else if constexpr (hparams.raster_order() == _RasterAlongN{}) {
       scheduler.raster_order = TileScheduler::RasterOrderOptions::AlongN;
     }
-    return GemmArguments{
-        /*mode=*/cutlass::gemm::GemmUniversalMode::kGemm,
-        /*problem_shape=*/{args.m, args.n, args.k},
-        /*mainloop=*/
-        {ptr_A, stride_A, ptr_B, stride_B},
-        /*epilogue=*/epilogue,
-        /*hw_info=*/{},
-        /*scheduler=*/scheduler};
+    return GemmArguments{/*mode=*/cutlass::gemm::GemmUniversalMode::kGemm,
+                         /*problem_shape=*/{args.m, args.n, args.k},
+                         /*mainloop=*/
+                         {ptr_A, stride_A, ptr_B, stride_B},
+                         /*epilogue=*/epilogue,
+                         /*hw_info=*/{},
+                         /*scheduler=*/scheduler};
   }
 
   auto
@@ -317,14 +309,81 @@ class GemmV3CommNone_Device : public GemmV3BaseDevice<
     } else if constexpr (hparams.raster_order() == _RasterAlongN{}) {
       scheduler.raster_order = TileScheduler::RasterOrderOptions::AlongN;
     }
-    return GemmArguments{
-        /*mode=*/cutlass::gemm::GemmUniversalMode::kGemm,
-        /*problem_shape=*/{args.m, args.n, args.k},
-        /*mainloop=*/
+
+    return GemmArguments{/*mode=*/cutlass::gemm::GemmUniversalMode::kGemm,
+                         /*problem_shape=*/{args.m, args.n, args.k},
+                         /*mainloop=*/
+                         {ptr_A, stride_A, ptr_B, stride_B},
+                         /*epilogue=*/epilogue,
+                         /*hw_info=*/{},
+                         /*scheduler=*/scheduler};
+  }
+
+  auto
+  to_fp8_gemm_args_impl(GemmFP8Arguments const &args) const {
+    using Gemm = identity_t<decltype(this->gemm_device())>;
+    using GemmKernel = GemmKernelT;
+    using GemmArguments = typename Gemm::Arguments;
+
+    using ElementA = decltype(to_cutlass_element(dt_conf.a()));
+    using ElementB = decltype(to_cutlass_element(dt_conf.b()));
+    using ElementC = decltype(to_cutlass_element(dt_conf.c()));
+    using ElementD = decltype(to_cutlass_element(dt_conf.d()));
+
+    auto ptr_A = static_cast<ElementA const *>(args.A);
+    auto ptr_B = static_cast<ElementB const *>(args.B);
+    auto ptr_C = static_cast<ElementC *>(const_cast<void *>(args.Vector));
+    auto ptr_D = static_cast<ElementD *>(args.D);
+    auto ptr_Aux = static_cast<ElementD *>(args.Aux);
+
+    auto stride_A = cutlass::make_cute_packed_stride(
+        typename GemmKernel::StrideA{}, cute::make_shape(args.m, args.k, 1));
+    auto stride_B = cutlass::make_cute_packed_stride(
+        typename GemmKernel::StrideB{}, cute::make_shape(args.n, args.k, 1));
+    auto stride_C = cutlass::make_cute_packed_stride(
+        typename GemmKernel::StrideC{}, cute::make_shape(args.m, args.n, 1));
+    auto stride_D = cutlass::make_cute_packed_stride(
+        typename GemmKernel::StrideD{}, cute::make_shape(args.m, args.n, 1));
+    auto stride_aux = stride_D;
+
+    // from CUTLASS 54 example
+    typename Gemm::Arguments arguments{
+        cutlass::gemm::GemmUniversalMode::kGemm,
+        {args.m, args.n, args.k, 1},
         {ptr_A, stride_A, ptr_B, stride_B},
-        /*epilogue=*/epilogue,
-        /*hw_info=*/{},
-        /*scheduler=*/scheduler};
+        {{},  // epilogue.thread
+         ptr_C,
+         stride_C,
+         ptr_D,
+         stride_D}};
+
+    auto &fusion_args = arguments.epilogue.thread;
+    fusion_args.alpha = args.alpha;
+    fusion_args.beta = args.beta;
+    fusion_args.alpha_ptr = args.alpha_ptr;
+    fusion_args.beta_ptr = args.beta_ptr;
+    fusion_args.scale_a = args.scale_a;
+    fusion_args.scale_b = args.scale_b;
+    fusion_args.scale_c = args.scale_c;
+    fusion_args.scale_a_ptr = args.scaleA;
+    fusion_args.scale_b_ptr = args.scaleB;
+    fusion_args.scale_c_ptr = args.scaleC;
+    // ignored if tensor types are not fp8
+    fusion_args.scale_d = args.scale_d;
+    fusion_args.scale_aux = args.scale_aux;
+    fusion_args.scale_d_ptr = args.scaleD;
+    fusion_args.scale_aux_ptr = args.scaleAux;
+    // leaving/setting these as nullptr disables the fusion at runtime
+    fusion_args.bias_ptr = nullptr;
+    if constexpr (hparams.raster_order() == _RasterAlongM{}) {
+      arguments.scheduler.raster_order = GemmKernel::TileScheduler::RasterOrderOptions::AlongM;
+    } else if constexpr (hparams.raster_order() == _RasterAlongN{}) {
+      arguments.scheduler.raster_order = GemmKernel::TileScheduler::RasterOrderOptions::AlongN;
+    }
+    // The tile scheduler will swizzle up to 8 and with the nearest multiple of 2 (i.e., 1, 2, 4,
+    // and 8)
+    arguments.scheduler.max_swizzle_size = args.swizzle;
+    return arguments;
   }
 
  public:
@@ -334,6 +393,8 @@ class GemmV3CommNone_Device : public GemmV3BaseDevice<
       return to_s8_gemm_args_impl(std::any_cast<S8GemmDequantArguments>(args));
     } else if constexpr (this->is_fp8_gemm && this->is_blockscale_gemm) {
       return to_blockscale_gemm_args_impl(std::any_cast<BlockScaleGemmArguments>(args));
+    } else if constexpr (this->is_fp8_gemm) {
+      return to_fp8_gemm_args_impl(std::any_cast<GemmFP8Arguments>(args));
     } else {
       return to_gemm_args_impl(std::any_cast<GemmOnlyArguments>(args));
     }

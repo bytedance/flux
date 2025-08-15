@@ -190,17 +190,16 @@ class GemmV3AGKernel_Device : public GemmV3BaseDevice<
       scheduler.local_rank = args.rank % scheduler.local_world_size;
     }
 
-    return GemmArguments{
-        /*mode=*/cutlass::gemm::GemmUniversalMode::kGemm,
-        /*problem_shape=*/{args.m, args.n, args.k},
-        /*mainloop=*/
-        {ptr_A, stride_A, ptr_B, stride_B},
-        /*epilogue=*/epilogue,
-        /*hw_info=*/{},
-        /*scheduler=*/scheduler,
-        args.barrier_buffer,
-        args.rank,
-        args.world_size};
+    return GemmArguments{/*mode=*/cutlass::gemm::GemmUniversalMode::kGemm,
+                         /*problem_shape=*/{args.m, args.n, args.k},
+                         /*mainloop=*/
+                         {ptr_A, stride_A, ptr_B, stride_B},
+                         /*epilogue=*/epilogue,
+                         /*hw_info=*/{},
+                         /*scheduler=*/scheduler,
+                         args.barrier_buffer,
+                         args.rank,
+                         args.world_size};
   }
 
   auto
@@ -255,17 +254,16 @@ class GemmV3AGKernel_Device : public GemmV3BaseDevice<
       scheduler.local_world_size = args.world_size / args.nnodes;
       scheduler.local_rank = args.rank % scheduler.local_world_size;
     }
-    return GemmArguments{
-        /*mode=*/cutlass::gemm::GemmUniversalMode::kGemm,
-        /*problem_shape=*/{args.m, args.n, args.k},
-        /*mainloop=*/
-        {ptr_A, stride_A, ptr_B, stride_B},
-        /*epilogue=*/epilogue,
-        /*hw_info=*/{},
-        /*scheduler=*/scheduler,
-        args.barrier_buffer,
-        args.rank,
-        args.world_size};
+    return GemmArguments{/*mode=*/cutlass::gemm::GemmUniversalMode::kGemm,
+                         /*problem_shape=*/{args.m, args.n, args.k},
+                         /*mainloop=*/
+                         {ptr_A, stride_A, ptr_B, stride_B},
+                         /*epilogue=*/epilogue,
+                         /*hw_info=*/{},
+                         /*scheduler=*/scheduler,
+                         args.barrier_buffer,
+                         args.rank,
+                         args.world_size};
   }
 
   auto

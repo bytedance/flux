@@ -16,6 +16,36 @@
 //===----------------------------------------------------------------------===//
 
 #include "moe_gather_rs/ths_op/gemm_grouped_v2_gather_rs.h"
+
+#include <ATen/core/List.h>
+#include <ATen/core/TensorBody.h>
+#include <ATen/core/ivalue.h>
+#include <ATen/cuda/CUDAEvent.h>
+#include <ATen/cuda/CachingHostAllocator.h>
+#include <ATen/ops/empty.h>
+#include <ATen/ops/zeros.h>
+#include <c10/core/DeviceType.h>
+#include <c10/core/ScalarType.h>
+#include <c10/core/TensorOptions.h>
+#include <c10/cuda/CUDAFunctions.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
+#include <c10/util/Optional.h>
+#include <cuda_runtime_api.h>
+#include <cutlass/fast_math.h>
+#include <cutlass/gemm/gemm.h>
+#include <cutlass/layout/matrix.h>
+#include <torch/all.h>
+
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <cutlass/util/packed_stride.hpp>
+#include <iostream>
+#include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
+#include <utility>
+#include <vector>
+
 #include "flux/args/moe_gather_rs.h"
 #include "flux/cuda/cuda_common.h"
 #include "flux/cuda/cuda_stub.h"
@@ -27,36 +57,9 @@
 #include "flux/ths_op/util.h"
 #include "flux/utils.h"
 #include "moe_gather_rs/topk_gather_rs.hpp"
-#include "moe_gather_rs/moe_utils.h"
 #include "moe_gather_rs/workspace_helper.h"
-#include <ATen/core/ivalue.h>
-#include <ATen/core/List.h>
-#include <ATen/core/TensorBody.h>
-#include <ATen/cuda/CachingHostAllocator.h>
-#include <ATen/cuda/CUDAEvent.h>
-#include <ATen/ops/empty.h>
-#include <ATen/ops/zeros.h>
-#include <c10/core/DeviceType.h>
-#include <c10/core/ScalarType.h>
-#include <c10/core/TensorOptions.h>
-#include <c10/cuda/CUDAFunctions.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAStream.h>
-#include <c10/util/Optional.h>
-#include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <cuda_runtime_api.h>
-#include <cutlass/fast_math.h>
-#include <cutlass/gemm/gemm.h>
-#include <cutlass/layout/matrix.h>
-#include <cutlass/util/packed_stride.hpp>
-#include <iostream>
-#include <torch/all.h>
-#include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
-#include <utility>
-#include <vector>
 #if defined(FLUX_WITH_TRITON_AOT)
+#include "moe_utils.h"
 #include "triton_aot_generated/flux_triton_aot.h"
 #endif
 
@@ -461,7 +464,7 @@ class GemmGroupedV2GatherRSOp::GemmGroupedV2GatherRSOpImpl {
     at::ScalarType input_torch_type = weights[0].scalar_type();
     FLUX_CHECK(input_torch_type != at::ScalarType::Char)
         << "Moe AG+Scatter INT8 not supported yet";
-    bool is_fp8 = c10::isFloat8Type(input_torch_type);
+    bool is_fp8 = is_fp8_torch_dtype(input_torch_type);
     // if the dtype of input is fp8, use bfloat16 as the output dtype
     at::ScalarType output_torch_type = is_fp8 ? at::ScalarType::BFloat16 : input_torch_type;
     DataTypeEnum output_type = from_torch_dtype(output_torch_type);
@@ -528,6 +531,7 @@ class GemmGroupedV2GatherRSOp::GemmGroupedV2GatherRSOpImpl {
     auto stream = c10::cuda::getCurrentCUDAStream();
 
     ArchEnum arch = get_arch();
+    SMCoreEnum sm_core = get_sm_core();
     auto input_type = from_torch_dtype(input_torch_type);
     auto dt_conf = to_gemm_dtype_config(
         make_gemm_dtype_config(input_type, input_type, output_type, output_type));
@@ -535,7 +539,7 @@ class GemmGroupedV2GatherRSOp::GemmGroupedV2GatherRSOpImpl {
     // always use topk=1 impl: to save some compile time
     auto comm_spec = make_gather_rs_meta(1);
     auto meta = make_gemm_meta(
-        dt_conf, arch, _GatherRS{}, _RCR{}, _GemmGroupedV2{}(), impl_spec, comm_spec);
+        dt_conf, arch, sm_core, _GatherRS{}, _RCR{}, _GemmGroupedV2{}(), impl_spec, comm_spec);
     auto rt_conf = make_runtime_config(N, cute::ceil_div(m_full, this->ep_nexperts), K);
     OpRegistry::OpPtr gemm_op;
     if (hparams.has_value()) {
@@ -741,7 +745,7 @@ class GemmGroupedV2GatherRSOp::GemmGroupedV2GatherRSOpImpl {
     int ntokens = m_full / this->topk;
     int n_tokens_per_rank = ntokens / this->world_size;
     at::ScalarType input_dtype = weight.scalar_type();
-    bool is_fp8 = c10::isFloat8Type(input_dtype);
+    bool is_fp8 = is_fp8_torch_dtype(input_dtype);
     bool is_s8_gemm = input_dtype == at::ScalarType::Char;
     CHECK_INPUT(input, input_dtype);
     CHECK_INPUT(weight, input_dtype);
@@ -938,6 +942,7 @@ class GemmGroupedV2GatherRSOp::GemmGroupedV2GatherRSOpImpl {
     int E = weight.size(0);
     int N = weight.size(1);
     ArchEnum arch = get_arch();
+    SMCoreEnum sm_core = get_sm_core();
     auto weight_dtype = weight.scalar_type();
     auto dtype = from_torch_dtype(weight_dtype);
     bool is_fp8 = (dtype == _E4M3{}) || (dtype == _E5M2{});
@@ -949,7 +954,7 @@ class GemmGroupedV2GatherRSOp::GemmGroupedV2GatherRSOpImpl {
     // always use topk=1 impl: to save some compile time
     auto comm_spec = make_gather_rs_meta(1);
     auto meta = unify_type(make_gemm_meta(
-        dt_conf, arch, _GatherRS{}, _RCR{}, _GemmGroupedV2{}(), impl_spec, comm_spec));
+        dt_conf, arch, sm_core, _GatherRS{}, _RCR{}, _GemmGroupedV2{}(), impl_spec, comm_spec));
     auto rt_conf = make_runtime_config(cute::ceil_div(full_m, this->ep_nexperts), N, K);
     ProfilingContext tmp_ctx("__tmp__");
     ProfilingContext *ctx = opt_ctx == nullptr ? &tmp_ctx : opt_ctx.get();
@@ -961,7 +966,7 @@ class GemmGroupedV2GatherRSOp::GemmGroupedV2GatherRSOpImpl {
           float total_elapsed = 0;
           auto cp_hparams = hparams;
           auto comm_params = std::get<unified_type_t<GatherRSHParams>>(cp_hparams.comm_spec());
-          if (comm_params.n_dim() != N) {
+          if (comm_params.n_dim_per_split() != N / this->n_split) {
             return;
           }
           auto stream = c10::cuda::getCurrentCUDAStream();

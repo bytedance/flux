@@ -77,10 +77,12 @@ struct GemmGroupedV3BaseKernel {
         meta, hparams, TypeWrapper<void>{}, cute::Int<epi_smem_size>{});
 
     constexpr bool is_input_fp8 = dt_conf.is_input_fp8();
-    if constexpr ((is_input_fp8) and (not to_gemm_v3_meta(meta.impl_spec()).fast_accum())) {
+    if constexpr (
+        (is_input_fp8) and (not to_gemm_v3_meta(meta.impl_spec()).fast_accum()) and
+        (not to_gemm_v3_meta(meta.impl_spec()).block_scale())) {
       constexpr int Stages = old_params.stages();
       using ClusterShape = decltype(old_params.cluster_shape());
-      using NewDispatchPolicy = cutlass::gemm::MainloopSm90ArrayTmaGmmaWarpSpecializedFP8<
+      using NewDispatchPolicy = cutlass::gemm::FluxMainloopSm90ArrayTmaGmmaWarpSpecializedFP8<
           Stages,
           ClusterShape,
           cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperative>;
@@ -176,6 +178,35 @@ struct GemmGroupedV3BaseDevice
     return workspace_size;
   }
 
+  std::size_t
+  get_args_workspace_size_impl(BlockScaleGroupedGemmV3Arguments const &args) const {
+    std::size_t workspace_size = 0;
+    // problem_sizes
+    using ProblemSizeType = decay_and_strip_t<decltype(args.problem_sizes[0])>;
+    workspace_size = make_align(
+        workspace_size + sizeof(ProblemSizeType) * args.problem_count, ProblemShapeAlignment);
+    // ptr & stride
+    // A
+    workspace_size = make_align(workspace_size + sizeof(void const *) * args.problem_count);
+    workspace_size = make_align(workspace_size + sizeof(InternalStrideA) * args.problem_count);
+    // B
+    workspace_size = make_align(workspace_size + sizeof(void const *) * args.problem_count);
+    workspace_size = make_align(workspace_size + sizeof(InternalStrideB) * args.problem_count);
+    // C
+    workspace_size = make_align(workspace_size + sizeof(void const *) * args.problem_count);
+    workspace_size = make_align(workspace_size + sizeof(InternalStrideC) * args.problem_count);
+    // D
+    workspace_size = make_align(workspace_size + sizeof(void *) * args.problem_count);
+    workspace_size = make_align(workspace_size + sizeof(InternalStrideD) * args.problem_count);
+    if (args.ptr_alpha != nullptr) {
+      workspace_size = make_align(workspace_size + sizeof(float *) * args.problem_count);
+    }
+    workspace_size = make_align(workspace_size + sizeof(void const *) * args.problem_count);
+    // ptr_blockscale_B
+    workspace_size = make_align(workspace_size + sizeof(void const *) * args.problem_count);
+    return workspace_size;
+  }
+
   void
   initialize_args_workspace_with_buffer(
       std::vector<uint8_t> const &host_workspace, void *args_workspace, void *stream) const {
@@ -192,6 +223,13 @@ struct GemmGroupedV3BaseDevice
   void
   initialize_args_workspace_impl(
       GemmGroupedV3Arguments const &args, void *args_workspace, void *stream) const {
+    std::vector<uint8_t> host_workspace = this->get_host_workspace_buffer(args);
+    this->initialize_args_workspace_with_buffer(host_workspace, args_workspace, stream);
+  }
+
+  void
+  initialize_args_workspace_impl(
+      BlockScaleGroupedGemmV3Arguments const &args, void *args_workspace, void *stream) const {
     std::vector<uint8_t> host_workspace = this->get_host_workspace_buffer(args);
     this->initialize_args_workspace_with_buffer(host_workspace, args_workspace, stream);
   }
@@ -262,6 +300,79 @@ struct GemmGroupedV3BaseDevice
     return workspace_host;
   }
 
+  std::vector<uint8_t>
+  get_host_workspace_buffer(BlockScaleGroupedGemmV3Arguments const &args) const {
+    std::size_t workspace_size = this->get_args_workspace_size_impl(args);
+    std::vector<uint8_t> workspace_host(workspace_size);
+    uint8_t *workspace_ptr = workspace_host.data();
+    std::size_t workspace_offset = 0;
+
+    // problem_sizes
+    using ProblemSizeType = decay_and_strip_t<decltype(args.problem_sizes[0])>;
+    std::size_t sizeof_problem_sizes = sizeof(ProblemSizeType) * args.problem_count;
+    memcpy(workspace_ptr + workspace_offset, args.problem_sizes, sizeof_problem_sizes);
+    workspace_offset = make_align(workspace_offset + sizeof_problem_sizes, ProblemShapeAlignment);
+    // ptr & stride
+
+    std::vector<InternalStrideA> stride_A(args.problem_count);
+    std::vector<InternalStrideB> stride_B(args.problem_count);
+    std::vector<InternalStrideC> stride_C(args.problem_count);
+    std::vector<InternalStrideD> stride_D(args.problem_count);
+    for (int i = 0; i < args.problem_count; ++i) {
+      auto [M, N, K] = args.problem_sizes[i];
+      stride_A[i] = cutlass::make_cute_packed_stride(InternalStrideA{}, cute::make_shape(M, K, 1));
+      stride_B[i] = cutlass::make_cute_packed_stride(InternalStrideB{}, cute::make_shape(N, K, 1));
+      stride_C[i] = cutlass::make_cute_packed_stride(InternalStrideC{}, cute::make_shape(M, N, 1));
+      stride_D[i] = cutlass::make_cute_packed_stride(InternalStrideD{}, cute::make_shape(M, N, 1));
+    }
+
+    // A
+    std::size_t sizeof_ptr = sizeof(void *) * args.problem_count;
+    memcpy(workspace_ptr + workspace_offset, args.ptr_A, sizeof_ptr);
+    workspace_offset = make_align(workspace_offset + sizeof_ptr);
+    std::size_t sizeof_stride_A = sizeof(InternalStrideA) * args.problem_count;
+    memcpy(workspace_ptr + workspace_offset, stride_A.data(), sizeof_stride_A);
+    workspace_offset = make_align(workspace_offset + sizeof_stride_A);
+
+    // B
+    memcpy(workspace_ptr + workspace_offset, args.ptr_B, sizeof_ptr);
+    workspace_offset = make_align(workspace_offset + sizeof_ptr);
+    std::size_t sizeof_stride_B = sizeof(InternalStrideB) * args.problem_count;
+    memcpy(workspace_ptr + workspace_offset, stride_B.data(), sizeof_stride_B);
+    workspace_offset = make_align(workspace_offset + sizeof_stride_B);
+
+    // C
+    memcpy(workspace_ptr + workspace_offset, args.ptr_C, sizeof_ptr);
+    workspace_offset = make_align(workspace_offset + sizeof_ptr);
+    std::size_t sizeof_stride_C = sizeof(InternalStrideC) * args.problem_count;
+    memcpy(workspace_ptr + workspace_offset, stride_C.data(), sizeof_stride_C);
+    workspace_offset = make_align(workspace_offset + sizeof_stride_C);
+
+    // D
+    memcpy(workspace_ptr + workspace_offset, args.ptr_D, sizeof_ptr);
+    workspace_offset = make_align(workspace_offset + sizeof_ptr);
+    std::size_t sizeof_stride_D = sizeof(InternalStrideD) * args.problem_count;
+    memcpy(workspace_ptr + workspace_offset, stride_D.data(), sizeof_stride_D);
+    workspace_offset = make_align(workspace_offset + sizeof_stride_D);
+
+    // ptr_alpha
+    if (args.ptr_alpha != nullptr) {
+      memcpy(
+          workspace_ptr + workspace_offset, args.ptr_alpha, sizeof(float *) * args.problem_count);
+      workspace_offset = make_align(workspace_offset + sizeof_ptr);
+    }
+
+    // ptr_blockscale_A
+    memcpy(workspace_ptr + workspace_offset, args.ptr_blockscale_A, sizeof_ptr);
+    workspace_offset = make_align(workspace_offset + sizeof_ptr);
+    // ptr_blockscale_B
+    memcpy(workspace_ptr + workspace_offset, args.ptr_blockscale_B, sizeof_ptr);
+    workspace_offset = make_align(workspace_offset + sizeof_ptr);
+
+    FLUX_CHECK(workspace_offset == workspace_size) << workspace_offset << " != " << workspace_size;
+    return workspace_host;
+  }
+
   auto
   parse_common_gemm_args_from_workspace(
       GemmGroupedV3Arguments const &args, void *args_workspace) const {
@@ -317,6 +428,74 @@ struct GemmGroupedV3BaseDevice
         dev_stride_C,
         dev_ptr_D,
         dev_stride_D,
+        dev_ptr_alpha);
+  }
+
+  auto
+  parse_common_gemm_args_from_workspace(
+      BlockScaleGroupedGemmV3Arguments const &args, void *args_workspace) const {
+    std::size_t workspace_size = this->get_args_workspace_size_impl(args);
+    uint8_t *workspace_ptr = reinterpret_cast<uint8_t *>(args_workspace);
+
+    std::size_t workspace_offset = 0;
+    // problem_sizes
+    using ProblemSizeType = decay_and_strip_t<decltype(args.problem_sizes[0])>;
+    static_assert(
+        cute::is_same_v<ProblemSizeType, typename ProblemShape::UnderlyingProblemShape>,
+        "ProblemSize type mismatch");
+    auto dev_problem_sizes = reinterpret_cast<ProblemSizeType *>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(
+        workspace_offset + sizeof(ProblemSizeType) * args.problem_count, ProblemShapeAlignment);
+    // ptr & stride
+    using Gemm = identity_t<decltype(this->gemm_device())>;
+    // A
+    auto dev_ptr_A = reinterpret_cast<ElementA const **>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(workspace_offset + sizeof(void const *) * args.problem_count);
+    auto dev_stride_A = reinterpret_cast<InternalStrideA *>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(workspace_offset + sizeof(InternalStrideA) * args.problem_count);
+    // B
+    auto dev_ptr_B = reinterpret_cast<ElementB const **>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(workspace_offset + sizeof(void const *) * args.problem_count);
+    auto dev_stride_B = reinterpret_cast<InternalStrideB *>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(workspace_offset + sizeof(InternalStrideB) * args.problem_count);
+    // C
+    auto dev_ptr_C = reinterpret_cast<ElementC const **>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(workspace_offset + sizeof(void const *) * args.problem_count);
+    auto dev_stride_C = reinterpret_cast<InternalStrideC *>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(workspace_offset + sizeof(InternalStrideC) * args.problem_count);
+    // D
+    auto dev_ptr_D = reinterpret_cast<ElementD **>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(workspace_offset + sizeof(void *) * args.problem_count);
+    auto dev_stride_D = reinterpret_cast<InternalStrideD *>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(workspace_offset + sizeof(InternalStrideD) * args.problem_count);
+    // ptr_alpha
+    float **dev_ptr_alpha = nullptr;
+    if (args.ptr_alpha != nullptr) {
+      dev_ptr_alpha = reinterpret_cast<float **>(workspace_ptr + workspace_offset);
+      workspace_offset = make_align(workspace_offset + sizeof(float *) * args.problem_count);
+    }
+
+    using ElementBlockScale = float;
+    auto dev_ptr_blockscale_A =
+        reinterpret_cast<ElementBlockScale const **>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(workspace_offset + sizeof(void const *) * args.problem_count);
+    auto dev_ptr_blockscale_B =
+        reinterpret_cast<ElementBlockScale const **>(workspace_ptr + workspace_offset);
+    workspace_offset = make_align(workspace_offset + sizeof(void const *) * args.problem_count);
+
+    FLUX_CHECK(workspace_offset == workspace_size) << workspace_offset << " != " << workspace_size;
+    return cute::make_tuple(
+        dev_problem_sizes,
+        dev_ptr_A,
+        dev_stride_A,
+        dev_ptr_B,
+        dev_stride_B,
+        dev_ptr_C,
+        dev_stride_C,
+        dev_ptr_D,
+        dev_stride_D,
+        dev_ptr_blockscale_A,
+        dev_ptr_blockscale_B,
         dev_ptr_alpha);
   }
 };

@@ -16,17 +16,26 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-#include "c10/util/Optional.h"
+#include <ATen/core/ivalue.h>
+#include <c10/core/ScalarType.h>
+#include <c10/util/Optional.h>
+#include <torch/all.h>
+
+#include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
+
 #include "flux/flux.h"
-#include "flux/utils.h"
 #include "flux/gemm_hparams.h"
 #include "flux/gemm_meta.h"
 #include "flux/op_registry.h"
-#include "flux/ths_op/util.h"
-#include "flux/ths_op/flux_shm.h"
-#include <ATen/core/ivalue.h>
-#include <c10/core/ScalarType.h>
-#include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
+#include "flux/utils.h"
+
+// from github torch 2.1.0 support FP8, but torch on nvcr.io/nvidia/pytorch:23.04-py3 is 2.1.0 but
+// does not support FP8. so you'd better check before compilation.
+#ifndef TORCH_SUPPOER_FP8
+#define TORCH_SUPPOER_FP8                                                              \
+  (TORCH_VERSION_MAJOR > 2 || (TORCH_VERSION_MAJOR == 2 && TORCH_VERSION_MINOR > 1) || \
+   (TORCH_VERSION_MAJOR == 2 && TORCH_VERSION_MINOR == 1 && TORCH_VERSION_PATCH > 0))
+#endif
 
 namespace bytedance {
 namespace flux {
@@ -35,6 +44,7 @@ namespace ths_op {
 DataTypeEnum from_torch_dtype(at::ScalarType torch_dtype);
 at::ScalarType to_torch_dtype(DataTypeEnum dtype);
 bool is_s8_torch_dtype(at::ScalarType torch_dtype);
+bool is_fp8_torch_dtype(at::ScalarType torch_dtype);
 // used by MoE
 torch::Tensor setup_shared_memory(
     int64_t rank, int64_t world_size, torch::Tensor local_data, std::vector<void *> *host_ptrs);

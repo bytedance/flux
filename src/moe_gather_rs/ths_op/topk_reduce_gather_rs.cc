@@ -15,14 +15,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <c10/cuda/CUDAStream.h>
-#include <torch/all.h>
-#include <cuda_runtime_api.h>
-#include <cstdlib>
-#include <cuda_bf16.h>
-#include "flux/ths_op/ths_op.h"
-#include "flux/args/moe_gather_rs.h"
 #include "moe_gather_rs/ths_op/topk_reduce_gather_rs.h"
+
+#include <c10/cuda/CUDAStream.h>
+#include <cuda_bf16.h>
+#include <cuda_runtime_api.h>
+#include <torch/all.h>
+
+#include <cstdlib>
+
+#include "flux/args/moe_gather_rs.h"
+#include "flux/ths_op/ths_op.h"
 #include "moe_gather_rs/topk_gather_rs.hpp"
 namespace bytedance::flux::ths_op {
 using torch::Tensor;

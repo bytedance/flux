@@ -15,11 +15,12 @@
 // limitations under the License.
 //
 //===----------------------------------------------------------------------===//
-#include "workspace_helper.h"
-#include "flux/cuda/cuda_common.h"
-#include "flux/cuda/reduce_utils.cuh"
 #include <cutlass/gemm_coord.h>
 #include <cutlass/layout/matrix.h>
+
+#include "flux/cuda/cuda_common.h"
+#include "flux/cuda/reduce_utils.cuh"
+#include "workspace_helper.h"
 namespace bytedance::flux {
 
 __device__ __forceinline__ void *

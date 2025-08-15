@@ -178,7 +178,6 @@ def perf_flux(
     return perf_gemm(iters, warmup_iters, f"flux #{TP_GROUP.rank()}", fn)
 
 
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("-M", type=int, default=32768)
@@ -406,7 +405,6 @@ if __name__ == "__main__":
             raise e
         else:
             print("✅ flux and torch matches")
-
 
     torch_output = perf_result_torch.output
     flux_output = perf_result_flux.output

@@ -373,7 +373,7 @@ class AllGatherGemmOp::AllGatherGemmOpImpl {
       c10::optional<torch::Tensor> gathered_input,
       c10::intrusive_ptr<ProfilingContext> opt_ctx) {
     at::ScalarType input_dtype = input.scalar_type();
-    bool is_fp8_gemm = c10::isFloat8Type(input_dtype);
+    bool is_fp8_gemm = is_fp8_torch_dtype(input_dtype);
     bool is_s8_gemm = is_s8_torch_dtype(input_dtype);
     at::ScalarType output_dtype =
         is_fp8_gemm || is_s8_gemm ? at::ScalarType::BFloat16 : input_dtype;

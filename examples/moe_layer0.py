@@ -311,9 +311,7 @@ if __name__ == "__main__":
         do_prof=args.profile,
         group=TP_GROUP,
     ):
-        perf_result_flux = perf_flux(
-            moe_ctx, args.warmup_iters, args.iters, args.gather_input
-        )
+        perf_result_flux = perf_flux(moe_ctx, args.warmup_iters, args.iters, args.gather_input)
         perf_result_torch = perf_torch(moe_ctx, args.warmup_iters, args.iters, args.gather_input)
 
     if TP_GROUP.rank() == 0:

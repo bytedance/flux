@@ -88,6 +88,9 @@ add_executable(
 target_link_libraries(test_topo_utils PUBLIC ${TORCH_LIBRARIES} flux_cuda flux_cuda_ths_op)
 target_include_directories(test_topo_utils PUBLIC ${TORCH_INCLUDE_DIRS})
 
+add_executable(inplace_cast inplace_cast.cu)
+target_compile_options(inplace_cast PUBLIC -g) # -DFLUX_DEBUG=1)
+
 set_property(
-  TARGET copy_d2h_perf copy_d2d_perf test_globaltimer test_pingpong_latency
+  TARGET copy_d2h_perf copy_d2d_perf test_globaltimer test_pingpong_latency inplace_cast
   PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

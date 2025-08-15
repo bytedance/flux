@@ -15,22 +15,23 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <cutlass/util/device_memory.h>
+#include <mpi.h>
+#include <nvshmem.h>
+#include <nvshmemx.h>
+
 #include <algorithm>
 #include <exception>
 #include <numeric>
 #include <random>
-#include "cute/int_tuple.hpp"
+
+#include "flux/args/moe_ag_scatter.h"
+#include "flux/cuda/cuda_common.h"
+#include "flux/cuda/cuda_stub.h"
 #include "flux/flux.h"
 #include "flux/gemm_meta.h"
 #include "flux/gemm_operator_base.h"
-#include "flux/cuda/cuda_common.h"
-#include "flux/cuda/cuda_stub.h"
 #include "flux/op_registry.h"
-#include "flux/args/moe_ag_scatter.h"
-#include "cutlass/util/device_memory.h"
-#include "nvshmem.h"
-#include "nvshmemx.h"
-#include <mpi.h>
 #include "moe_ag_scatter/sort_util.h"
 
 namespace bytedance::flux {
@@ -174,7 +175,8 @@ struct MoeMlp1Runner {
 
   void
   operator()(cudaStream_t stream = nullptr) {
-    auto meta = make_gemm_meta(dt_conf, get_arch(), _AGScatter{}, _RCR{}, _GemmGroupedV3{});
+    auto meta =
+        make_gemm_meta(dt_conf, get_arch(), get_sm_core(), _AGScatter{}, _RCR{}, _GemmGroupedV3{});
     auto rt_conf = make_runtime_config();
     OpRegistry::OpPtr op = OpRegistry::instance().get_op(meta, rt_conf);
 
@@ -232,10 +234,12 @@ struct MoeMlp1Runner {
             weights.get(), 1LL * problem_param.expert_id * N * K * sizeof_dtype(dt_conf.b())));
         ptr_C.emplace_back(nullptr);
         ptr_D.emplace_back(reinterpret_cast<uint8_t *>(outputs.get()));
-        ptr_gather_A.emplace_back(static_cast<int32_t const *>(ptr_offset(
-            dev_sorted_gather_index.get(), 1LL * sizeof(int32_t) * problem_param.m_start)));
-        ptr_scatter_D.emplace_back(static_cast<int32_t const *>(ptr_offset(
-            dev_sorted_scatter_index.get(), 1LL * sizeof(int32_t) * problem_param.m_start)));
+        ptr_gather_A.emplace_back(
+            static_cast<int32_t const *>(ptr_offset(
+                dev_sorted_gather_index.get(), 1LL * sizeof(int32_t) * problem_param.m_start)));
+        ptr_scatter_D.emplace_back(
+            static_cast<int32_t const *>(ptr_offset(
+                dev_sorted_scatter_index.get(), 1LL * sizeof(int32_t) * problem_param.m_start)));
         problem_schedules_arg.emplace_back(problem_param);
       }
     }

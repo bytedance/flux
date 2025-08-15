@@ -35,9 +35,9 @@ def moe_gather_rs_forward_torch(
     token_index: torch.Tensor,
     topk_index: torch.Tensor,
     topk: int,
-    input_scales: Union[torch.Tensor, List[torch.Tensor]] = None,
-    weight_scales: Union[torch.Tensor, List[torch.Tensor]] = None,
-    output_vec_scales: Union[torch.Tensor, List[torch.Tensor]] = None,
+    input_scales: Union[torch.Tensor, List[torch.Tensor]],
+    weight_scales: Union[torch.Tensor, List[torch.Tensor]],
+    output_vec_scales: Union[torch.Tensor, List[torch.Tensor]],
     do_all_reduce: bool = False,
     fast_acc: bool = False,
 ):
@@ -67,18 +67,16 @@ def moe_gather_rs_forward_torch(
         acc = 0
         output_list = []
 
-        gemm_only_op = flux.GemmOnly(
-            input.dtype, output_type, use_fp8_gemm=flux.util.get_arch() < 90 and is_fp8
-        )
+        gemm_only_op = flux.GemmOnly(input.dtype, input.dtype, output_type, use_fp8_gemm=is_fp8)
 
         for exp_id in range(weight.size(0)):
             exp_w = weight[exp_id]
             Mi = split_cpu[exp_id + eid_start]
             exp_input = input[acc : acc + Mi]
             if not is_s8:
-                scale_v = weight_scale[exp_id].item() * input_scale[0].item() if input_scale is not None else 1
+                scale_v = weight_scale[exp_id].item() * input_scale[0].item()
             else:
-                scale_v = weight_scale[exp_id, None, :] * input_scale[acc : acc + Mi, None] if input_scale is not None else 1
+                scale_v = weight_scale[exp_id, None, :] * input_scale[acc : acc + Mi, None]
             acc += Mi
             if is_fp8:
                 output_buf = torch.empty(Mi, N, dtype=torch.bfloat16).to(input.device)
@@ -93,9 +91,8 @@ def moe_gather_rs_forward_torch(
         output = torch.concat(output_list)
         # print(output.size())
         # print(output_vec_scale.size())
-        # assert output.size(0) == output_vec_scale.size(0)
-        output = (output * output_vec_scale.unsqueeze(1)).to(output_type) if output_vec_scale is not None else output
-
+        assert output.size(0) == output_vec_scale.size(0)
+        output = (output * output_vec_scale.unsqueeze(1)).to(output_type)
         new_index = (
             topk * token_index[ep_rank_m_start:ep_rank_m_end]
             + topk_index[ep_rank_m_start:ep_rank_m_end]

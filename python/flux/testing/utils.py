@@ -23,7 +23,6 @@ from typing import Callable, List, Tuple, Union, Sequence
 import numpy as np
 import torch
 import torch.distributed
-
 import flux
 
 _TP_LOCAL_GROUP = None
@@ -36,6 +35,7 @@ DTYPE_MAP = {
     "float8_e5m2": torch.float8_e5m2,
     "s8": torch.int8,
     "s32": torch.int32,
+    "float32": torch.float32,
 }
 
 RING_MODE_MAP = {
@@ -257,6 +257,38 @@ def bitwise_eq(x: torch.Tensor, y: torch.Tensor):
     return torch.equal(x.view(torch.int8), y.view(torch.int8))
 
 
+def split_torch_process_group(
+    pg: torch.distributed.ProcessGroup, num_groups: int
+) -> torch.distributed.ProcessGroup:
+    size = pg.size()
+    rank = pg.rank()
+    group_size = size // num_groups
+    group_id = rank // group_size
+    if size % group_size != 0:
+        raise ValueError(f"Process group size {size} is not divisible by group size {group_size}.")
+    # Create list of ranks per group
+    for n in range(num_groups):
+        subgroup_ranks = [i + n * group_size for i in range(group_size)]
+        # Create new NCCL group
+        print("subgroup_ranks", subgroup_ranks)
+        subgroup_ = torch.distributed.new_group(ranks=subgroup_ranks, backend="nccl")
+        if n == group_id:
+            subgroup = subgroup_
+    return subgroup
+
+
+def nvshmem_split_team_2d(group_size):
+    NVSHMEM_GLOBAL_TEAM_WORLD = 0
+    nvshmem_config = flux._nvshmem_team_get_config(NVSHMEM_GLOBAL_TEAM_WORLD)
+    ep_team, pp_team = flux._nvshmem_team_split_2d(
+        NVSHMEM_GLOBAL_TEAM_WORLD, group_size, nvshmem_config, 0, nvshmem_config, 0
+    )
+    # take rank-0 in the nvshmem global world whose size is 128 as an example, ep_size = 16
+    # then, ep_team looks like [0, 1, 2, 3, ..., 15]
+    # pp_team looks like[0, 16, 32, ... , 112]
+    return ep_team, pp_team
+
+
 __all__ = [
     "DTYPE_MAP",
     "RING_MODE_MAP",
@@ -278,4 +310,6 @@ __all__ = [
     "matmul_int8",
     "bitwise_eq",
     "clone_with_fp8",
+    "split_torch_process_group",
+    "nvshmem_split_team_2d",
 ]
