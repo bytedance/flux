@@ -139,6 +139,7 @@ public:
     typename detail::TileSchedulerSelector<
       TileSchedulerTag_, ArchTag,
       TileShape, ClusterShape,
+      2, // Default unused parameter - SchedulerPipelineStageCoun
       ProblemShape>::Scheduler,
     typename detail::TileSchedulerSelector<
     TileSchedulerTag_, ArchTag, TileShape, ClusterShape>::Scheduler>;

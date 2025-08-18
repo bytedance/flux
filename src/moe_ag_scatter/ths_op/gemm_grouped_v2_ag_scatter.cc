@@ -116,8 +116,8 @@ prepare_moe_ag_scatter_args(
       topk,
       ep_start,
       ep_start + ep_nexperts,
-      splits_gpu.const_data_ptr<int32_t>(),
-      scatter_index.const_data_ptr<int32_t>(),
+      splits_gpu.data_ptr<int32_t>(),
+      scatter_index.data_ptr<int32_t>(),
       gather_index.data_ptr<int32_t>(),
       M_this_ep_holder.data_ptr<int>(),
       stream);
@@ -127,8 +127,8 @@ prepare_moe_ag_scatter_args(
       world_size,
       ntokens,
       ep_nexperts,
-      splits_gpu.const_data_ptr<int32_t>() + ep_start,
-      gather_index.const_data_ptr<int32_t>(),
+      splits_gpu.data_ptr<int32_t>() + ep_start,
+      gather_index.data_ptr<int32_t>(),
       sorted_splits.data_ptr<int32_t>(),
       sorted_splits_cumsum.data_ptr<int32_t>(),
       sorted_scatter_index.data_ptr<int32_t>(),
@@ -139,7 +139,7 @@ prepare_moe_ag_scatter_args(
   int M_this_ep = scatter_index.numel();  // for EP=1, M_this_ep is always M_full
   if (ep_nexperts != nexperts) {
     CUDA_CHECK(cudaStreamSynchronize((cudaStream_t)stream));
-    M_this_ep = *M_this_ep_holder.const_data_ptr<int32_t>();
+    M_this_ep = *M_this_ep_holder.data_ptr<int32_t>();
   }
 
   int max_problem_schedule_size = world_size * ep_nexperts * num_weights_group;
@@ -312,13 +312,14 @@ class GemmGroupedV2AGScatterOp::GemmGroupedV2AGScatterOpImpl {
   auto
   get_gemm_meta(bool fast_accum) const {
     auto arch = get_arch();
+    auto sm_core = get_sm_core();
     auto gemm_layout = _RCR{};  // TODO(houqi.1993) only RCR supported
     auto input_dtype = from_torch_dtype(this->input_dtype);
     auto output_dtype = from_torch_dtype(this->output_dtype);
     auto dt_conf = make_gemm_dtype_config(input_dtype, input_dtype, output_dtype, output_dtype);
     auto v2_meta = make_gemm_v2_meta(fast_accum && dt_conf.is_input_fp8());
-    auto meta =
-        make_gemm_meta(dt_conf, arch, _AGScatter{}, gemm_layout, _GemmGroupedV2{}, v2_meta);
+    auto meta = make_gemm_meta(
+        dt_conf, arch, sm_core, _AGScatter{}, gemm_layout, _GemmGroupedV2{}, v2_meta);
     return meta;
   }
 
@@ -343,10 +344,12 @@ class GemmGroupedV2AGScatterOp::GemmGroupedV2AGScatterOpImpl {
       const AllGatherOption &opt,
       c10::optional<UnifiedGemmHParams> const &hparams) {
     FLUX_CHECK(
-        inputs_shard.scalar_type() == at::ScalarType::BFloat16 ||
-        inputs_shard.scalar_type() == at::ScalarType::Half ||
+#if TORCH_SUPPORT_FP8
+        inputs_shard.scalar_type() == at::ScalarType::Float8_e5m2 ||
         inputs_shard.scalar_type() == at::ScalarType::Float8_e4m3fn ||
-        inputs_shard.scalar_type() == at::ScalarType::Float8_e5m2)
+#endif
+        inputs_shard.scalar_type() == at::ScalarType::BFloat16 ||
+        inputs_shard.scalar_type() == at::ScalarType::Half)
         << inputs_shard.scalar_type();
     // Step 0. do some shape checks
     int const N = this->N;
@@ -434,8 +437,8 @@ class GemmGroupedV2AGScatterOp::GemmGroupedV2AGScatterOpImpl {
         topk,
         ep_start,
         ep_start + ep_nexperts,
-        splits_gpu.const_data_ptr<int32_t>(),
-        scatter_index.const_data_ptr<int32_t>(),
+        splits_gpu.data_ptr<int32_t>(),
+        scatter_index.data_ptr<int32_t>(),
         gather_index.data_ptr<int32_t>(),
         M_this_ep_holder.data_ptr<int>(),
         stream);
@@ -445,8 +448,8 @@ class GemmGroupedV2AGScatterOp::GemmGroupedV2AGScatterOpImpl {
         world_size,
         ntokens,
         ep_nexperts,
-        splits_gpu.const_data_ptr<int32_t>() + ep_start,
-        gather_index.const_data_ptr<int32_t>(),
+        splits_gpu.data_ptr<int32_t>() + ep_start,
+        gather_index.data_ptr<int32_t>(),
         sorted_splits.data_ptr<int32_t>(),
         sorted_splits_cumsum.data_ptr<int32_t>(),
         sorted_scatter_index.data_ptr<int32_t>(),
@@ -464,7 +467,7 @@ class GemmGroupedV2AGScatterOp::GemmGroupedV2AGScatterOpImpl {
     int M_this_ep = scatter_index.numel();  // for EP=1, M_this_ep is always M_full
     if (ep_nexperts != nexperts) {
       CUDA_CHECK(cudaStreamSynchronize((cudaStream_t)stream));
-      M_this_ep = *M_this_ep_holder.const_data_ptr<int32_t>();
+      M_this_ep = *M_this_ep_holder.data_ptr<int32_t>();
     }
 
     int num_problem_schedules = ep_nexperts * world_size * num_weights_group;
@@ -534,7 +537,7 @@ class GemmGroupedV2AGScatterOp::GemmGroupedV2AGScatterOpImpl {
       CHECK_2D(allgather_output.value(), ntokens, K);
       CUDA_CHECK(cudaMemcpyAsync(
           allgather_output->data_ptr(),
-          input_buffer.const_data_ptr(),
+          input_buffer.data_ptr(),
           allgather_output->nbytes(),
           cudaMemcpyDeviceToDevice,
           stream));
@@ -612,7 +615,7 @@ class GemmGroupedV2AGScatterOp::GemmGroupedV2AGScatterOpImpl {
       const AllGatherOption &opt) {
 #if defined(FLUX_WITH_TRITON_AOT)
     FLUX_CHECK(weights.size() == 1);
-    bool is_fp8_gemm = c10::isFloat8Type(inputs_shard.scalar_type());
+    bool is_fp8_gemm = is_fp8_torch_dtype(inputs_shard.scalar_type());
     bool is_s8_gemm = is_s8_torch_dtype(inputs_shard.scalar_type());
     FLUX_CHECK(!is_fp8_gemm) << "not support INT8 MOE AG+Scatter yet";
     // Step 0. do some shape checks
@@ -792,7 +795,7 @@ class GemmGroupedV2AGScatterOp::GemmGroupedV2AGScatterOpImpl {
       CHECK_2D(allgather_output.value(), ntokens, K);
       CUDA_CHECK(cudaMemcpyAsync(
           allgather_output->data_ptr(),
-          input_buffer.const_data_ptr(),
+          input_buffer.data_ptr(),
           allgather_output->nbytes(),
           cudaMemcpyDeviceToDevice,
           stream));

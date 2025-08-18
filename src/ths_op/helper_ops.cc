@@ -15,9 +15,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "c10/cuda/CUDAStream.h"
-#include "flux/ths_op/ths_op.h"
+#include <c10/cuda/CUDAStream.h>
+
 #include "flux/cuda/helper_kernels.h"
+#include "flux/ths_op/ths_op.h"
 
 namespace bytedance::flux::ths_op {
 using torch::Tensor;

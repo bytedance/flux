@@ -15,39 +15,53 @@
 //
 //===----------------------------------------------------------------------===//
 #include "moe_gather_rs/ths_op/gemm_grouped_v3_gather_rs.h"
-#include "flux/cuda/cuda_common.h"
-#include "flux/cuda/cuda_stub.h"
-#include "flux/gemm_meta.h"
-#include "flux/op_registry.h"
-#include "flux/ths_op/ths_op.h"
-#include "flux/cuda/cuda_common.h"
-#include "flux/flux.h"
-#include "flux/ths_op/util.h"
-#include "flux/args/moe_gather_rs.h"
-#include "torch/all.h"
-#include "cutlass/gemm/gemm.h"
+
 #include <ATen/core/List.h>
+#include <ATen/core/jit_type.h>
+#include <ATen/cuda/CUDAEvent.h>
 #include <ATen/ops/empty.h>
 #include <c10/core/ScalarType.h>
+#include <c10/cuda/CUDAStream.h>
 #include <c10/util/intrusive_ptr.h>
 #include <cuda_runtime_api.h>
-#include <ATen/core/jit_type.h>
-#include <c10/cuda/CUDAStream.h>
-#include <ATen/cuda/CUDAEvent.h>
-#include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
-#include <cstdlib>
-#include <mutex>
-#include <iostream>
-#include <vector>
-#include "cutlass/util/packed_stride.hpp"
-#include "moe_gather_rs/ths_op/topk_reduce_gather_rs.h"
+#include <cutlass/gemm/gemm.h>
 #include <nvshmem.h>
 #include <nvshmemx.h>
+#include <torch/all.h>
+
+#include <cstdlib>
+#include <cutlass/util/packed_stride.hpp>
+#include <iostream>
+#include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
+#include <vector>
+
+#include "flux/args/moe_gather_rs.h"
+#include "flux/cuda/cuda_common.h"
+#include "flux/flux.h"
+#include "flux/gemm_meta.h"
+#include "flux/op_registry.h"
+#include "flux/ths_op/flux_shm.h"
+#include "flux/ths_op/ths_op.h"
+#include "flux/ths_op/util.h"
 #include "moe_gather_rs/moe_utils.h"
 
 namespace bytedance {
 namespace flux {
 namespace ths_op {
+
+namespace {
+at::ScalarType
+_to_output_dtype(at::ScalarType input_dtype) {
+  auto output_type = input_dtype;
+#if TORCH_SUPPORT_FP8
+  if (input_dtype == at::ScalarType::Float8_e5m2 || input_dtype == at::ScalarType::Float8_e4m3fn) {
+    // hard code: fp8 gemm will use bf16 to save the outputs
+    output_type = at::ScalarType::BFloat16;
+  }
+#endif
+  return output_type;
+}
+}  // namespace
 
 using torch::Tensor;
 
@@ -69,7 +83,9 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
  private:
   int SPLITS;
   at::ScalarType _st;
-  torch::Tensor splits_gpu;
+  torch::Tensor splits_cum_sum_gpu;
+  torch::Tensor ep_n_token_cum_sum_gpu;  // only used when ep_in_dp is enabled
+  torch::Tensor reduce_token_idx;
   int32_t num_experts;
   const int32_t total_num_experts;
   // Save for arguments used for the group gemm
@@ -97,6 +113,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
   // and will be reduced first before the following reduce-scatter operator.
   // This is mainly used in the backward operation of the Swiglu.
   int32_t max_m;
+  int32_t max_token_per_rank;
   int32_t max_input_groups;
   int32_t n_dim;
   int32_t topk;
@@ -112,8 +129,11 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
   cudaEvent_t gather_rs_start_event;
   std::vector<at::cuda::CUDAStream> gather_rs_stream;
   std::vector<int32_t> splits_cum_sum;
+  std::vector<int32_t> ep_n_token_cum_sum;
+
   bool buffer_initialized;
   bool drop_token;  // whether to enable the token drop feature
+  bool ep_in_dp;
 
   size_t
   args_offset_and_buffer_size(size_t problem_count, size_t input_groups) {
@@ -146,21 +166,24 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
   init_buffer(torch::Tensor weight, size_t buffer_size, int max_m, int n_dim) {
     std::vector<void *> output_scatter_ptrs(world_size, nullptr);
     int64_t bsize = static_cast<int64_t>(buffer_size);
-    auto output_type = weight.scalar_type();
-    if (weight.scalar_type() == at::ScalarType::Float8_e5m2 ||
-        weight.scalar_type() == at::ScalarType::Float8_e4m3fn) {
-      // hard code: fp8 gemm will use bf16 to save the outputs
-      output_type = at::ScalarType::BFloat16;
-    }
+    auto output_type = _to_output_dtype(weight.scalar_type());
     CHECK(!this->host_buffer.defined());
     this->host_buffer = torch::empty(
         {bsize}, weight.options().dtype(at::ScalarType::Byte).device(torch::DeviceType::CPU));
 
     CHECK(!this->device_buffer.defined());
     this->device_buffer = torch::empty({bsize}, weight.options().dtype(at::ScalarType::Byte));
-    CHECK(!this->splits_gpu.defined());
-    this->splits_gpu =
-        torch::empty({this->num_experts + 1}, weight.options().dtype(at::ScalarType::Int));
+    CHECK(!this->splits_cum_sum_gpu.defined());
+    this->splits_cum_sum_gpu =
+        torch::empty({this->total_num_experts + 1}, weight.options().dtype(at::ScalarType::Int));
+    CHECK(!this->reduce_token_idx.defined());
+    // the activated rank may be larger than topk when tp is enabled
+    this->reduce_token_idx = torch::empty(
+        {this->max_token_per_rank * (this->world_size + 1)},
+        weight.options().dtype(at::ScalarType::Int));
+    CHECK(!this->ep_n_token_cum_sum_gpu.defined());
+    this->ep_n_token_cum_sum_gpu =
+        torch::zeros({this->world_size + 1}, weight.options().dtype(at::ScalarType::Int));
     CHECK(!this->output_buffer.defined());
     int output_buffer_m = max_m / this->topk;
     /*
@@ -202,7 +225,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
     if (this->ep_world_size > 1) {
       CHECK(!this->ep_indexes.defined());
       this->ep_indexes = torch::zeros(
-          {(this->topk + 2) * (max_m / this->topk)}, weight.options().dtype(at::ScalarType::Int));
+          {(this->topk + 4) * (max_m / this->topk)}, weight.options().dtype(at::ScalarType::Int));
       CHECK(!this->ep_indexes_count.defined());
       this->ep_indexes_count = torch::zeros({1}, weight.options().dtype(at::ScalarType::Int));
     }
@@ -225,6 +248,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
       std::vector<torch::Tensor> weights,
       torch::Tensor splits_cpu,
       torch::Tensor routing_idx,
+      c10::optional<torch::Tensor> n_tokens_per_rank,
       c10::optional<std::vector<torch::Tensor>> input_scale,
       c10::optional<std::vector<torch::Tensor>> weight_scale,
       c10::optional<std::vector<torch::Tensor>> output_vec_scale,
@@ -259,16 +283,25 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
     std::vector<void *> interDs_ptr_vec(num_input_sets);
 
     // set the output type here accordlingly
-    auto output_type = weights[0].scalar_type();
-    if (weights[0].scalar_type() == at::ScalarType::Float8_e5m2 ||
-        weights[0].scalar_type() == at::ScalarType::Float8_e4m3fn) {
-      output_type = at::ScalarType::BFloat16;
-    }
+    auto output_type = _to_output_dtype(weights[0].scalar_type());
     auto element_size = c10::elementSize(inputs[0].scalar_type());
     auto output_element_size = c10::elementSize(output_type);
     for (int i = 0; i < this->total_num_experts; i++) {
       this->splits_cum_sum[i + 1] =
           this->splits_cum_sum[i] + reinterpret_cast<int32_t *>(splits_cpu.data_ptr())[i];
+    }
+    for (int i = 0; i < this->world_size; i++) {
+      if (this->ep_in_dp) {
+        // each rank may receive different number of tokens from the data loader
+        CHECK(n_tokens_per_rank.has_value());
+        torch::Tensor ep_n_tokens = n_tokens_per_rank.value();
+        this->ep_n_token_cum_sum[i + 1] =
+            this->ep_n_token_cum_sum[i] + reinterpret_cast<int32_t *>(ep_n_tokens.data_ptr())[i];
+      } else {
+        // all ranks has the same input sequence length(tp/sp is enabled @ attn)
+        int n_token_per_rank = globalM / this->topk / this->world_size;
+        this->ep_n_token_cum_sum[i + 1] = this->ep_n_token_cum_sum[i] + n_token_per_rank;
+      }
     }
     if (!this->drop_token) {
       CHECK(this->splits_cum_sum[this->total_num_experts] == routing_idx.size(0))
@@ -382,9 +415,15 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
         cudaMemcpyHostToDevice,
         stream));
     CUDA_CHECK(cudaMemcpyAsync(
-        splits_gpu.data_ptr(),
-        splits_cpu.data_ptr(),
-        sizeof(int32_t) * this->num_experts,
+        splits_cum_sum_gpu.data_ptr(),
+        this->splits_cum_sum.data(),
+        sizeof(int32_t) * (this->total_num_experts + 1),
+        cudaMemcpyHostToDevice,
+        stream));
+    CUDA_CHECK(cudaMemcpyAsync(
+        this->ep_n_token_cum_sum_gpu.data_ptr(),
+        this->ep_n_token_cum_sum.data(),
+        sizeof(int32_t) * (this->world_size + 1),
         cudaMemcpyHostToDevice,
         stream));
     uint8_t *device_buffer_ptr = reinterpret_cast<uint8_t *>(device_buffer.data_ptr());
@@ -421,22 +460,32 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
     int *pos_filtered = nullptr;
     int *token_idx_filtered = nullptr;  // length = (globalM/topk)
     int *total_token_acc = nullptr;
+    int *n_tokens_per_rank_ptr = nullptr;
     if (this->ep_world_size > 1) {
       // calculate the indexes that routed to current expert rank
+      if (n_tokens_per_rank.has_value())
+        n_tokens_per_rank_ptr = reinterpret_cast<int *>(n_tokens_per_rank.value().data_ptr());
       this->ep_indexes_count.zero_();
       int *index_start = reinterpret_cast<int32_t *>(this->ep_indexes.data_ptr());
-      pos_filtered = index_start + globalM / this->topk;  // length = (globalM/topk) * (topk+1)
+      pos_filtered = index_start + globalM / this->topk;  // length = (globalM/topk) * (topk+3)
       token_idx_filtered = index_start;                   // length = (globalM/topk)
       total_token_acc = reinterpret_cast<int32_t *>(this->ep_indexes_count.data_ptr());
+      CHECK(this->reduce_token_idx.defined());
       ep_index_filter_impl(
           reinterpret_cast<int32_t *>(routing_idx.data_ptr()),
           pos_filtered,
           token_idx_filtered,
           total_token_acc,
-          globalM,
+          reinterpret_cast<int32_t *>(this->ep_n_token_cum_sum_gpu.data_ptr()),
+          reinterpret_cast<int32_t *>(this->splits_cum_sum_gpu.data_ptr()),
+          reinterpret_cast<int32_t *>(this->reduce_token_idx.data_ptr()),
+          this->max_token_per_rank,
           this->topk,
-          ep_offset_start,
-          ep_offset_end,
+          this->total_num_experts,
+          this->world_size,
+          this->ep_world_size,
+          this->tp_world_size,
+          this->rank,
           stream);
     }
     if (with_stream_sync) {
@@ -472,6 +521,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
         this->tp_world_size,
         this->ep_world_size,
         globalM,
+        this->max_token_per_rank,
         ep_offset_start,
         ep_offset_end,
         input_scale_device,
@@ -485,6 +535,15 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
 
     return args;
   }
+  int
+  dispatch_split(int64_t n_dim) {
+    if (n_dim == 7168)
+      return 7;
+    else if (n_dim == 1152)
+      return 9;
+    else
+      return 8;
+  }
 
  public:
   GemmGroupedV3GatherRSOpImpl(
@@ -496,7 +555,8 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
       int64_t world_size,
       int64_t tp_world_size,
       int64_t ep_world_size,
-      int64_t max_input_groups)
+      int64_t max_input_groups,
+      bool ep_in_dp)
       : total_num_experts(total_num_experts),
         max_m(max_m),
         n_dim(n_dim),
@@ -506,26 +566,30 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
         buffer_initialized(false),
         tp_world_size(tp_world_size),
         ep_world_size(ep_world_size),
-        max_input_groups(max_input_groups) {
+        max_input_groups(max_input_groups),
+        ep_in_dp(ep_in_dp) {
     CHECK(this->tp_world_size * this->ep_world_size == this->world_size)
         << "Tp world size x Ep world size != World size";
     CHECK(this->total_num_experts % this->ep_world_size == 0)
         << "The number of experts is not divisible by the EP world size";
-    // TODO(ZSL): the SPLITS should be tuned.
-    this->SPLITS = 8;
+    this->SPLITS = this->dispatch_split(n_dim);
     this->num_experts = this->total_num_experts / this->ep_world_size;
     this->gather_rs_stream.push_back(at::cuda::getStreamFromPool());
     this->splits_cum_sum.resize(total_num_experts + 1, 0);
-    this->splits_cum_sum[0] = 0;
+    this->ep_n_token_cum_sum.resize(this->world_size + 1, 0);
+    FLUX_CHECK(this->max_m % (this->topk * this->world_size) == 0);
+    this->max_token_per_rank = this->max_m / (this->topk * this->world_size);
     CUDA_CHECK(cudaEventCreateWithFlags(&this->ready_event, cudaEventDisableTiming));
     CUDA_CHECK(cudaEventCreateWithFlags(&this->gather_rs_start_event, cudaEventDisableTiming));
   }
 
   void
   ep_zero_buffer() {
-    assert(this->ep_world_size > 1);
-    if (this->output_buffer.defined())
-      this->output_buffer.zero_();
+    FLUX_CHECK(this->ep_world_size > 1);
+    // do nothing here, only keep this interface for upward compatible
+    return;
+    // if (this->output_buffer.defined())
+    //   this->output_buffer.zero_();
   }
 
   torch::Tensor
@@ -534,6 +598,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
       std::vector<torch::Tensor> weights,
       torch::Tensor splits_cpu,
       torch::Tensor routing_idx,
+      c10::optional<torch::Tensor> n_tokens_per_rank,
       c10::optional<std::vector<torch::Tensor>> input_scale,
       c10::optional<std::vector<torch::Tensor>> weight_scale,
       c10::optional<std::vector<torch::Tensor>> output_vec_scale,
@@ -551,6 +616,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
     */
     CHECK(inputs.size() == weights.size());
     CHECK(inputs.size() <= this->max_input_groups);
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
     if (!this->buffer_initialized) {
       this->_st = weights[0].scalar_type();
       size_t args_buffer_size = args_offset_and_buffer_size(
@@ -561,6 +627,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
           this->max_m,
           this->n_dim);  // allocate host and device buffers
       this->buffer_initialized = true;
+      nvshmemx_barrier_all_on_stream(stream);
     }
     int globalM = routing_idx.size(0);
     int M = inputs[0].size(0);
@@ -581,11 +648,21 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
     if (this->ep_world_size == 1) {
       CHECK(M == globalM);
     }
-    CHECK(globalM % this->world_size == 0);
+    if (!this->ep_in_dp) {
+      // if not enable ep in dp, then tp/sp was enabled for attn, which means
+      // the number of input tokens should be the same
+      CHECK(globalM % this->world_size == 0);
+    } else {
+      // if enable ep in dp, then each rank is a individual dp, and may receive
+      // difference number for tokens as input
+      CHECK(this->ep_world_size == this->world_size);
+      CHECK(n_tokens_per_rank.has_value())
+          << "ep in dp is enabled, n_tokens_per_rank cannot be None\n";
+    }
     CHECK(globalM % this->topk == 0);
-    CHECK(globalM <= this->max_m) << "routing_idx.size(0) " << globalM << " larger than max_m "
+    CHECK(globalM <= this->max_m) << "routing_idx.size(0) " << globalM << " larger than max_m"
                                   << this->max_m
-                                  << "; please set max_m appropriately in the constructor.\n";
+                                  << ", Please set env JANUS_FLUX_M_MAX appropriately\n";
     CHECK(M <= globalM) << "input.size(0) " << M << " larger than routing_idx.size(0)\n";
     CHECK(N == this->n_dim) << "weight.size(1) != n_dim";
     this->drop_token = splits_cpu.size(0) == this->total_num_experts + 1;
@@ -597,26 +674,29 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
     }
     CHECK(N >= 8) << "N must be greater than or equal 8 for cutlass grouped gemm.";
     CHECK(K >= 8) << "K must be greater than or equal 8 for cutlass grouped gemm.";
-    cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
-    if (this->ep_world_size > 1) {
-      if (with_zero_buffer) {
-        this->ep_zero_buffer();
-      }
-      nvshmemx_barrier_all_on_stream(stream);
-    }
+    // no need to perform the zero buffer any more with the new customized reduce kernel
+    // if (this->ep_world_size > 1) {
+    //   if (with_zero_buffer) {
+    //     this->ep_zero_buffer();
+    //   }
+    //   nvshmemx_barrier_all_on_stream(stream);
+    // }
+    // even there is no token assigned to this ep rank, we also
+    // need prepare the ep_cum_sum.. etc,
+    GemmGroupedV3GatherRSArguments args = prepare_args(
+        inputs,
+        weights,
+        splits_cpu,
+        routing_idx,
+        n_tokens_per_rank,
+        input_scale,
+        weight_scale,
+        output_vec_scale,
+        sm_margin,
+        with_stream_sync);
     if (M > 0) {
-      GemmGroupedV3GatherRSArguments args = prepare_args(
-          inputs,
-          weights,
-          splits_cpu,
-          routing_idx,
-          input_scale,
-          weight_scale,
-          output_vec_scale,
-          sm_margin,
-          with_stream_sync);
       ArchEnum arch = get_arch();
-
+      SMCoreEnum sm_core = get_sm_core();
       auto dtype = from_torch_dtype(this->_st);
       DataTypeEnum output_type = dtype;
       int gather_rs_ctas = 28;  // can be tuned in the future
@@ -631,19 +711,27 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
       auto impl_spec = make_gemm_v3_meta(fast_accum and dt_conf.is_input_fp8());
       auto comm_spec = make_gather_rs_meta(this->topk);
       auto meta = make_gemm_meta(
-          dt_conf, arch, _GatherRS{}, _RCC{}, _GemmGroupedV3{}(), impl_spec, comm_spec);
+          dt_conf, arch, sm_core, _GatherRS{}, _RCC{}, _GemmGroupedV3{}(), impl_spec, comm_spec);
       auto rt_conf = make_runtime_config(N, cute::ceil_div(globalM, this->num_experts), K);
 
       auto hparams_filter = [&](UnifiedGemmHParams const &hparams) {
-        auto comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams.comm_spec());
-        return comm_params.n_dim() == N;
+        auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
+        if (dt_conf.is_input_fp8()) {
+          auto comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams.comm_spec());
+          bool flag = comm_params.gather_rs_ctas() == gather_rs_ctas &&
+                      comm_params.n_dim_per_split() == N / SPLITS;
+          return flag;
+        } else {
+          // bf16 filter based on the gather_rs_ctas && topk
+          auto comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams.comm_spec());
+          return comm_params.gather_rs_ctas() == gather_rs_ctas &&
+                 comm_params.n_dim_per_split() == N / SPLITS;
+        }
       };
 
       OpRegistry::OpPtr gemm_op;
       if (hparams.has_value()) {
         gemm_op = OpRegistry::instance().get_op(meta, hparams.value());
-        auto& comm_params = std::get<unified_type_t<GatherRSHParams>>(hparams->comm_spec());
-        gather_rs_ctas = comm_params.gather_rs_ctas();
       } else {
         gemm_op = OpRegistry::instance().get_op(meta, rt_conf, hparams_filter);
       }
@@ -710,14 +798,24 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
           .view({this->world_size, M / this->world_size / this->topk, N})
           .sum(torch::IntArrayRef({0}));
     } else {
-      // expert parallel size is not 1
-      // the reduction between different experts are performed
-      // by global_red, therefore no need to perform the reduction
-      // any more, in constrast, it will also introduce a zero_ operation
-      // into the critical path.
-      return this->output_buffer.slice(0, 0, globalM / this->topk)
-          .view({this->world_size, globalM / this->world_size / this->topk, N})
-          .sum(torch::IntArrayRef({0}));
+      // perform the customized reduce kernel here
+      int m_token_cur_rank =
+          this->ep_n_token_cum_sum[this->rank + 1] - this->ep_n_token_cum_sum[this->rank];
+      auto output_type = _to_output_dtype(inputs[0].scalar_type());
+      torch::Tensor result =
+          torch::empty({m_token_cur_rank, N}, inputs[0].options().dtype(output_type));
+      ep_topk_reduce_impl(
+          this->output_buffer.data_ptr(),
+          result.data_ptr(),
+          reinterpret_cast<int32_t *>(this->reduce_token_idx.data_ptr()),
+          m_token_cur_rank,
+          N,
+          this->world_size,
+          stream);
+      return result;
+      // return this->output_buffer.slice(0, 0, globalM / this->topk)
+      //     .view({this->world_size, globalM / this->world_size / this->topk, N})
+      //     .sum(torch::IntArrayRef({0}));
     }
   }
 
@@ -727,6 +825,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
       torch::Tensor weight,
       torch::Tensor splits_cpu,
       torch::Tensor routing_idx,
+      c10::optional<torch::Tensor> n_tokens_per_rank,
       c10::optional<torch::Tensor> input_scale,
       c10::optional<torch::Tensor> weight_scale,
       c10::optional<torch::Tensor> output_vec_scale,
@@ -750,6 +849,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
         {weight},
         std::move(splits_cpu),
         std::move(routing_idx),
+        std::move(n_tokens_per_rank),
         std::move(input_scale_wrap),
         std::move(weight_scale_wrap),
         std::move(output_vec_scale_wrap),
@@ -766,6 +866,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
       torch::Tensor weight,
       torch::Tensor splits_cpu,
       torch::Tensor routing_idx,
+      c10::optional<torch::Tensor> n_tokens_per_rank,
       c10::optional<torch::Tensor> input_scale,
       c10::optional<torch::Tensor> weight_scale,
       c10::optional<torch::Tensor> output_vec_scale,
@@ -789,6 +890,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
         {weight},
         std::move(splits_cpu),
         std::move(routing_idx),
+        std::move(n_tokens_per_rank),
         std::move(input_scale_wrap),
         std::move(weight_scale_wrap),
         std::move(output_vec_scale_wrap),
@@ -804,6 +906,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
       torch::Tensor weight,
       torch::Tensor splits_cpu,
       torch::Tensor routing_idx,
+      c10::optional<torch::Tensor> n_tokens_per_rank,
       c10::optional<torch::Tensor> input_scale,
       c10::optional<torch::Tensor> weight_scale,
       c10::optional<torch::Tensor> output_vec_scale,
@@ -829,6 +932,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
     int E = weight.size(0);
     int N = weight.size(1);
     ArchEnum arch = get_arch();
+    SMCoreEnum sm_core = get_sm_core();
     auto weight_dtype = weight.scalar_type();
     auto dtype = from_torch_dtype(weight_dtype);
     DataTypeEnum output_type = dtype;
@@ -842,7 +946,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
     auto impl_spec = make_gemm_v3_meta(fast_accum and dt_conf.is_input_fp8());
     auto comm_spec = make_gather_rs_meta(this->topk);
     auto meta = unify_type(make_gemm_meta(
-        dt_conf, arch, _GatherRS{}, _RCC{}, _GemmGroupedV3{}(), impl_spec, comm_spec));
+        dt_conf, arch, sm_core, _GatherRS{}, _RCC{}, _GemmGroupedV3{}(), impl_spec, comm_spec));
     auto rt_conf = make_runtime_config(N, cute::ceil_div(globalM, this->num_experts), K);
     ProfilingContext tmp_ctx("__tmp__");
     ProfilingContext *ctx = opt_ctx == nullptr ? &tmp_ctx : opt_ctx.get();
@@ -854,7 +958,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
           float total_elapsed = 0;
           auto cp_hparams = hparams;
           auto comm_params = std::get<unified_type_t<GatherRSHParams>>(cp_hparams.comm_spec());
-          if (comm_params.n_dim() != N) {
+          if (comm_params.n_dim_per_split() != N / SPLITS) {
             return;
           }
           auto stream = c10::cuda::getCurrentCUDAStream();
@@ -866,6 +970,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
                 {weight},
                 splits_cpu,
                 routing_idx,
+                n_tokens_per_rank,
                 input_scale_wrap,
                 weight_scale_wrap,
                 output_vec_scale_wrap,
@@ -892,6 +997,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
         {weight},
         splits_cpu,
         routing_idx,
+        n_tokens_per_rank,
         input_scale_wrap,
         weight_scale_wrap,
         output_vec_scale_wrap,
@@ -908,6 +1014,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
       std::vector<torch::Tensor> weights,
       torch::Tensor splits_cpu,
       torch::Tensor routing_idx,
+      c10::optional<torch::Tensor> n_tokens_per_rank,
       c10::optional<std::vector<torch::Tensor>> input_scale,
       c10::optional<std::vector<torch::Tensor>> weight_scale,
       c10::optional<std::vector<torch::Tensor>> output_vec_scale,
@@ -921,6 +1028,7 @@ class GemmGroupedV3GatherRS::GemmGroupedV3GatherRSOpImpl {
         std::move(weights),
         std::move(splits_cpu),
         std::move(routing_idx),
+        std::move(n_tokens_per_rank),
         std::move(input_scale),
         std::move(weight_scale),
         std::move(output_vec_scale),
@@ -945,7 +1053,8 @@ GemmGroupedV3GatherRS::GemmGroupedV3GatherRS(
     int64_t world_size,
     int64_t tp_world_size,
     int64_t ep_world_size,
-    int64_t max_input_groups)
+    int64_t max_input_groups,
+    bool ep_in_dp)
     : impl_(new GemmGroupedV3GatherRSOpImpl(
           total_num_experts,
           max_m,
@@ -955,7 +1064,8 @@ GemmGroupedV3GatherRS::GemmGroupedV3GatherRS(
           world_size,
           tp_world_size,
           ep_world_size,
-          max_input_groups)) {}
+          max_input_groups,
+          ep_in_dp)) {}
 GemmGroupedV3GatherRS::~GemmGroupedV3GatherRS() { delete impl_; }
 torch::Tensor
 GemmGroupedV3GatherRS::forward_gather_rs(
@@ -963,6 +1073,7 @@ GemmGroupedV3GatherRS::forward_gather_rs(
     torch::Tensor weight,
     torch::Tensor splits_cpu,
     torch::Tensor routing_idx,
+    c10::optional<torch::Tensor> n_tokens_per_rank,
     c10::optional<torch::Tensor> input_scale,
     c10::optional<torch::Tensor> weight_scale,
     c10::optional<torch::Tensor> output_vec_scale,
@@ -975,6 +1086,7 @@ GemmGroupedV3GatherRS::forward_gather_rs(
       weight,
       splits_cpu,
       routing_idx,
+      n_tokens_per_rank,
       input_scale,
       weight_scale,
       output_vec_scale,
@@ -988,6 +1100,7 @@ GemmGroupedV3GatherRS::forward_gather_rs_no_zerobuffer(
     torch::Tensor weight,
     torch::Tensor splits_cpu,
     torch::Tensor routing_idx,
+    c10::optional<torch::Tensor> n_tokens_per_rank,
     c10::optional<torch::Tensor> input_scale,
     c10::optional<torch::Tensor> weight_scale,
     c10::optional<torch::Tensor> output_vec_scale,
@@ -995,11 +1108,15 @@ GemmGroupedV3GatherRS::forward_gather_rs_no_zerobuffer(
     int sm_margin,
     bool with_stream_sync) {
   FLUX_CHECK(impl_ != nullptr) << "GemmGroupedV3GatherRS is not initialized";
+  printf(
+      "forward_gather_rs_no_zerobuffer will be deprecated, please directly call the "
+      "forward_gather_rs instead. \n");
   return impl_->forward_gather_rs_no_zerobuffer(
       input,
       weight,
       splits_cpu,
       routing_idx,
+      n_tokens_per_rank,
       input_scale,
       weight_scale,
       output_vec_scale,
@@ -1010,6 +1127,7 @@ GemmGroupedV3GatherRS::forward_gather_rs_no_zerobuffer(
 void
 GemmGroupedV3GatherRS::ep_zero_buffer() {
   FLUX_CHECK(impl_ != nullptr) << "GemmGroupedV3GatherRS is not initialized";
+  printf("No Need to zero buffer before the forward_gather_rs calling.\n");
   return impl_->ep_zero_buffer();
 }
 
@@ -1019,6 +1137,7 @@ GemmGroupedV3GatherRS::forward_gather_rs_multiple(
     std::vector<torch::Tensor> weights,
     torch::Tensor splits_cpu,
     torch::Tensor routing_idx,
+    c10::optional<torch::Tensor> n_tokens_per_rank,
     c10::optional<std::vector<torch::Tensor>> input_scale,
     c10::optional<std::vector<torch::Tensor>> weight_scale,
     c10::optional<std::vector<torch::Tensor>> output_vec_scale,
@@ -1031,6 +1150,7 @@ GemmGroupedV3GatherRS::forward_gather_rs_multiple(
       weights,
       splits_cpu,
       routing_idx,
+      n_tokens_per_rank,
       input_scale,
       weight_scale,
       output_vec_scale,
@@ -1044,6 +1164,7 @@ GemmGroupedV3GatherRS::profiling(
     torch::Tensor weight,
     torch::Tensor splits_cpu,
     torch::Tensor routing_idx,
+    c10::optional<torch::Tensor> n_tokens_per_rank,
     c10::optional<torch::Tensor> input_scale,
     c10::optional<torch::Tensor> weight_scale,
     c10::optional<torch::Tensor> output_vec_scale,
@@ -1057,6 +1178,7 @@ GemmGroupedV3GatherRS::profiling(
       weight,
       splits_cpu,
       routing_idx,
+      n_tokens_per_rank,
       input_scale,
       weight_scale,
       output_vec_scale,

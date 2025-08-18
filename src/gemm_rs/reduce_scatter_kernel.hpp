@@ -24,6 +24,7 @@
 #include <ostream>
 #include <type_traits>
 #include <cuda_runtime_api.h>
+#include <cuda/atomic>
 #include <utility>
 #include "cutlass/detail/helper_macros.hpp"
 #ifdef FLUX_SHM_USE_NVSHMEM
@@ -49,13 +50,6 @@
 #include "gemm_rs/reduce_scatter_barrier_struct.hpp"
 #ifdef FLUX_REDUCE_SCATTER_WITH_NCCL
 #include <nccl.h>
-#endif
-
-#include <cuda.h>
-#if defined(CUDA_VERSION) && CUDA_VERSION >= 12080
-#include <cuda/atomic>
-#else
-#include <cuda/std/atomic>
 #endif
 
 #define NextRank(rank_) (((rank_) + 1) % kLocalWorldSize)

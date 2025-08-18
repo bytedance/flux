@@ -36,7 +36,7 @@
 #include "host/nvshmem_api.h"
 #include "host/nvshmemx_api.h"
 #include "moe_ag_scatter/sort_util.h"
-#include "nvshmem.h"
+#include <nvshmem.h>
 #include "flux/cuda/cuda_common.h"
 #include "flux/cuda/memory_utils.hpp"
 
@@ -74,10 +74,11 @@ struct Sm90AgScatterFetcher {
 
   Sm90AgScatterFetcher(
       DistEnv dist_env, ProblemSchedule const *problem_schedule, int *barrier_ptr = nullptr)
-      : params(Params{
-            .dist_env = dist_env,
-            .problem_schedule = problem_schedule,
-            .barrier_ptr = barrier_ptr}) {}
+      : params(
+            Params{
+                .dist_env = dist_env,
+                .problem_schedule = problem_schedule,
+                .barrier_ptr = barrier_ptr}) {}
 
   CUTLASS_DEVICE void
   operator()(int problem_idx, int thread_idx) const {
