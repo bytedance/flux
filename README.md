@@ -28,10 +28,6 @@
     <img src="https://img.shields.io/badge/Flux-Tech Report-red"></a>
   <a href="XXX">
     <img src="https://img.shields.io/badge/License-Apache-blue"></a>
-  <br>
-  <a href="https://github.com/user-attachments/assets/d3fcb3bf-466b-4efe-8c3f-5f85258202ae">
-    <img src="https://img.shields.io/badge/Flux-Wechat Communication Group-07C160"></a>
-
 </p>
 
 Flux is a communication-overlapping library for dense/MoE models on GPUs, providing high-performance and pluggable kernels to support various parallelisms in model training/inference.
@@ -43,7 +39,7 @@ Flux's efficient kernels are compatible with Pytorch and can be integrated into 
 
 
 ## Getting started
-Install Flux either from source or from PyPI.
+Install Flux from source.
 
 ### Install from Source
 ```bash
@@ -76,14 +72,6 @@ pip3 install torch==2.6.0 torchvision torchaudio --index-url https://download.py
 
 Then you would expect a wheel package under `dist/` folder that is suitable for your virtual environment.
 
-### Install from PyPI
-We also provide some pre-built wheels for Flux, and you can directly install with pip if your wanted version is available. Currently we provide wheels for the following configurations: torch(2.4.0, 2.5.0, 2.6.0), python(3.10, 3.11), cuda(12.4).
-
-```bash
-# Make sure that PyTorch is installed.
-pip install byte-flux
-```
-
 ### Customized Installation
 #### Build options for source installation
 
@@ -96,7 +84,7 @@ pip install byte-flux
 The core dependencies of Flux are NCCL, CUTLASS, and NVSHMEM, which are located under the 3rdparty folder.
 1. NCCL: Managed by git submodule automatically.
 2. NVSHMEM: Downloaded from https://developer.nvidia.com/nvshmem. The current version is 3.2.5-1.
-3. CUTLASS: Flux leverages CUTLASS to generate high-performance GEMM kernels. We currently use CUTLASS 3.7.0 and a tiny patch should be applied to CUTLASS.
+3. CUTLASS: Flux leverages CUTLASS to generate high-performance GEMM kernels. We currently use CUTLASS 3.7.0 and a tiny patch is applied to CUTLASS.
 
 
 ## Quick Start
