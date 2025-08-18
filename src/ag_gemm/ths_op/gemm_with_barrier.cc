@@ -15,16 +15,14 @@
 //
 //===----------------------------------------------------------------------===//
 #include "ag_gemm/ths_op/gemm_with_barrier.h"
-
-#include <c10/cuda/CUDAStream.h>
-
+#include "c10/cuda/CUDAStream.h"
 #include "coll/ths_op/all_gather_types.h"
 #include "flux/args/ag_gemm.h"
-#include "flux/cuda/cuda_stub.h"
 #include "flux/flux.h"
 #include "flux/gemm_meta.h"
 #include "flux/ths_op/ths_op.h"
 #include "flux/ths_op/util.h"
+#include "flux/cuda/cuda_stub.h"
 
 namespace bytedance::flux {
 
@@ -36,11 +34,9 @@ get_gemm_meta(
     bool has_bias,
     bool fast_accum) {
   ArchEnum arch = get_arch();
-  SMCoreEnum sm_core = get_sm_core();
   auto input_dtype = ths_op::from_torch_dtype(input_torch_dtype);
   auto output_dtype = ths_op::from_torch_dtype(output_torch_dtype);
-
-  bool is_fp8_gemm = ths_op::is_fp8_torch_dtype(input_torch_dtype);
+  bool is_fp8_gemm = c10::isFloat8Type(input_torch_dtype);
   bool is_s8_gemm = ths_op::is_s8_torch_dtype(input_torch_dtype);
   DataTypeEnum accum_type = is_s8_gemm ? _S32{}() : _FP32{}();
   DataTypeEnum block_scale_type = _FP32{}();
@@ -63,8 +59,7 @@ get_gemm_meta(
     impl_spec = unify_type(make_gemm_v3_meta(use_fast_accum));
   }
 
-  auto meta =
-      make_gemm_meta(dtype_config, arch, sm_core, _AGKernel{}, gemm_layout, impl, impl_spec);
+  auto meta = make_gemm_meta(dtype_config, arch, _AGKernel{}, gemm_layout, impl, impl_spec);
   return meta;
 }
 
@@ -179,7 +174,7 @@ GemmWithBarirer::initialize(
     c10::optional<UnifiedGemmHParams> const &hparams,
     cudaStream_t stream) {
   at::ScalarType input_dtype = input.scalar_type();
-  bool is_fp8_gemm = ths_op::is_fp8_torch_dtype(input_dtype);
+  bool is_fp8_gemm = c10::isFloat8Type(input_dtype);
   bool is_s8_gemm = ths_op::is_s8_torch_dtype(input_dtype);
   at::ScalarType output_dtype =
       (is_fp8_gemm || is_s8_gemm) ? at::ScalarType::BFloat16 : input_dtype;

@@ -15,16 +15,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "moe_gather_rs/ths_op/gemm_grouped_v2_gather_rs.h"
-
-#include <c10/core/ScalarType.h>
-#include <c10/util/intrusive_ptr.h>
-
-#include <vector>
-
-#include "flux/ths_op/util.h"
+#include "c10/util/intrusive_ptr.h"
 #include "flux/ths_op/flux_shm.h"
 #include "flux/ths_op/ths_pybind.h"
+#include "moe_gather_rs/ths_op/gemm_grouped_v2_gather_rs.h"
+#include <c10/core/ScalarType.h>
+#include <vector>
 #include "moe_gather_rs/moe_utils.h"
 
 namespace bytedance::flux::ths_op {

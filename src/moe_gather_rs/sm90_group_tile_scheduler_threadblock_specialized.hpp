@@ -176,14 +176,12 @@ class PersistentTileSchedulerSm90GroupThreadblockSpecialized {
     // smaller grid.
     else {
       for (int group = 0; group < groups; group++) {
-        auto ctas_along_m = cute::size(
-            cute::ceil_div(
-                cute::shape<0>(problem_shapes.get_host_problem_shape(group)),
-                cute::shape<0>(cta_shape)));
-        auto ctas_along_n = cute::size(
-            cute::ceil_div(
-                cute::shape<1>(problem_shapes.get_host_problem_shape(group)),
-                cute::shape<1>(cta_shape)));
+        auto ctas_along_m = cute::size(cute::ceil_div(
+            cute::shape<0>(problem_shapes.get_host_problem_shape(group)),
+            cute::shape<0>(cta_shape)));
+        auto ctas_along_n = cute::size(cute::ceil_div(
+            cute::shape<1>(problem_shapes.get_host_problem_shape(group)),
+            cute::shape<1>(cta_shape)));
         auto problem_blocks_m = round_up(ctas_along_m, cute::get<0>(cluster_shape));
         auto problem_blocks_n = round_up(ctas_along_n, cute::get<1>(cluster_shape));
         total_ctas += problem_blocks_m * problem_blocks_n;
@@ -219,12 +217,10 @@ class PersistentTileSchedulerSm90GroupThreadblockSpecialized {
     uint64_t ctas_along_m, ctas_along_n;
     if (is_tuple<decltype(cute::shape<0>(params_.problem_shapes_[0]))>::value ||
         is_tuple<decltype(cute::shape<1>(params_.problem_shapes_[0]))>::value) {
-      ctas_along_m = cute::size(
-          cute::ceil_div(
-              cute::shape<0>(params_.problem_shapes_[0]), scheduler_params.cta_shape_.m()));
-      ctas_along_n = cute::size(
-          cute::ceil_div(
-              cute::shape<1>(params_.problem_shapes_[0]), scheduler_params.cta_shape_.n()));
+      ctas_along_m = cute::size(cute::ceil_div(
+          cute::shape<0>(params_.problem_shapes_[0]), scheduler_params.cta_shape_.m()));
+      ctas_along_n = cute::size(cute::ceil_div(
+          cute::shape<1>(params_.problem_shapes_[0]), scheduler_params.cta_shape_.n()));
     } else {
       ctas_along_m = scheduler_params.divmod_cta_shape_m_.divide(
           cute::shape<0>(params_.problem_shapes_[0]) +

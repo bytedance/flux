@@ -52,8 +52,13 @@
 #include <type_traits>
 
 #include "cutlass/barrier.h"
-#include <cuda/atomic>
 
+#include <cuda.h>
+#if defined(CUDA_VERSION) && CUDA_VERSION >= 12080
+#include <cuda/atomic>
+#else
+#include <cuda/std/atomic>
+#endif
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {

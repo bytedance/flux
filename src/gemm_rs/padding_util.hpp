@@ -16,11 +16,12 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
+#include "cuda_fp16.h"
+#include "cuda_bf16.h"
+#include <vector>
 #include <assert.h>
-#include <cuda_bf16.h>
-#include <cuda_fp16.h>
-
 #include "flux/flux.h"
+#include <stdio.h>
 
 namespace bytedance {
 namespace flux {

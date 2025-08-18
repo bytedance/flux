@@ -15,9 +15,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "coll/local_copy_and_reset.hpp"
-#include "flux/cuda/cuda_common_device.hpp"
 #include "flux/cuda/cuda_common.h"
+#include "flux/cuda/cuda_common_device.hpp"
+#include "coll/local_copy_and_reset.hpp"
 #include "flux/flux.h"
 
 namespace bytedance {
@@ -61,6 +61,7 @@ sync_peers_atomic(int32_t **sync_barriers, int32_t rank, int32_t world_size) {
 __device__ __forceinline__ void
 sync_peers_ring(int32_t **sync_barriers, int32_t rank, int32_t world_size) {
   int next_peer = (rank + 1) % world_size;
+  int prev_peer = (rank - 1 + world_size) % world_size;
   int *ptr_next_peer = sync_barriers[next_peer] + blockIdx.x * world_size;
   int *ptr_cur_rank = sync_barriers[rank] + blockIdx.x * world_size;
   if (threadIdx.x != 0)

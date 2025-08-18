@@ -18,7 +18,6 @@
 import argparse
 import os
 import time
-import random
 from typing import List, Tuple, Union
 
 import torch
@@ -35,11 +34,6 @@ from flux.testing import (
 )
 from flux.testing.perf_db_helper import log_perf, set_global_args, should_log_to_rds
 from flux.util import get_arch
-
-try:
-    from flux.triton.moe_gather_rs import MoeGatherRsOp
-except Exception as e:
-    pass
 
 
 class PerfResult:
@@ -71,7 +65,6 @@ def perf_torch(
     inputs: Union[torch.Tensor, List[torch.Tensor]],
     weights: Union[torch.Tensor, List[torch.Tensor]],
     split_cpu: torch.Tensor,
-    ag_input_len_cpu: torch.Tensor,
     iters: int,
     warmup_iters: int,
     token_index: torch.Tensor,
@@ -82,11 +75,8 @@ def perf_torch(
     output_vec_scales: Union[torch.Tensor, List[torch.Tensor], None],
     do_all_reduce: bool = False,
 ):
-    if args.ep_in_dp:
-        # each rank has different input sequence length
-        # use all-reduce to reduce the output
-        do_all_reduce = True
-    torch_output = perf_gemm(
+
+    return perf_gemm(
         iters,
         warmup_iters,
         f"torch #{TP_GROUP.rank()}",
@@ -109,109 +99,12 @@ def perf_torch(
             fast_acc=args.fastacc,
         ),
     )
-    if not args.ep_in_dp:
-        # sequence parallel is enabled, each rank has the same input sequence
-        return torch_output
-    else:
-        input_len_cum_sum = torch.cumsum(ag_input_len_cpu, dim=0)
-        start = 0 if RANK == 0 else input_len_cum_sum[RANK - 1]
-        end = input_len_cum_sum[RANK]
-        torch_output.output = torch_output.output[start:end]
-        return torch_output
-
-
-def perf_triton(
-    inputs: Union[torch.Tensor, List[torch.Tensor]],
-    weights: Union[torch.Tensor, List[torch.Tensor]],
-    split_cpu: torch.Tensor,
-    ag_input_len: torch.Tensor,
-    iters: int,
-    warmup_iters: int,
-    max_m: int,
-    topk: int,
-    routing_idx: torch.Tensor,
-    input_scales: Union[torch.Tensor, List[torch.Tensor], None],
-    weight_scales: Union[torch.Tensor, List[torch.Tensor], None],
-    output_vec_scales: Union[torch.Tensor, List[torch.Tensor], None],
-    transpose_weight: bool = True,
-    do_all_reduce: bool = False,
-    use_read_mode: bool = False,
-):
-    if isinstance(inputs, torch.Tensor):
-        inputs = [inputs]
-        weights = [weights]
-        input_scales = [input_scales]
-        weight_scales = [weight_scales]
-        output_vec_scales = [output_vec_scales]
-
-    M_full, K = inputs[0].shape
-    if transpose_weight:
-        E, N, K_ = weights[0].shape
-    else:
-        E, K_, N = weights[0].shape
-    input_dtype = inputs[0].dtype
-    is_fp8 = flux.util.is_fp8_dtype(input_dtype)
-    is_s8 = input_dtype == torch.int8
-    output_dtype = torch.bfloat16 if is_fp8 or is_s8 else input_dtype
-    ntokens = args.M // topk
-    ntokens_per_rank = ntokens // WORLD_SIZE
-    moe_gather_rs_op = MoeGatherRsOp(
-        TP_GROUP,
-        max_m,
-        N,
-        args.G,
-        topk,
-        args.E,
-        input_dtype,
-        output_dtype,
-        N_SPLIT=4,
-        do_all_reduce=do_all_reduce,
-        use_read_mode=use_read_mode,
-    )
-
-    def fn():
-        # convert to list first
-        full_output = torch.zeros(
-            (ntokens if do_all_reduce else ntokens_per_rank, args.N),
-            dtype=output_dtype,
-            device=inputs[0].device,
-        )
-        if len(inputs) == 1:
-            output = moe_gather_rs_op.forward(
-                inputs[0],
-                weights[0],
-                split_cpu,
-                routing_idx,
-                full_output,
-                input_scales[0],
-                weight_scales[0],
-                output_vec_scales[0],
-                fast_accum=False,
-                transpose_weight=True,
-            )
-        else:
-            output = moe_gather_rs_op.forward_multiple(
-                inputs,
-                weights,
-                split_cpu,
-                routing_idx,
-                full_output,
-                input_scales,
-                weight_scales,
-                output_vec_scales,
-                fast_accum=False,
-                transpose_weight=True,
-            )
-        return output
-
-    return perf_gemm(iters, warmup_iters, f"triton #{TP_GROUP.rank()}", fn)
 
 
 def perf_flux(
     input: Union[torch.Tensor, List[torch.Tensor]],
     weight: Union[torch.Tensor, List[torch.Tensor]],
     split_cpu: torch.Tensor,
-    ag_input_len_cpu: torch.Tensor,
     iters: int,
     warmup_iters: int,
     max_m: int,
@@ -235,16 +128,7 @@ def perf_flux(
     output_dtype = torch.bfloat16 if is_fp8 or is_s8 else input_dtype
     if flux.util.get_arch() >= 90:
         op = flux.GemmGroupedV3GatherRS(
-            args.G,
-            max_m,
-            n_dim,
-            topk,
-            RANK,
-            WORLD_SIZE,
-            args.T,
-            args.E,
-            args.input_groups,
-            args.ep_in_dp,
+            args.G, max_m, n_dim, topk, RANK, WORLD_SIZE, args.T, args.E, args.input_groups
         )
     else:
         op = flux.GemmGroupedV2GatherRSOp(
@@ -263,11 +147,7 @@ def perf_flux(
 
     def fn():
         is_v2 = get_arch() < 90
-        extra_args = (
-            {"n_tokens_per_rank": ag_input_len_cpu if args.ep_in_dp else None}
-            if not is_v2
-            else {"bias": None}
-        )
+        extra_args = {} if not is_v2 else {"bias": None}
         if isinstance(input, torch.Tensor):
             return op.forward_gather_rs(
                 input,
@@ -302,7 +182,6 @@ def tune_flux(
     input: Union[torch.Tensor, List[torch.Tensor]],
     weight: Union[torch.Tensor, List[torch.Tensor]],
     split_cpu: torch.Tensor,
-    ag_input_len_cpu: torch.Tensor,
     iters: int,
     max_m: int,
     topk: int,
@@ -321,16 +200,7 @@ def tune_flux(
         assert weight[0].size(1) == n_dim
 
     op = flux.GemmGroupedV3GatherRS(
-        args.G,
-        max_m,
-        n_dim,
-        topk,
-        RANK,
-        WORLD_SIZE,
-        args.T,
-        args.E,
-        args.input_groups,
-        args.ep_in_dp,
+        args.G, max_m, n_dim, topk, RANK, WORLD_SIZE, args.T, args.E, args.input_groups
     )
 
     op.profiling(
@@ -338,7 +208,6 @@ def tune_flux(
         weight,
         split_cpu,
         routing_idx,
-        ag_input_len_cpu,
         input_scale,
         weight_scale,
         output_vec_scale,
@@ -354,13 +223,13 @@ def tune_flux(
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-M", type=int, default=163840)
-    parser.add_argument("-N", type=int, default=5120)
-    parser.add_argument("-K", type=int, default=5120)
+    parser.add_argument("-M", type=int, default=32768)
+    parser.add_argument("-N", type=int, default=8192)
+    parser.add_argument("-K", type=int, default=8192)
     parser.add_argument("-G", type=int, default=32)
-    parser.add_argument("-E", type=int, default=4, help="Expert parallel world size")
-    parser.add_argument("-T", type=int, default=2, help="Tensor parallel world size")
-    parser.add_argument("--topk", type=int, default=5)
+    parser.add_argument("-E", type=int, default=1, help="Expert parallel world size")
+    parser.add_argument("-T", type=int, default=8, help="Tensor parallel world size")
+    parser.add_argument("--topk", type=int, default=4)
     parser.add_argument("--iters", default=10, type=int, help="perf iterations")
     parser.add_argument("--warmup_iters", default=5, type=int, help="warmup iterations")
     parser.add_argument("--sm_margin", default=0, type=int, help="sm margin")
@@ -371,16 +240,11 @@ def parse_args():
         "--fastacc", default=False, action="store_true", help="whether to enbale fast accumulate"
     )
     parser.add_argument(
-        "--ep_in_dp", default=False, action="store_true", help="whether to enable ep in dp"
-    )
-    parser.add_argument(
         "--dist",
         type=str,
         default="random",
         choices=["uniform", "random", "random_with_first_k_experts"],
     )
-    parser.add_argument("--triton", default=False, action="store_true", help="use triton")
-    parser.add_argument("--triton-only", default=False, action="store_true", help="use triton")
     parser.add_argument("--profile", action="store_true", default=False)
     parser.add_argument("--tune", action="store_true", default=False)
     parser.add_argument("--input_groups", type=int, default=1, help="The number of input groups")
@@ -422,36 +286,21 @@ def _print_tensor_desc(name, tensor: Tuple[torch.Tensor, List[torch.Tensor]]):
 
 if __name__ == "__main__":
     TP_GROUP = initialize_distributed()
-    torch.use_deterministic_algorithms(False)
     RANK, WORLD_SIZE, NNODES = TP_GROUP.rank(), TP_GROUP.size(), flux.testing.NNODES()
 
     args = parse_args()
-    if args.triton_only:
-        if not args.triton:
-            print("WARNING: force set --triton with --triton-only set.")
-            args.triton = True
 
     assert args.M % TP_GROUP.size() == 0
     assert args.K % TP_GROUP.size() == 0
     assert args.M % args.topk == 0
     assert TP_GROUP.size() == args.T * args.E
     local_K = args.K // args.T
-    ori_total_token_num = args.M // args.topk
-    assert ori_total_token_num % TP_GROUP.size() == 0
-    ori_max_token_per_rank = ori_total_token_num // TP_GROUP.size()
-    token_num_cur_rank = ori_max_token_per_rank
-    if args.ep_in_dp:
-        token_num_cur_rank = random.randint(ori_max_token_per_rank - 64, ori_max_token_per_rank)
-        print("EP in DP is enabled! Received ")
-    ag_input_len = torch.zeros(TP_GROUP.size(), dtype=torch.int32).cuda()
-    input_len = torch.tensor([token_num_cur_rank], dtype=torch.int32).cuda()
-    torch.distributed.all_gather_into_tensor(ag_input_len, input_len, group=TP_GROUP)
-    ag_input_len_cpu = ag_input_len.cpu()
+
+    ori_token_num = args.M // args.topk
     generator = torch.Generator("cuda")
     generator.manual_seed(12345)
-    total_token_num = torch.sum(ag_input_len).item()
     random_seq_len, random_gate, token_index, topk_index, routing_idx = gate_func(
-        total_token_num, args.G, args.topk, args.dist, generator
+        ori_token_num, args.G, args.topk, args.dist, generator
     )
 
     split_cpu = random_seq_len
@@ -481,8 +330,8 @@ if __name__ == "__main__":
         ]
     else:
         data_config = [
-            ((M_cur_ep_rank, local_K), input_dtype, (0.1, 0.0)),  # input
-            ((n_experts_per_rank, args.N, local_K), input_dtype, (0.1, 0.0)),  # weight
+            ((M_cur_ep_rank, local_K), input_dtype, (0.1, 0)),  # input
+            ((n_experts_per_rank, args.N, local_K), input_dtype, (0.1, 0)),  # weight
             ((n_experts_per_rank,), torch.float32, (weight_scale, 0)),  # weight_scale
         ]
     input_scale = 1 / 255.0 if is_s8 else 1
@@ -526,12 +375,11 @@ if __name__ == "__main__":
         _print_tensor_desc("input", inputs)
         _print_tensor_desc("weight", weights)
     print("split_cpu:", random_seq_len)
-    print("ag_input_len", ag_input_len)
     _print_tensor_desc("token_index", token_index)
     _print_tensor_desc("topk_index", topk_index)
     _print_tensor_desc("weight_scale", weight_scales)
     _print_tensor_desc("input_scale", input_scales)
-    _print_tensor_desc("routing_idx", routing_idx)
+    _print_tensor_desc("routing_idx: ", routing_idx)
     torch.distributed.barrier()
 
     if args.tune:
@@ -539,7 +387,6 @@ if __name__ == "__main__":
             inputs,
             weights,
             split_cpu,
-            ag_input_len_cpu,
             args.iters,
             args.M,
             args.topk,
@@ -562,45 +409,26 @@ if __name__ == "__main__":
         do_prof=args.profile,
         group=TP_GROUP,
     ):
-        if not args.triton_only:
-            perf_result_flux = perf_flux(
-                inputs,
-                weights,
-                split_cpu,
-                ag_input_len_cpu,
-                args.iters,
-                args.warmup_iters,
-                args.M,
-                args.topk,
-                routing_idx,
-                input_scales,
-                weight_scales,
-                output_vec_scales,
-                args.all_reduce,
-                args.use_read_mode,
-            )
-        if args.triton:
-            perf_result_flux_triton = perf_triton(
-                inputs,
-                weights,
-                split_cpu,
-                ag_input_len_cpu,
-                args.iters,
-                args.warmup_iters,
-                args.M,
-                args.topk,
-                routing_idx,
-                input_scales,
-                weight_scales,
-                output_vec_scales,
-                do_all_reduce=args.all_reduce,
-                use_read_mode=args.use_read_mode,
-            )
+        perf_result_flux = perf_flux(
+            inputs,
+            weights,
+            split_cpu,
+            args.iters,
+            args.warmup_iters,
+            args.M,
+            args.topk,
+            routing_idx,
+            input_scales,
+            weight_scales,
+            output_vec_scales,
+            args.all_reduce,
+            args.use_read_mode,
+        )
+
         perf_result_torch = perf_torch(
             inputs,
             weights,
             split_cpu,
-            ag_input_len_cpu,
             args.iters,
             args.warmup_iters,
             token_index,
@@ -614,7 +442,7 @@ if __name__ == "__main__":
 
     if TP_GROUP.rank() == 0:
         flux.testing.print_grouped_gemm_sol_time_ms(
-            args.M // args.E,
+            args.M,
             args.N,
             local_K,
             n_experts_per_rank,
@@ -625,10 +453,7 @@ if __name__ == "__main__":
     if should_log_to_rds():
         set_global_args("moe_gather_rs", args)
     flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_torch))
-    if not args.triton_only:
-        flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_flux))
-    if args.triton:
-        flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_flux_triton))
+    flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_flux))
     atol, rtol = ABSOLUTE_THRESHOLD_MAP[input_dtype], RELATIVE_THRESHOLD_MAP[input_dtype]
     TP_GROUP.barrier()
 
@@ -647,25 +472,7 @@ if __name__ == "__main__":
         else:
             print("✅ flux and torch matches")
 
-    def check_triton_result():
-        print(f"#{TP_GROUP.rank()} Threshold = Atol:{atol}  Rtol:{rtol}")
-        print(f"triton output shape: {triton_output.size()}")
-        print(f"torch output shape: {torch_output.size()}")
-
-        try:
-            flux.torch_allclose(triton_output, torch_output, atol=atol, rtol=rtol)
-        except Exception as e:
-            torch.save(triton_output, f"flux_triton_output_{TP_GROUP.rank()}.pt")
-            torch.save(torch_output, f"torch_output_{TP_GROUP.rank()}.pt")
-            print("❌ triton and torch not matches")
-            raise e
-        else:
-            print("✅ triton and torch matches")
 
     torch_output = perf_result_torch.output
-    if not args.triton_only:
-        flux_output = perf_result_flux.output
-        flux.exec_in_rank_order(TP_GROUP, check_result)
-    if args.triton:
-        triton_output = perf_result_flux_triton.output
-        flux.exec_in_rank_order(TP_GROUP, check_triton_result)
+    flux_output = perf_result_flux.output
+    flux.exec_in_rank_order(TP_GROUP, check_result)

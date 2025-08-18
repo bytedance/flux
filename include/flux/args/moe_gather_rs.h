@@ -103,7 +103,6 @@ struct GemmGroupedV3GatherRSArguments {
   int32_t tp_world_size;
   int32_t ep_world_size;
   int32_t globalM;
-  int32_t max_token_per_rank;
   int32_t ep_m_start;
   int32_t ep_m_end;
   float **input_scale_ptr;

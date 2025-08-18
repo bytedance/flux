@@ -203,7 +203,7 @@ def perf_2d_ring(
     comm_intra_with_cudamemcpy: bool = True,
     comm_intra_push_mode: bool = False,
 ):
-    """like what's done in ag_gemm_kernel_internode:
+    """like what's done in ag_gemm_kernel_acrossnode:
     for cross node:
       (node, local_rank) -> (next_node, local_rank) for local_rank in range(0, local_world_size)
     for inner node:

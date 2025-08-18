@@ -16,10 +16,9 @@
 //
 //===----------------------------------------------------------------------===//
 #pragma once
+#include "flux/args/moe_gather_rs.h"
 #include <cutlass/gemm_coord.h>
 #include <cutlass/layout/matrix.h>
-
-#include "flux/args/moe_gather_rs.h"
 namespace bytedance::flux {
 
 struct MoeGatherRSWorkspaceArgs {

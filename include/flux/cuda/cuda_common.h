@@ -17,20 +17,18 @@
 
 #pragma once
 
-#include <cuda_bf16.h>
-#include <cuda_fp16.h>
+#include "cutlass/detail/dependent_false.hpp"
+#include "cutlass/float8.h"
+#include "flux/flux.h"
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
-#include <cutlass/arch/arch.h>
-#include <cutlass/cutlass.h>
-#include <cutlass/float8.h>
-#include <cutlass/layout/matrix.h>
-#include <cutlass/numeric_types.h>
-
-#include <cutlass/detail/dependent_false.hpp>
+#include "cutlass/cutlass.h"
+#include "cutlass/arch/arch.h"
+#include "cutlass/layout/matrix.h"
+#include "cutlass/numeric_types.h"
 #include <type_traits>
-
-#include "flux/flux.h"
+#include "cuda_fp16.h"
+#include "cuda_bf16.h"
 
 /**
  * Panic wrapper for unwinding CUTLASS errors

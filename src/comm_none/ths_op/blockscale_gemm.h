@@ -23,22 +23,10 @@
 namespace bytedance::flux::ths_op {
 class BlockScaleGemm {
  public:
-  BlockScaleGemm(
-      c10::ScalarType input_dtype,
-      c10::ScalarType weight_dtype,
-      c10::ScalarType output_dtype,
-      int32_t num_streams);
+  BlockScaleGemm(c10::ScalarType input_dtype, c10::ScalarType output_dtype, int32_t num_streams);
   ~BlockScaleGemm();
 
   torch::Tensor forward(
-      torch::Tensor input,
-      torch::Tensor weight,
-      c10::optional<torch::Tensor> bias,
-      c10::optional<torch::Tensor> output,
-      c10::optional<torch::Tensor> input_scale,
-      c10::optional<torch::Tensor> weight_scale);
-
-  torch::Tensor wgrad(
       torch::Tensor input,
       torch::Tensor weight,
       c10::optional<torch::Tensor> bias,
@@ -55,41 +43,13 @@ class BlockScaleGemm {
       c10::optional<torch::Tensor> input_scale,
       c10::optional<torch::Tensor> weight_scale);
 
-  torch::Tensor wgrad_multistream(
-      torch::Tensor input,
-      torch::Tensor input_splits,
-      torch::Tensor weight,
-      c10::optional<torch::Tensor> bias,
-      c10::optional<torch::Tensor> output,
-      c10::optional<torch::Tensor> input_scale,
-      c10::optional<torch::Tensor> weight_scale);
-
-  torch::Tensor forward_grouped(
-      torch::Tensor input,
-      torch::Tensor input_splits,
-      torch::Tensor weight,
-      c10::optional<torch::Tensor> bias,
-      c10::optional<torch::Tensor> output,
-      torch::Tensor input_scale,
-      torch::Tensor weight_scale);
-
-  torch::Tensor wgrad_grouped(
-      torch::Tensor input,
-      torch::Tensor input_splits,
-      torch::Tensor weight,
-      c10::optional<torch::Tensor> bias,
-      c10::optional<torch::Tensor> output,
-      torch::Tensor input_scale,
-      torch::Tensor weight_scale);
-
   torch::Tensor reference(
       torch::Tensor input,
       torch::Tensor weight,
       c10::optional<torch::Tensor> bias,
       c10::optional<torch::Tensor> output,
       c10::optional<torch::Tensor> input_scale,
-      c10::optional<torch::Tensor> weight_scale,
-      bool is_groupwise_b);
+      c10::optional<torch::Tensor> weight_scale);
 
   torch::Tensor profiling(
       torch::Tensor input,

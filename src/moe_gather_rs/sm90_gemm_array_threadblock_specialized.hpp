@@ -201,7 +201,6 @@ class GroupGemmUniversalRSTS {
     int32_t tp_world_size;
     int32_t ep_world_size;
     int32_t globalM;
-    int32_t max_token_per_rank;
     int32_t ep_m_start;
     int32_t ep_m_end;
     float **input_scale_ptr;
@@ -235,7 +234,6 @@ class GroupGemmUniversalRSTS {
     int32_t tp_world_size;
     int32_t ep_world_size;
     int32_t globalM;
-    int32_t max_token_per_rank;
     int32_t ep_m_start;
     int32_t ep_m_end;
     float **input_scale_ptr;
@@ -331,7 +329,6 @@ class GroupGemmUniversalRSTS {
         args.tp_world_size,
         args.ep_world_size,
         args.globalM,
-        args.max_token_per_rank,
         args.ep_m_start,
         args.ep_m_end,
         args.input_scale_ptr,
@@ -1029,8 +1026,6 @@ class GroupGemmUniversalRSTS {
   struct EP_Shared_StorageV3 {
     int smem_idx[BLOCK_M * TOPK];
     int smem_token_idx[BLOCK_M];
-    int smem_local_token_idx[BLOCK_M];
-    int smem_tgt_rank[BLOCK_M];
     int topks[BLOCK_M];
   };
 
@@ -1078,8 +1073,6 @@ class GroupGemmUniversalRSTS {
     int32_t *smem_idx = &storage->smem_idx[0];
     int32_t *smem_topk_count = &storage->topks[0];
     int32_t *smem_token_idx = &storage->smem_token_idx[0];
-    int32_t *smem_local_token_idx = &storage->smem_local_token_idx[0];
-    int32_t *smem_tgt_rank = &storage->smem_tgt_rank[0];
     constexpr int ELEMENT_SIZE = sizeof(Element);
     constexpr int N_REG = VecSize / ELEMENT_SIZE;
     static_assert(BLOCK_N % (32 * N_REG) == 0);
@@ -1097,9 +1090,10 @@ class GroupGemmUniversalRSTS {
     // constexpr int IDX_LOAD_UNROLL = (TOKEN_IDX_N + N_THREADS - 1) / N_THREADS;
     int globalM = params.globalM;
     int totalToken = globalM / params.topk;
+    int token_per_rank = totalToken / params.world_size;
     int64_t NDim = params.n_dim;
     int64_t new_n_dim = NDim / params.SPLITS;
-    int remote_token_offset = params.rank * params.max_token_per_rank;
+    int remote_token_offset = params.rank * token_per_rank;
     int token_offset_start = blk_m * BLOCK_M;
     int token_offset_end = min(token_offset_start + BLOCK_M, token_cur_ep_rank);
     Element **output_scatter_ptrs = reinterpret_cast<Element **>(params.output_scatter_ptrs);
@@ -1107,14 +1101,10 @@ class GroupGemmUniversalRSTS {
     if (threadIdx.x + token_offset_start < token_offset_end) {
       int global_token_idx = params.ep_token_idx_filtered[token_offset_start + threadIdx.x];
       smem_token_idx[threadIdx.x] = global_token_idx;
-      int topk_count = params.ep_pos_filtered[global_token_idx * (TOPK + 3) + TOPK];
+      int topk_count = params.ep_pos_filtered[global_token_idx * (TOPK + 1) + TOPK];
       smem_topk_count[threadIdx.x] = topk_count;
-      int local_idx_in_tgt_rank = params.ep_pos_filtered[global_token_idx * (TOPK + 3) + TOPK + 1];
-      smem_local_token_idx[threadIdx.x] = local_idx_in_tgt_rank;
-      int tgt_rank =params.ep_pos_filtered[global_token_idx * (TOPK + 3) + TOPK + 2];
-      smem_tgt_rank[threadIdx.x] = tgt_rank;
       for (int i = 0; i < topk_count; i++) {
-        int routed_pos = params.ep_pos_filtered[global_token_idx * (TOPK + 3) + i];
+        int routed_pos = params.ep_pos_filtered[global_token_idx * (TOPK + 1) + i];
         smem_idx[threadIdx.x * TOPK + i] = routed_pos;
       }
     }
@@ -1125,8 +1115,7 @@ class GroupGemmUniversalRSTS {
       int row_offset = row_iter * N_WARPS + wid;
       if (row_offset < token_offset_end - token_offset_start) {
         int cur_topk = smem_topk_count[row_offset];
-        int local_token_idx_in_tgt = smem_local_token_idx[row_offset];
-        int dst_rank = smem_tgt_rank[row_offset];
+        int token_idx = smem_token_idx[row_offset];
 #pragma unroll
         for (int col_iter = 0; col_iter < UNROLL_N; col_iter++) {
           int col_offset = col_iter * 32 * N_REG + wtid * N_REG;
@@ -1166,7 +1155,8 @@ class GroupGemmUniversalRSTS {
           }
           // write back to the taget rank
 
-          int64_t remote_row = local_token_idx_in_tgt + remote_token_offset;
+          int dst_rank = token_idx / token_per_rank;
+          int64_t remote_row = token_idx % token_per_rank + remote_token_offset;
           *reinterpret_cast<VecType *>(
               output_scatter_ptrs[dst_rank] + remote_row * NDim + gmem_col_offset) =
               *reinterpret_cast<VecType *>(&reg128[0]);

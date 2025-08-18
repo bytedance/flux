@@ -102,6 +102,7 @@ def set_global_args(op_name, args):
         "iters",
         "warmup",
         "triton",
+        "lego",
         "triton_ony",
         "debug",
         "tune",

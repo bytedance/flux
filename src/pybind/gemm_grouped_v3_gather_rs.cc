@@ -15,9 +15,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "moe_gather_rs/ths_op/gemm_grouped_v3_gather_rs.h"
-
 #include "flux/ths_op/ths_pybind.h"
+#include "moe_gather_rs/ths_op/gemm_grouped_v3_gather_rs.h"
 #include "moe_gather_rs/ths_op/moe_utils.h"
 
 namespace bytedance::flux::ths_op {
@@ -42,8 +41,7 @@ static int _register_gemm_only_ops [[maybe_unused]] = []() {
                         int64_t world_size,
                         int64_t tp_world_size,
                         int64_t ep_world_size,
-                        int64_t max_input_groups,
-                        bool ep_in_dp) {
+                        int64_t max_input_groups) {
               return new GemmGroupedV3GatherRSOpCls(
                   std::move(total_num_experts),
                   std::move(max_m),
@@ -53,8 +51,7 @@ static int _register_gemm_only_ops [[maybe_unused]] = []() {
                   std::move(world_size),
                   std::move(tp_world_size),
                   std::move(ep_world_size),
-                  std::move(max_input_groups),
-                  std::move(ep_in_dp));
+                  std::move(max_input_groups));
             }),
             py::arg("total_num_experts"),
             py::arg("max_m"),
@@ -64,8 +61,7 @@ static int _register_gemm_only_ops [[maybe_unused]] = []() {
             py::arg("world_size"),
             py::arg("tp_world_size"),
             py::arg("ep_world_size"),
-            py::arg("max_input_groups") = 1,
-            py::arg("ep_in_dp") = false)
+            py::arg("max_input_groups") = 1)
         .def(
             "forward_gather_rs",
             &GemmGroupedV3GatherRSOpCls::forward_gather_rs,
@@ -73,7 +69,6 @@ static int _register_gemm_only_ops [[maybe_unused]] = []() {
             py::arg("weight"),
             py::arg("splits_cpu"),
             py::arg("routing_idx"),
-            py::arg("n_tokens_per_rank") = py::none(),
             py::arg("input_scale") = py::none(),
             py::arg("weight_scale") = py::none(),
             py::arg("output_vec_scale") = py::none(),
@@ -87,7 +82,6 @@ static int _register_gemm_only_ops [[maybe_unused]] = []() {
             py::arg("weight"),
             py::arg("splits_cpu"),
             py::arg("routing_idx"),
-            py::arg("n_tokens_per_rank") = py::none(),
             py::arg("input_scale") = py::none(),
             py::arg("weight_scale") = py::none(),
             py::arg("output_vec_scale") = py::none(),
@@ -102,7 +96,6 @@ static int _register_gemm_only_ops [[maybe_unused]] = []() {
             py::arg("weight"),
             py::arg("splits_cpu"),
             py::arg("routing_idx"),
-            py::arg("n_tokens_per_rank") = py::none(),
             py::arg("input_scale") = py::none(),
             py::arg("weight_scale") = py::none(),
             py::arg("output_vec_scale") = py::none(),
@@ -117,7 +110,6 @@ static int _register_gemm_only_ops [[maybe_unused]] = []() {
             py::arg("weight"),
             py::arg("splits_cpu"),
             py::arg("routing_idx"),
-            py::arg("n_tokens_per_rank") = py::none(),
             py::arg("input_scale") = py::none(),
             py::arg("weight_scale") = py::none(),
             py::arg("output_vec_scale") = py::none(),

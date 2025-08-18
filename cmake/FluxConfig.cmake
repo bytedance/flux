@@ -44,9 +44,6 @@ set(FLUX_INCLUDE_DIRS
 # Library dependencies.
 append_fluxlib_if_found(flux_cuda)
 append_fluxlib_if_found(flux_cuda_ths_op)
-if(EXISTS ${FLUX_INSTALL_PREFIX}/lib/libflux_triton_aot.so)
-  append_fluxlib_if_found(flux_triton_aot)
-endif()
 
 # When we build libflux with the old libstdc++ ABI, dependent libraries must too.
 # if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

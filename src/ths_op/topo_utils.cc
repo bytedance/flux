@@ -16,26 +16,24 @@
 //===----------------------------------------------------------------------===//
 
 #include "flux/ths_op/topo_utils.h"
-
-#include <ATen/ops/empty.h>
-#include <c10/cuda/CUDAFunctions.h>
-#include <c10/cuda/CUDAStream.h>
-
 #include <algorithm>
 #include <array>
 #include <cstdio>
-#include <iostream>
 #include <mutex>
 #include <ostream>
-#include <set>
 #include <vector>
-
+#include <set>
+#include <iostream>
+#include <ATen/ops/empty.h>
+#include <c10/cuda/CUDAFunctions.h>
+#include <c10/cuda/CUDAStream.h>
 #include "flux/cuda/cuda_common.h"
 #include "flux/cuda/cuda_stub.h"
 #include "flux/cuda/nvml_stub.h"
 #include "flux/flux.h"
-#include "flux/ths_op/flux_shm.h"
 #include "flux/utils.h"
+#include "flux/cuda/cuda_common.h"
+#include "flux/ths_op/flux_shm.h"
 
 #define MAX_BUSID_SIZE 16
 #define MAXPATHSIZE 1024
@@ -164,9 +162,8 @@ init_topo(const std::vector<CUdevice> &gpu_device_ids, TopoInfo &topo_info) {
     std::set<int> numa_id_set{numa_ids.begin(), numa_ids.end()};
     std::vector<int> numa_world_sizes;
     for (int numa_id : numa_id_set) {
-      numa_world_sizes.push_back(std::count_if(numa_ids.begin(), numa_ids.end(), [numa_id](int x) {
-        return x == numa_id;
-      }));
+      numa_world_sizes.push_back(std::count_if(
+          numa_ids.begin(), numa_ids.end(), [numa_id](int x) { return x == numa_id; }));
     }
     FLUX_CHECK_GT(numa_world_sizes.size(), 0);
     bool is_even_distributed = is_all_values_the_same(numa_world_sizes);
@@ -239,27 +236,14 @@ get_processs_group_devices(Group *pg) {
   int world_size = pg->get_size();
   FLUX_CHECK_GT(world_size, 0);
 
-  constexpr int HOST_NAME_MAX_LEN = 256;
-  struct RankInfo {
-    char hostname[HOST_NAME_MAX_LEN];
-    CUdevice device_id;
-  };
-
-  RankInfo local_rank_info;
-  FLUX_CHECK_EQ(gethostname(local_rank_info.hostname, HOST_NAME_MAX_LEN), 0);
-  CU_CHECK(cuda_stub().cuCtxGetDevice(&local_rank_info.device_id));
-
-  std::vector<RankInfo> all_ranks_info(world_size);
-  pg->all_gather_cpu(&local_rank_info, all_ranks_info.data(), sizeof(RankInfo));
-
-  std::set<CUdevice> local_device_set;
-  for (int i = 0; i < world_size; ++i) {
-    if (strcmp(all_ranks_info[i].hostname, local_rank_info.hostname) == 0) {
-      local_device_set.insert(all_ranks_info[i].device_id);
-    }
-  }
-  std::vector<CUdevice> local_devices(local_device_set.begin(), local_device_set.end());
-  return local_devices;
+  CUdevice gpu_device_id;
+  std::vector<CUdevice> gpu_device_ids(world_size, -1);
+  CU_CHECK(cuda_stub().cuCtxGetDevice(&gpu_device_id));
+  // allgather gpu_device_id
+  pg->all_gather_cpu(&gpu_device_id, gpu_device_ids.data(), sizeof(CUdevice));
+  std::set<CUdevice> gpu_device_set{gpu_device_ids.begin(), gpu_device_ids.end()};
+  FLUX_CHECK_EQ(gpu_device_ids.size(), gpu_device_set.size());
+  return gpu_device_ids;
 }
 
 bool

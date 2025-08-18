@@ -54,7 +54,7 @@ struct Sm90ReduceScatterDma {
   using StrideMNL = StrideMNL_;
   static constexpr CommKindEnum CommKind = CommKind_;
   static constexpr bool FuseReduction = FuseReduction_;
-  static_assert(not(!FuseReduction and CommKind == _InterNode{}));
+  static_assert(not(!FuseReduction and CommKind == _AcrossNode{}));
   static constexpr int kAlignment = 128 / sizeof_bits_v<Element>;
 
   // Shared Mem
@@ -317,7 +317,7 @@ struct Sm90ReduceScatterDma {
         int M_reduce = params_ptr->tile_m_perrank * params_ptr->nnodes * params_ptr->nnodes *
                        get<0>(TileShape{});
 
-        if constexpr (CommKind == _InterNode{}) {
+        if constexpr (CommKind == _AcrossNode{}) {
           auto tile_layout = make_ordered_layout(take<0, 2>(TileShape{}), make_step(_1{}, _0{}));
           auto mReduce = make_tensor(
               params_ptr->local_reduce_buffer,
@@ -424,7 +424,7 @@ struct Sm90ReduceScatterDma {
       int reduce_count = Barrier::arrive_inc_get(lock_ptr, thread_idx, flag_idx, 1);
       if (reduce_count == params_ptr->local_world_size) {
         Barrier::wait_eq_reset(lock_ptr, thread_idx, flag_idx, params_ptr->local_world_size, 0);
-        if constexpr (CommKind == _InterNode{}) {
+        if constexpr (CommKind == _AcrossNode{}) {
           if (dst_node_idx != params_ptr->node_idx) {
             int remote_rank = dst_node_idx * params_ptr->local_world_size + params_ptr->local_rank;
 #ifdef FLUX_SHM_USE_NVSHMEM

@@ -48,18 +48,15 @@ CudaIpcBarrierAllKernel(CudaIpcBarrierAllArgs args) {
   int world_size = args.world_size;
   int cur_rank = args.rank;
   if (threadIdx.x < world_size) {
-    __threadfence_system();
     // set achieved flag for others
     int *sync_buffer_dst = sync_buffers[threadIdx.x] + cur_rank;
 #pragma unroll 1
     while (atomicCAS_system(sync_buffer_dst, 0, 1) != 0) {
     }
-    __threadfence_system();
     int *wait_ptr = sync_buffers[cur_rank] + threadIdx.x;
 #pragma unroll 1
     while (atomicCAS_system(wait_ptr, 1, 0) != 1) {
     }
-    __threadfence_system();
   }
 }
 
@@ -70,6 +67,7 @@ CudaIpcBarrierAllRingModeKernel(CudaIpcBarrierAllArgs args) {
   int world_size = args.world_size;
   int cur_rank = args.rank;
   int next_peer = (cur_rank + 1) % world_size;
+  int prev_peer = (cur_rank - 1 + world_size) % world_size;
   volatile int *ptr_next_peer = sync_buffers[next_peer];
   volatile int *ptr_cur_rank = sync_buffers[cur_rank];
   if (threadIdx.x != 0)

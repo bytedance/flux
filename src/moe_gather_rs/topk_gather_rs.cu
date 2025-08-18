@@ -15,16 +15,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "cute/container/array_aligned.hpp"
-#include "cute/numeric/int.hpp"
-#include "cutlass/arch/memory.h"
-#include "cutlass/barrier.h"
-#include "cutlass/numeric_conversion.h"
-#include "flux/args/moe_gather_rs.h"
 #include "flux/cuda/cuda_common.h"
-#include "flux/cuda/system_barrier.hpp"
 #include "flux/flux.h"
+#include "flux/args/moe_gather_rs.h"
+#include "flux/cuda/system_barrier.hpp"
 #include "moe_gather_rs/topk_gather_rs.hpp"
+#include "cutlass/barrier.h"
+#include "cutlass/arch/memory.h"
+#include "cutlass/numeric_conversion.h"
+#include "cute/numeric/int.hpp"
+#include "cute/container/array_aligned.hpp"
 
 namespace bytedance {
 namespace flux {
@@ -32,8 +32,8 @@ namespace flux {
 CUTLASS_DEVICE
 void
 global_red_bf16_2(uint32_t const &D, void *ptr, bool pred_guard) {
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
   uint32_t const &data = reinterpret_cast<uint32_t const &>(D);
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
   asm volatile(
       "{\n"
       "  .reg .pred p;\n"
@@ -50,8 +50,8 @@ global_red_bf16_2(uint32_t const &D, void *ptr, bool pred_guard) {
 CUTLASS_DEVICE
 void
 global_red_f16_2(uint32_t const &D, void *ptr, bool pred_guard) {
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
   uint32_t const &data = reinterpret_cast<uint32_t const &>(D);
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
   asm volatile(
       "{\n"
       "  .reg .pred p;\n"

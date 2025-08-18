@@ -35,8 +35,6 @@ namespace bytedance::flux {
 
 // get arch of current device
 ArchEnum get_arch();
-// get sm core count of current device
-SMCoreEnum get_sm_core();
 
 class TuningConfigGenerator {
  private:

@@ -29,10 +29,6 @@ from flux.testing import DTYPE_MAP, RING_MODE_MAP, MoeAgScatterWithTorch, MoeMlp
 from flux.testing.perf_db_helper import log_perf, set_global_args, should_log_to_rds
 from flux.testing.utils import all_gather_into_tensor_with_fp8
 
-try:
-    from flux.triton.moe_ag_scatter import MoeAgScatterOp
-except Exception as e:
-    pass
 
 DIST_ENV = flux.get_dist_env()
 TP_GROUP = DIST_ENV.get_world()
@@ -99,9 +95,8 @@ def take_first_or_none(x: Optional[List[Any]]):
 def perf_torch(ctx: MoeMlp1Ctx, warmup_iters: int, iters: int, gather_input: bool = True):
     gemm_only_op = flux.GemmOnly(
         ctx.inputs.dtype,
-        ctx.inputs.dtype,
         ctx.outputs[0].dtype,
-        use_fp8_gemm=flux.is_fp8_dtype(ctx.inputs.dtype),
+        use_fp8_gemm=flux.util.get_arch() < 90 and flux.is_fp8_dtype(ctx.inputs.dtype),
     )
 
     total_iters = warmup_iters + iters
@@ -143,69 +138,6 @@ def perf_torch(ctx: MoeMlp1Ctx, warmup_iters: int, iters: int, gather_input: boo
         gemm_time_ms=gemm_time,
         scatter_time_ms=scatter_time,
         comm_time_ms=comm_time,
-    )
-
-
-@torch.no_grad()
-def perf_triton(
-    ctx: MoeMlp1Ctx,
-    warmup_iters: int,
-    iters: int,
-    gather_input: bool = True,
-    ag_option=flux.AllGatherOption(),
-):
-    op = MoeAgScatterOp(
-        tp_group=TP_GROUP,
-        ep_group=EP_GROUP,
-        max_ntokens=ctx.b * ctx.s,
-        hidden=ctx.h,
-        ffn_hidden=ctx.ffn_size,
-        nexperts=ctx.nexperts,
-        topk=ctx.topk,
-        input_dtype=ctx.inputs_shard.dtype,
-    )
-
-    total_iters = warmup_iters + iters
-    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
-    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(total_iters)]
-    gathered_input = torch.empty_like(ctx.inputs) if gather_input else None
-    ctx.clear_outputs()
-    torch.cuda.synchronize()
-    torch.distributed.barrier()
-    for i in range(total_iters):
-        ctx.clear_outputs()
-        start_events[i].record()
-        op.forward(
-            input=ctx.inputs_shard,
-            weights=ctx.weights[0],
-            bias=ctx.bias[0] if ctx.bias is not None else None,
-            input_scale=ctx.input_scale[0] if ctx.input_scale is not None else None,
-            weight_scale=ctx.weight_scale[0] if ctx.weight_scale is not None else None,
-            output_scale=ctx.output_scale[0] if ctx.output_scale is not None else None,
-            splits_gpu=ctx.splits_gpu,
-            scatter_index=ctx.scatter_index,
-            outputs_buf=ctx.outputs[0],
-            fast_accum=ctx.fast_accum,
-            gathered_input=gathered_input,
-            ag_option=ag_option,
-        )
-        end_events[i].record()
-
-    gemm_times = []
-    for i in range(total_iters):
-        end_events[i].synchronize()
-        if i >= warmup_iters:
-            gemm_times.append(start_events[i].elapsed_time(end_events[i]))
-
-    gemm_time_ms = sum(gemm_times) / iters
-
-    return PerfResult(
-        name=f"triton #{TP_GROUP.rank()}",
-        outputs=ctx.get_outputs_clone(),
-        gathered_input=gathered_input,
-        gemm_time_ms=gemm_time_ms,
-        scatter_time_ms=0.0,
-        comm_time_ms=0.0,
     )
 
 
@@ -352,11 +284,11 @@ def parse_args():
         default="random",
         choices=["uniform", "random_uniform", "random", "random_with_first_k_experts"],
     )
-    parser.add_argument("--B", type=int, default=2)
-    parser.add_argument("--S", type=int, default=4096)
+    parser.add_argument("--B", type=int, default=1)
+    parser.add_argument("--S", type=int, default=8192)
     parser.add_argument("--H", type=int, default=8192)
     parser.add_argument("--ffn_hidden_size", type=int, default=8192)
-    parser.add_argument("--topk", type=int, default=5)
+    parser.add_argument("--topk", type=int, default=4)
     parser.add_argument("--G", type=int, default=32)
     parser.add_argument("--iters", default=10, type=int, help="perf iterations")
     parser.add_argument("--warmup_iters", default=10, type=int, help="warmup iterations")
@@ -368,13 +300,6 @@ def parse_args():
     parser.add_argument("--weight_groups", default=1, type=int, help="num of weight groups")
     parser.add_argument(
         "--fast_accum", default=False, action="store_true", help="fp8 use fast accum"
-    )
-    parser.add_argument("--triton", default=False, action="store_true", help="use triton")
-    parser.add_argument(
-        "--triton-only",
-        default=False,
-        action="store_true",
-        help="run triton only. don't rn flux. maybe flux is not implemented yet",
     )
     parser.add_argument(
         "--profile", default=False, action="store_true", help="dump torch.profiler.profile"
@@ -481,14 +406,6 @@ if __name__ == "__main__":
 
         flux.load_tuning_record(prof_ctx.get_latest_record())
 
-    if args.triton_only:
-        if not args.triton:
-            print("WARNING: force set --triton with --triton-only set.")
-            args.triton = True
-
-    if args.triton:
-        assert args.weight_groups == 1, f"triton implementation does not support multiple group yet"
-
     ag_option = flux.AllGatherOption()
     ag_option.use_cuda_core_local = args.use_cuda_core_local
     ag_option.use_cuda_core_ag = args.use_cuda_core_ag
@@ -501,19 +418,14 @@ if __name__ == "__main__":
         do_prof=args.profile,
         group=TP_GROUP,
     ):
-        if not args.triton_only:
-            perf_result_flux = perf_flux(
-                moe_ctx, args.warmup_iters, args.iters, args.gather_input, ag_option
-            )
+        perf_result_flux = perf_flux(
+            moe_ctx, args.warmup_iters, args.iters, args.gather_input, ag_option
+        )
         perf_result_torch = perf_torch(moe_ctx, args.warmup_iters, args.iters, args.gather_input)
-        if args.triton:
-            perf_result_triton = perf_triton(
-                moe_ctx, args.warmup_iters, args.iters, args.gather_input, ag_option=ag_option
-            )
 
     if TP_GROUP.rank() == 0:
         flux.testing.print_grouped_gemm_sol_time_ms(
-            moe_ctx.ntokens * moe_ctx.topk * args.weight_groups // moe_ctx.ep_size,
+            moe_ctx.ntokens * moe_ctx.topk * args.weight_groups,
             moe_ctx.ffn_size_shard,
             moe_ctx.h,
             args.G // args.E,  # E
@@ -522,10 +434,7 @@ if __name__ == "__main__":
     if should_log_to_rds():
         set_global_args("moe_ag_scatter", args)
     flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_torch))
-    if not args.triton_only:
-        flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_flux))
-    if args.triton:
-        flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_triton))
+    flux.exec_in_rank_order(TP_GROUP, lambda: log_perf(perf_result_flux))
 
     if input_dtype == torch.float16:
         atol, rtol = 1e-2, 1e-3
@@ -562,14 +471,9 @@ if __name__ == "__main__":
             else:
                 print(f"✅ {name_x} check passed")
 
-    if not args.triton_only:
-        flux.exec_in_rank_order(
-            TP_GROUP, lambda: check_result(perf_result_flux, perf_result_torch, "flux", "torch")
-        )
-    if args.triton:
-        flux.exec_in_rank_order(
-            TP_GROUP, lambda: check_result(perf_result_triton, perf_result_torch, "triton", "torch")
-        )
+    flux.exec_in_rank_order(
+        TP_GROUP, lambda: check_result(perf_result_flux, perf_result_torch, "flux", "torch")
+    )
 
     TP_GROUP.barrier()
     torch.cuda.synchronize()

@@ -16,12 +16,10 @@
 //===----------------------------------------------------------------------===//
 
 #include <c10/cuda/CUDAStream.h>
-#include <cuda_bf16.h>
-#include <cuda_runtime_api.h>
 #include <torch/all.h>
-
+#include <cuda_runtime_api.h>
 #include <cstdlib>
-
+#include <cuda_bf16.h>
 #include "flux/ths_op/ths_op.h"
 #include "moe_gather_rs/moe_utils.h"
 

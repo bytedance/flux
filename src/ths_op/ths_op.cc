@@ -119,14 +119,12 @@ from_torch_dtype(at::ScalarType torch_dtype) {
     case at::ScalarType::BFloat16: {
       return _BF16{};
     }; break;
-#if TORCH_SUPPOER_FP8
     case at::ScalarType::Float8_e4m3fn: {
       return _E4M3{};
     }; break;
     case at::ScalarType::Float8_e5m2: {
       return _E5M2{};
     }; break;
-#endif
     default:
       throw std::runtime_error(
           std::string("unsupported torch_dtype:") + at::toString(torch_dtype));
@@ -152,14 +150,12 @@ to_torch_dtype(DataTypeEnum dtype) {
     case _BF16{}: {
       return at::ScalarType::BFloat16;
     }; break;
-#if TORCH_SUPPOER_FP8
     case _E4M3{}: {
       return at::ScalarType::Float8_e4m3fn;
     }; break;
     case _E5M2{}: {
       return at::ScalarType::Float8_e5m2;
     }; break;
-#endif
     default:
       throw std::runtime_error(
           std::string("unsupported dtype: ") + std::string(enum_to_string(dtype)));
@@ -170,15 +166,6 @@ to_torch_dtype(DataTypeEnum dtype) {
 bool
 is_s8_torch_dtype(at::ScalarType torch_dtype) {
   return torch_dtype == at::ScalarType::Char;
-}
-
-bool
-is_fp8_torch_dtype(at::ScalarType torch_dtype) {
-#if TORCH_SUPPOER_FP8
-  return c10::isFloat8Type(torch_dtype);
-#else
-  return false;
-#endif
 }
 
 void CUDART_CB

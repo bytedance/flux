@@ -18,7 +18,6 @@
 #pragma once
 #include <c10/core/ScalarType.h>
 #include <torch/all.h>
-
 #include "flux/ths_op/ths_op.h"
 
 namespace bytedance::flux::ths_op {
@@ -34,15 +33,13 @@ class GemmGroupedV3GatherRS {
       int64_t world_size,
       int64_t tp_world_size,
       int64_t ep_world_size,
-      int64_t max_input_groups,
-      bool ep_in_dp);
+      int64_t max_input_groups);
   ~GemmGroupedV3GatherRS();
   torch::Tensor forward_gather_rs(
       torch::Tensor input,
       torch::Tensor weight,
       torch::Tensor splits_cpu,
       torch::Tensor routing_idx,
-      c10::optional<torch::Tensor> n_tokens_per_rank,
       c10::optional<torch::Tensor> input_scale,
       c10::optional<torch::Tensor> weight_scale,
       c10::optional<torch::Tensor> output_vec_scale,
@@ -54,7 +51,6 @@ class GemmGroupedV3GatherRS {
       std::vector<torch::Tensor> weights,
       torch::Tensor splits_cpu,
       torch::Tensor routing_idx,
-      c10::optional<torch::Tensor> n_tokens_per_rank,
       c10::optional<std::vector<torch::Tensor>> input_scale,
       c10::optional<std::vector<torch::Tensor>> weight_scale,
       c10::optional<std::vector<torch::Tensor>> output_vec_scale,
@@ -66,7 +62,6 @@ class GemmGroupedV3GatherRS {
       torch::Tensor weight,
       torch::Tensor splits_cpu,
       torch::Tensor routing_idx,
-      c10::optional<torch::Tensor> n_tokens_per_rank,
       c10::optional<torch::Tensor> input_scale,
       c10::optional<torch::Tensor> weight_scale,
       c10::optional<torch::Tensor> output_vec_scale,
@@ -79,7 +74,6 @@ class GemmGroupedV3GatherRS {
       torch::Tensor weight,
       torch::Tensor splits_cpu,
       torch::Tensor routing_idx,
-      c10::optional<torch::Tensor> n_tokens_per_rank,
       c10::optional<torch::Tensor> input_scale,
       c10::optional<torch::Tensor> weight_scale,
       c10::optional<torch::Tensor> output_vec_scale,

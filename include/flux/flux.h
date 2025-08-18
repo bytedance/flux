@@ -462,10 +462,6 @@ tuple_has_elem(cute::tuple<Ts...> const &tup, Elem const &e) {
 /////////////////////////////////////////////////////
 enum class DataTypeEnum : int8_t { Void, FP16, BF16, FP32, E4M3, E5M2, S8, S32 };
 enum class ArchEnum : int { Sm80 = 80, Sm89 = 89, Sm90 = 90 };
-// Use CUDA cores per SM to denote different GPU device, in order to separate GPU with same
-// ArchEnum, e.g. both H20 and H800 use SM90, could replace ArchEnum later. Currently limited to
-// below 4 GPU devices.
-enum class SMCoreEnum : int { L20 = 92, A100 = 108, H20 = 78, H800 = 132 };
 enum class CommOpEnum : int8_t {
   CommNone,                   // gemm only, wo/ communication
   AllGather,                  // tp allgather + gemm, comm not fused into gemm kernel
@@ -473,25 +469,18 @@ enum class CommOpEnum : int8_t {
   GatherRS,                   // MoE tp, gemm + gather + rs
   AGKernel,                   // tp allgather + gemm, comm fused into gemm kernel
   AGScatter,                  // MoE tp, ag + scatter + gemm
-  PreAttnAllToAllTranspose,   // Ulysses SP, for qkv projection, gemm + all2all + transpose
-  PreAttnQKVPackAllToAll,     // Ulysses SP, for qkv_pack projection, qkv_gemm + qkv_all2all
-  PostAttnAllToAllTranspose,  // Ulysses SP, for output projection, all2all + transpose + gemm
-  PostAttnAllToAllOnly,       // Ulysses SP, for output projection, all2all + gemm
 };
 
 enum class GemmLayoutEnum : int8_t { RRR, RCR, RCC };
 enum class ImplEnum : int8_t { GemmV2, GemmV3, GemmGroupedV2, GemmGroupedV3 };
 
 enum class GemmKindEnum : int8_t { GemmDefault, GemmStreamK };
-enum class CommKindEnum : int8_t { IntraNode, InterNode, IntraNodePcie };
+enum class CommKindEnum : int8_t { IntraNode, AcrossNode, IntraNodePcie };
 
 enum class GemmStreamkModeEnum : int8_t { SK, DP };
 enum class GemmRasterOrderEnum : int8_t { Heuristic, AlongM, AlongN };
 
 enum class GemmKernelScheduleEnum : int8_t { Cooperative, PingPong };
-
-enum class GemmBlockScaleMEnum : int8_t { Row, Block };
-enum class GemmBlockScaleNEnum : int8_t { Block, Col };
 
 /////////////////////////////////////////////////////
 // Aliases for constant types
@@ -502,13 +491,9 @@ using _ReduceScatter = cute::C<CommOpEnum::ReduceScatter>;
 using _GatherRS = cute::C<CommOpEnum::GatherRS>;
 using _AGKernel = cute::C<CommOpEnum::AGKernel>;
 using _AGScatter = cute::C<CommOpEnum::AGScatter>;
-using _PreAttnAllToAllTranspose = cute::C<CommOpEnum::PreAttnAllToAllTranspose>;
-using _PreAttnQKVPackAllToAll = cute::C<CommOpEnum::PreAttnQKVPackAllToAll>;
-using _PostAttnAllToAllTranspose = cute::C<CommOpEnum::PostAttnAllToAllTranspose>;
-using _PostAttnAllToAllOnly = cute::C<CommOpEnum::PostAttnAllToAllOnly>;
 
 using _IntraNode = cute::C<CommKindEnum::IntraNode>;
-using _InterNode = cute::C<CommKindEnum::InterNode>;
+using _AcrossNode = cute::C<CommKindEnum::AcrossNode>;
 using _IntraNodePcie = cute::C<CommKindEnum::IntraNodePcie>;
 
 using _GemmDefault = cute::C<GemmKindEnum::GemmDefault>;
@@ -531,11 +516,6 @@ using _Sm80 = cute::C<ArchEnum::Sm80>;
 using _Sm89 = cute::C<ArchEnum::Sm89>;
 using _Sm90 = cute::C<ArchEnum::Sm90>;
 
-using _L20 = cute::C<SMCoreEnum::L20>;
-using _A100 = cute::C<SMCoreEnum::A100>;
-using _H20 = cute::C<SMCoreEnum::H20>;
-using _H800 = cute::C<SMCoreEnum::H800>;
-
 using _GemmV2 = cute::C<ImplEnum::GemmV2>;
 using _GemmV3 = cute::C<ImplEnum::GemmV3>;
 using _GemmGroupedV2 = cute::C<ImplEnum::GemmGroupedV2>;
@@ -552,11 +532,6 @@ using _RasterAlongN = cute::C<GemmRasterOrderEnum::AlongN>;
 
 using _Cooperative = cute::C<GemmKernelScheduleEnum::Cooperative>;
 using _PingPong = cute::C<GemmKernelScheduleEnum::PingPong>;
-
-using _BlockScaleMPerRow = cute::C<GemmBlockScaleMEnum::Row>;
-using _BlockScaleMPerBlock = cute::C<GemmBlockScaleMEnum::Block>;
-using _BlockScaleNPerCol = cute::C<GemmBlockScaleNEnum::Col>;
-using _BlockScaleNPerBlock = cute::C<GemmBlockScaleNEnum::Block>;
 
 struct Auto : cute::tuple<> {};
 struct None : cute::tuple<> {};
@@ -584,10 +559,8 @@ struct is_flux_enum_type {
       cute::is_same_v<U, CommOpEnum> or cute::is_same_v<U, CommKindEnum> or
       cute::is_same_v<U, GemmKindEnum> or cute::is_same_v<U, GemmLayoutEnum> or
       cute::is_same_v<U, DataTypeEnum> or cute::is_same_v<U, ArchEnum> or
-      cute::is_same_v<U, SMCoreEnum> or cute::is_same_v<U, ImplEnum> or
-      cute::is_same_v<U, GemmStreamkModeEnum> or cute::is_same_v<U, GemmRasterOrderEnum> or
-      cute::is_same_v<U, GemmKernelScheduleEnum> or cute::is_same_v<U, GemmBlockScaleMEnum> or
-      cute::is_same_v<U, GemmBlockScaleNEnum>;
+      cute::is_same_v<U, ImplEnum> or cute::is_same_v<U, GemmStreamkModeEnum> or
+      cute::is_same_v<U, GemmRasterOrderEnum> or cute::is_same_v<U, GemmKernelScheduleEnum>;
   using value_type = bool;
 };
 
@@ -721,10 +694,6 @@ enum_to_string(CommOpEnum comm_op) {
     case CommOpEnum::ReduceScatter: return "ReduceScatter";
     case CommOpEnum::GatherRS: return "GatherRS";
     case CommOpEnum::AGScatter: return "AGScatter";
-    case CommOpEnum::PreAttnAllToAllTranspose: return "PreAttnAllToAllTranspose";
-    case CommOpEnum::PreAttnQKVPackAllToAll: return "PreAttnQKVPackAllToAll";
-    case CommOpEnum::PostAttnAllToAllTranspose: return "PostAttnAllToAllTranspose";
-    case CommOpEnum::PostAttnAllToAllOnly: return "PostAttnAllToAllOnly";
     default: return "UNK";
   }
 }
@@ -733,7 +702,7 @@ inline char const *
 enum_to_string(CommKindEnum comm_t) {
   switch (comm_t) {
     case CommKindEnum::IntraNode: return "IntraNode";
-    case CommKindEnum::InterNode: return "InterNode";
+    case CommKindEnum::AcrossNode: return "AcrossNode";
     case CommKindEnum::IntraNodePcie: return "IntraNodePcie";
     default: return "UNK";
   }
@@ -784,17 +753,6 @@ enum_to_string(ArchEnum arch) {
 }
 
 inline char const *
-enum_to_string(SMCoreEnum sm_core) {
-  switch (sm_core) {
-    case SMCoreEnum::L20: return "L20";
-    case SMCoreEnum::A100: return "A100";
-    case SMCoreEnum::H20: return "H20";
-    case SMCoreEnum::H800: return "H800";
-    default: return "UNK";
-  }
-}
-
-inline char const *
 enum_to_string(ImplEnum version) {
   switch (version) {
     case ImplEnum::GemmV2: return "GemmV2";
@@ -829,24 +787,6 @@ enum_to_string(GemmKernelScheduleEnum comm_op) {
   switch (comm_op) {
     case GemmKernelScheduleEnum::Cooperative: return "Cooperative";
     case GemmKernelScheduleEnum::PingPong: return "PingPong";
-    default: return "UNK";
-  }
-}
-
-inline char const *
-enum_to_string(GemmBlockScaleMEnum bsm) {
-  switch (bsm) {
-    case GemmBlockScaleMEnum::Row: return "BlockScaleMPerRow";
-    case GemmBlockScaleMEnum::Block: return "BlockScaleMPerBlock";
-    default: return "UNK";
-  }
-}
-
-inline char const *
-enum_to_string(GemmBlockScaleNEnum bsn) {
-  switch (bsn) {
-    case GemmBlockScaleNEnum::Col: return "BlockScaleNPerCol";
-    case GemmBlockScaleNEnum::Block: return "BlockScaleNPerBlock";
     default: return "UNK";
   }
 }

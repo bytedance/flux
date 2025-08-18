@@ -137,14 +137,13 @@ class GemmGroupedV3AGScatterOp::GemmGroupedV3AGScatterOpImpl {
   auto
   get_gemm_meta(bool fast_accum) const {
     auto arch = get_arch();
-    auto sm_core = get_sm_core();
     auto gemm_layout = _RCR{};
     auto input_dtype = from_torch_dtype(moe_args.input_dtype);
     auto output_dtype = from_torch_dtype(moe_args.output_dtype);
     auto dt_conf = make_gemm_dtype_config(input_dtype, input_dtype, output_dtype, output_dtype);
     auto v3_meta = make_gemm_v3_meta(fast_accum and dt_conf.is_input_fp8());
-    auto meta = make_gemm_meta(
-        dt_conf, arch, sm_core, _AGScatter{}, gemm_layout, _GemmGroupedV3{}, v3_meta);
+    auto meta =
+        make_gemm_meta(dt_conf, arch, _AGScatter{}, gemm_layout, _GemmGroupedV3{}, v3_meta);
     return meta;
   }
 
@@ -176,7 +175,7 @@ class GemmGroupedV3AGScatterOp::GemmGroupedV3AGScatterOpImpl {
         auto shard_input = full_input(_, _, tp_env.rank);
         CUDA_CHECK(cudaMemcpyAsync(
             shard_input.data(),
-            inputs_shard.data_ptr(),
+            inputs_shard.const_data_ptr(),
             shard_input.size(),
             cudaMemcpyDeviceToDevice,
             main_stream));
@@ -302,8 +301,8 @@ class GemmGroupedV3AGScatterOp::GemmGroupedV3AGScatterOpImpl {
           moe_args.topk,
           expert_idx_offset,
           expert_idx_offset + nexperts_ep,
-          static_cast<int32_t const *>(splits_gpu.data_ptr()),
-          static_cast<int32_t const *>(scatter_index.data_ptr()),
+          static_cast<int32_t const *>(splits_gpu.const_data_ptr()),
+          static_cast<int32_t const *>(scatter_index.const_data_ptr()),
           static_cast<int32_t *>(gather_index.data_ptr()),
           total_nrows_ep_gpu,
           stream);
@@ -312,8 +311,8 @@ class GemmGroupedV3AGScatterOp::GemmGroupedV3AGScatterOpImpl {
               static_cast<DistEnv>(tp_env),
               ntokens,
               nexperts_ep,
-              static_cast<int32_t const *>(splits_gpu.data_ptr()) + expert_idx_offset,
-              static_cast<int32_t const *>(gather_index.data_ptr()),
+              static_cast<int32_t const *>(splits_gpu.const_data_ptr()) + expert_idx_offset,
+              static_cast<int32_t const *>(gather_index.const_data_ptr()),
               static_cast<int32_t *>(sorted_splits.data_ptr()),
               static_cast<int32_t *>(sorted_scatter_index.data_ptr()),
               static_cast<int32_t *>(sorted_gather_index.data_ptr()),
@@ -379,13 +378,12 @@ class GemmGroupedV3AGScatterOp::GemmGroupedV3AGScatterOpImpl {
               ptr_offset(weights[i].data_ptr(), problem_param.expert_id * weight_bytes));
           ptr_C.emplace_back(nullptr);
           ptr_D.emplace_back(outputs[i].data_ptr());
-          ptr_gather_A.emplace_back(
-              static_cast<int32_t const *>(ptr_offset(
-                  sorted_gather_index.data_ptr(), 1LL * sizeof(int32_t) * problem_param.m_start)));
-          ptr_scatter_D.emplace_back(
-              static_cast<int32_t const *>(ptr_offset(
-                  sorted_scatter_index.data_ptr(),
-                  1LL * sizeof(int32_t) * problem_param.m_start)));
+          ptr_gather_A.emplace_back(static_cast<int32_t const *>(ptr_offset(
+              sorted_gather_index.const_data_ptr(),
+              1LL * sizeof(int32_t) * problem_param.m_start)));
+          ptr_scatter_D.emplace_back(static_cast<int32_t const *>(ptr_offset(
+              sorted_scatter_index.const_data_ptr(),
+              1LL * sizeof(int32_t) * problem_param.m_start)));
           problem_schedules_arg.emplace_back(problem_param);
 
           if (output_scale.has_value()) {
@@ -438,7 +436,7 @@ class GemmGroupedV3AGScatterOp::GemmGroupedV3AGScatterOpImpl {
       CHECK_2D(allgather_output.value(), ntokens, moe_args.hidden);
       CUDA_CHECK(cudaMemcpyAsync(
           allgather_output->data_ptr(),
-          input_buffer.data_ptr(),
+          input_buffer.const_data_ptr(),
           allgather_output->nbytes(),
           cudaMemcpyDeviceToDevice,
           stream));

@@ -45,7 +45,6 @@ using torch::Tensor;
 class GemmOnly::GemmOnlyImpl {
  private:
   const c10::ScalarType input_dtype;
-  const c10::ScalarType weight_dtype;
   const c10::ScalarType output_dtype;
   const bool transpose_weight;
   const bool use_fp8_gemm;
@@ -56,14 +55,12 @@ class GemmOnly::GemmOnlyImpl {
   auto
   get_gemm_meta(bool has_bias, bool fast_accum) {
     auto arch = get_arch();
-    auto sm_core = get_sm_core();
     auto input_dtype = from_torch_dtype(this->input_dtype);
-    auto weight_dtype = from_torch_dtype(this->weight_dtype);
     auto output_dtype = from_torch_dtype(this->output_dtype);
     DataTypeEnum accum_type = use_s8_gemm ? _S32{}() : _FP32{}();
 
     auto dt_conf = make_gemm_dtype_config(
-        input_dtype, weight_dtype, has_bias ? output_dtype : _Void{}(), output_dtype, accum_type);
+        input_dtype, input_dtype, has_bias ? output_dtype : _Void{}(), output_dtype, accum_type);
 
     // FP8 GEMM RRR layout is not supported, details can be viewed in issue #43
     auto gemm_layout = transpose_weight ? _RRR{}() : _RCR{}();
@@ -76,7 +73,7 @@ class GemmOnly::GemmOnlyImpl {
     } else if (impl == _GemmV3{}) {
       impl_spec = make_gemm_v3_meta(use_fast_accum, /*block_scale=*/false);
     }
-    auto meta = make_gemm_meta(dt_conf, arch, sm_core, _CommNone{}, gemm_layout, impl, impl_spec);
+    auto meta = make_gemm_meta(dt_conf, arch, _CommNone{}, gemm_layout, impl, impl_spec);
     return meta;
   };
 
@@ -89,7 +86,7 @@ class GemmOnly::GemmOnlyImpl {
       c10::optional<torch::Tensor> input_scale,
       c10::optional<torch::Tensor> weight_scale) {
     CHECK_INPUT(input, this->input_dtype);
-    CHECK_INPUT(weight, this->weight_dtype);
+    CHECK_INPUT(weight, this->input_dtype);
     TORCH_CHECK(input.dim() == 2, "input shape is not 2");
     TORCH_CHECK(weight.dim() == 2, "weight dim is not 2");
     int32_t m = input.size(0);
@@ -100,11 +97,7 @@ class GemmOnly::GemmOnlyImpl {
       CHECK_INPUT(bias.value(), this->output_dtype);
       FLUX_CHECK_EQ(bias->dim(), 2);
       if (use_fp8_gemm) {
-        if ((int)get_arch() >= (int)_Sm90{}()) {
-          FLUX_CHECK_EQ(m, bias->size(0));
-        } else {
-          FLUX_CHECK_EQ(1, bias->size(0));
-        };
+        FLUX_CHECK_EQ(1, bias->size(0));
       } else if (use_s8_gemm) {
         // s8 gemm only, bias'shape (m, n)
         if (this->output_dtype == c10::ScalarType::Int) {
@@ -192,9 +185,8 @@ class GemmOnly::GemmOnlyImpl {
           .m = m,
           .n = n,
           .k = k,
-          .l = 1,
           .alpha = 1.0,
-          .beta = (bias.has_value() && ((int)get_arch() >= (int)_Sm90{}())) ? 1.0f : 0.0f,
+          .beta = 0.0,
           .A = input.data_ptr(),
           .B = weight.data_ptr(),
           .C = nullptr,
@@ -265,15 +257,13 @@ class GemmOnly::GemmOnlyImpl {
  public:
   GemmOnlyImpl(
       c10::ScalarType input_dtype,
-      c10::ScalarType weight_dtype,
       c10::ScalarType output_dtype,
       bool transpose_weight,
       bool use_fp8_gemm)
       : input_dtype(input_dtype),
-        weight_dtype(weight_dtype),
         output_dtype(output_dtype),
         transpose_weight(transpose_weight),
-        use_fp8_gemm(is_fp8_torch_dtype(input_dtype) && use_fp8_gemm),
+        use_fp8_gemm(c10::isFloat8Type(input_dtype) && use_fp8_gemm),
         use_s8_gemm(is_s8_dtype(from_torch_dtype(input_dtype))) {
     FLUX_CHECK(!(transpose_weight == true && use_fp8_gemm == true))
         << "FP8 GEMM does not support transpose weight";
@@ -367,12 +357,11 @@ class GemmOnly::GemmOnlyImpl {
 
 GemmOnly::GemmOnly(
     c10::ScalarType input_dtype,
-    c10::ScalarType weight_dtype,
     c10::ScalarType output_dtype,
     bool transpose_weight,
     bool use_fp8_gemm)
-    : impl_(new GemmOnly::GemmOnlyImpl(
-          input_dtype, weight_dtype, output_dtype, transpose_weight, use_fp8_gemm)) {}
+    : impl_(
+          new GemmOnly::GemmOnlyImpl(input_dtype, output_dtype, transpose_weight, use_fp8_gemm)) {}
 
 GemmOnly::~GemmOnly() { delete impl_; }
 
