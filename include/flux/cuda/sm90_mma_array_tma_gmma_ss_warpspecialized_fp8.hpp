@@ -93,7 +93,7 @@ template <
   class SmemCopyAtomB_,
   class TransformB_>
 struct CollectiveMma<
-    MainloopSm90ArrayTmaGmmaWarpSpecializedFP8<Stages, ClusterShape, KernelSchedule>,
+    FluxMainloopSm90ArrayTmaGmmaWarpSpecializedFP8<Stages, ClusterShape, KernelSchedule>,
     TileShape_,
     ElementA_,
     StrideA_,
@@ -112,7 +112,7 @@ struct CollectiveMma<
   //
   // Type Aliases
   //
-  using DispatchPolicy = MainloopSm90ArrayTmaGmmaWarpSpecializedFP8<Stages, ClusterShape, KernelSchedule>;
+  using DispatchPolicy = FluxMainloopSm90ArrayTmaGmmaWarpSpecializedFP8<Stages, ClusterShape, KernelSchedule>;
   using TileShape = TileShape_;
   using ElementA = ElementA_;
   using StrideA = StrideA_;
@@ -785,6 +785,16 @@ struct CollectiveMma<
     cute::tma_descriptor_fence_acquire(get<1>(input_tensormaps));
   }
 
+  template <class InputTensors, class ProblemShape_MNKL>
+  CUTLASS_DEVICE
+  InputTensors
+  tensors_perform_update(
+      InputTensors const& input_tensors,
+      [[maybe_unused]] Params const& mainloop_params,
+      [[maybe_unused]] ProblemShape_MNKL problem_shape_mnkl,
+      [[maybe_unused]] int32_t next_batch) {
+    return input_tensors;
+  }
 
 };
 

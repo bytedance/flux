@@ -703,8 +703,8 @@ struct TestbedRunner {
 
     bool fast_accum = (dt_conf.is_input_fp8() ? _True{} : _False{}) && kUseFastAccum;
     auto v2_meta = make_gemm_v2_meta(fast_accum);
-    auto meta =
-        make_gemm_meta(dt_conf, get_arch(), _CommNone{}, cute::C<layout>{}, _GemmV2{}(), v2_meta);
+    auto meta = make_gemm_meta(
+        dt_conf, get_arch(), get_sm_core(), _CommNone{}, cute::C<layout>{}, _GemmV2{}(), v2_meta);
 
     auto rt_conf = make_runtime_config(m, n, k);
     auto hparams = OpRegistry::instance().get_hparams(meta, rt_conf);
@@ -715,6 +715,7 @@ struct TestbedRunner {
         m,
         n,
         k,
+        1,
         options.alpha,
         options.beta,
         tensor_A.device_data(),       // input

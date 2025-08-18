@@ -10,6 +10,7 @@ TP_GROUP = DIST_ENV.get_world()
 EP_GROUP = None
 torch.cuda.set_device(DIST_ENV.LOCAL_RANK)
 
+
 def init_ep_group(ep_size: int):
     global EP_GROUP
     ffn_tp_size = TP_GROUP.size() // ep_size
@@ -25,11 +26,13 @@ def init_ep_group(ep_size: int):
         if DIST_ENV.RANK in ranks:
             EP_GROUP = group
 
+
 flux.init_flux_shm(TP_GROUP)
 # The line below indicates EP=4
 init_ep_group(ep_size=4)
 
-class MoeMlp1Ctx():
+
+class MoeMlp1Ctx:
     naive_impl = True
 
     h = 4096
@@ -62,14 +65,22 @@ class MoeMlp1Ctx():
     nrows_ep = torch.sum(splits_cpu[nexperts_ep * ep_rank : nexperts_ep * (ep_rank + 1)])
 
     # Dummy inputs and weights
-    inputs_shard = (torch.rand((ntokens_shard, h), dtype=data_type, device=device) * 0.01)
-    weight0 = (torch.rand((nexperts_ep, ffn_size_shard, h), dtype=data_type, device=device,) * 0.01)
+    inputs_shard = torch.rand((ntokens_shard, h), dtype=data_type, device=device) * 0.01
+    weight0 = (
+        torch.rand(
+            (nexperts_ep, ffn_size_shard, h),
+            dtype=data_type,
+            device=device,
+        )
+        * 0.01
+    )
     weight1 = torch.rand((nexperts_ep, h, ffn_size_shard), dtype=data_type, device=device) - 0.5
 
     # Buffers
-    inputs = (torch.rand((ntokens, h), dtype=data_type, device=device))
+    inputs = torch.rand((ntokens, h), dtype=data_type, device=device)
     scatter_inputs = torch.zeros((ntokens * topk, h), dtype=data_type, device=device)
     intermediate_output = torch.zeros((nrows_ep, ffn_size_shard), dtype=data_type, device=device)
+
 
 class MoE_layer_flux(torch.nn.Module):
     def __init__(self, ctx):
@@ -86,7 +97,17 @@ class MoE_layer_flux(torch.nn.Module):
             output_dtype=ctx.data_type,
         )
         self.flux_ag_op = flux.GemmGroupedV3AGScatter(tp_env=tp_env, moe_args=moe_args)
-        self.flux_rs_op = flux.GemmGroupedV3GatherRS(ctx.nexperts, ctx.ntokens * ctx.topk, ctx.h, ctx.topk, RANK, WORLD_SIZE, ctx.ffn_tp_size, ctx.ep_size, 1)
+        self.flux_rs_op = flux.GemmGroupedV3GatherRS(
+            ctx.nexperts,
+            ctx.ntokens * ctx.topk,
+            ctx.h,
+            ctx.topk,
+            RANK,
+            WORLD_SIZE,
+            ctx.ffn_tp_size,
+            ctx.ep_size,
+            1,
+        )
 
     def forward(self):
         # Token routing is omitted
@@ -108,6 +129,7 @@ class MoE_layer_flux(torch.nn.Module):
             routing_idx=self.ctx.scatter_index.view(-1),
         )
         return mlp_output
+
 
 if __name__ == "__main__":
     moe_ctx = MoeMlp1Ctx()

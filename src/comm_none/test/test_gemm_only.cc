@@ -33,11 +33,12 @@ void
 run_gemm_only(int m, int n, int k) {
   cudaSetDevice(0);
   auto arch = get_arch();
-
+  auto sm_core = get_sm_core();
   auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(DType{}));
   auto meta = make_gemm_meta(
       dt_conf,
       arch,
+      sm_core,
       _CommNone{},
       _RCR{},
       ((int)arch < (int)_Sm90{}()) ? _GemmV2{}() : _GemmV3{}());

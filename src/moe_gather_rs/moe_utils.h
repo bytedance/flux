@@ -25,10 +25,25 @@ void ep_index_filter_impl(
     int32_t *pos_filtered,
     int32_t *token_idx_filtered,
     int32_t *total_token_acc,
-    int32_t M,
+    int32_t *ep_n_token_cum_sum,
+    int32_t *splits_gpu_cum_sum,
+    int32_t *reduce_token_idx,
+    int32_t max_token_per_rank,
     int32_t topk,
-    int32_t expert_rank_start,
-    int32_t expert_rank_end,
+    int32_t total_num_experts,
+    int32_t world_size,
+    int32_t ep_world_size,
+    int32_t tp_world_size,
+    int32_t cur_rank,
+    cudaStream_t stream);
+
+void ep_topk_reduce_impl(
+    void *input,
+    void *output,
+    int32_t *reduce_token_idx,
+    int M,
+    int N,
+    int topk,
     cudaStream_t stream);
 
 void topk_reduce_scatter_impl(

@@ -80,7 +80,7 @@ template <
     class StrideMNL,
     class ThreadblockShape,
     bool FuseReduction>
-struct VisitorAuxStoreScatterAccrossNode {
+struct VisitorAuxStoreScatterInterNode {
   struct Arguments {
     Element **scatter_ptr_aux;
     StrideMNL dAux = {};
@@ -129,10 +129,10 @@ struct VisitorAuxStoreScatterAccrossNode {
   static int constexpr VecLength = sizeof(VecType) / sizeof(Element);
 
   CUTLASS_HOST_DEVICE
-  VisitorAuxStoreScatterAccrossNode() {}
+  VisitorAuxStoreScatterInterNode() {}
 
   CUTLASS_HOST_DEVICE
-  VisitorAuxStoreScatterAccrossNode(Params const &params, SharedStorage const &shared_storage)
+  VisitorAuxStoreScatterInterNode(Params const &params, SharedStorage const &shared_storage)
       : params_ptr(&params) {
     // if constexpr (std::is_same_v<Element, cutlass::bfloat16_t> and FuseReduction == true) {
     //   static_assert(vec_bits == 16);

@@ -15,6 +15,12 @@ enum Arch {
   Sm89 = 89;
   Sm90 = 90;
 };
+enum SMCore {
+  L20 = 92;
+  A100 = 108;
+  H20 = 78;
+  H800 = 132;
+};
 enum CommOp {
   CommNone = 0;       // gemm only, wo/ communication
   AllGather = 1;      // tp allgather + gemm, comm not fused into gemm kernel
@@ -43,7 +49,7 @@ enum GemmKind {
 };
 enum CommKind {
   IntraNode = 0;
-  AcrossNode = 1;
+  InterNode = 1;
   IntraNodePcie = 2;
 };
 enum GemmStreamkMode {
@@ -59,6 +65,13 @@ enum GemmKernelSchedule {
   Cooperative = 0;
   PingPong = 1;
 };
+enum GemmBlockScaleM {
+  Row = 0;
+}
+enum GemmBlockScaleN {
+  Block = 0;
+  Col = 1;
+}
 
 message GemmMeta {
   message DataTypeConfig {
@@ -83,16 +96,17 @@ message GemmMeta {
   }
   required DataTypeConfig dtype = 1;
   required Arch arch = 2;
-  required CommOp comm_op = 3;
-  required GemmLayout gemm_layout = 4;
-  required Impl impl = 5;
+  required SMCore sm_core = 3;
+  required CommOp comm_op = 4;
+  required GemmLayout gemm_layout = 5;
+  required Impl impl = 6;
   oneof impl_spec {
-    GemmV2Meta gemm_v2_meta = 6;
-    GemmV3Meta gemm_v3_meta = 7;
+    GemmV2Meta gemm_v2_meta = 7;
+    GemmV3Meta gemm_v3_meta = 8;
   }
   oneof comm_spec {
-    ReduceScatterMeta reduce_scatter_meta = 8;
-    GatherRSMeta gather_rs_meta = 9;
+    ReduceScatterMeta reduce_scatter_meta = 9;
+    GatherRSMeta gather_rs_meta = 10;
   }
 }
 
@@ -124,10 +138,12 @@ message GemmHparams {
   message GemmV3HParams {
     repeated int32 cluster_shape = 1;
     optional GemmKernelSchedule kernel_schedule = 2 [default = Cooperative];
+    optional GemmBlockScaleM blockscale_m = 3 [default = Row];
+    optional GemmBlockScaleN blockscale_n = 4 [default = Block];
   }
   message GatherRSHParams {
     optional int32 gather_rs_ctas = 1 [default = 20];
-    optional int32 n_dim = 2 [default = 1024];
+    optional int32 n_dim_per_split = 2 [default = 1024];
   }
   oneof impl_spec {
     GemmV2HParams gemm_v2_hparams = 1;

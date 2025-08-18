@@ -15,6 +15,19 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <cutlass/arch/memory.h>
+#include <cutlass/barrier.h>
+#include <cutlass/numeric_conversion.h>
+#include <sys/types.h>
+
+#include <cute/container/array_aligned.hpp>
+#include <cute/layout.hpp>
+#include <cute/numeric/int.hpp>
+#include <cute/pointer.hpp>
+#include <cute/tensor.hpp>
+#include <cute/underscore.hpp>
+#include <type_traits>
+
 #include "flux/args/moe_gather_rs.h"
 #include "flux/cuda/cuda_common.h"
 #include "flux/cuda/cuda_common_device.hpp"
@@ -22,17 +35,6 @@
 #include "flux/cuda/system_barrier.hpp"
 #include "flux/flux.h"
 #include "moe_gather_rs/topk_gather_rs.hpp"
-#include <cute/container/array_aligned.hpp>
-#include <cute/numeric/int.hpp>
-#include <type_traits>
-#include <cutlass/arch/memory.h>
-#include <cutlass/barrier.h>
-#include <cutlass/numeric_conversion.h>
-#include <sys/types.h>
-#include <cute/underscore.hpp>
-#include <cute/layout.hpp>
-#include <cute/pointer.hpp>
-#include <cute/tensor.hpp>
 
 namespace bytedance::flux {
 namespace {
@@ -118,12 +120,6 @@ loadPack(void *ptr) {
       : "=r"(data.x), "=r"(data.y), "=r"(data.z), "=r"(data.w)
       : "l"(ptr), "r"(data.x), "r"(data.y), "r"(data.z), "r"(data.w));
   return data;
-}
-
-CUTLASS_DEVICE void
-atomic_store_relax_sys(int *ptr, int value) {
-  atomic_ref_sys<int> ref(*ptr);
-  ref.store(value, cuda::memory_order_relaxed);
 }
 
 template <

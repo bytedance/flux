@@ -423,16 +423,35 @@ default_kernel_schedule(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
   using ElementB = decltype(to_cutlass_element(dt_conf.b()));
   constexpr bool is_input_fp8 = builder::detail::is_input_fp8<ElementA, ElementB>();
   if constexpr (is_grouped_gemm_impl(meta.impl())) {  // Group GEMM
+    if constexpr (v3_meta.block_scale()) {            // Blocl/Group-wise Scaled GEMM
+      return make_declval<cute::conditional_t<
+          v3_hparams.blockscale_M() == _BlockScaleMPerRow{},
+          cute::conditional_t<
+              v3_hparams.blockscale_N() == _BlockScaleNPerCol{},
+              cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperativeFP8BlockScaledAccum<1, 1>,
+              cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperativeFP8BlockScaledAccum<1, 0>>,
+          cute::conditional_t<
+              v3_hparams.blockscale_N() == _BlockScaleNPerBlock{},
+              cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperativeFP8BlockScaledAccum<0, 0>,
+              cutlass::gemm::
+                  KernelPtrArrayTmaWarpSpecializedCooperativeFP8BlockScaledAccum<0, 1>>>>();
+    } else {
+      return make_declval<cute::conditional_t<
+          is_input_fp8,
+          cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperativeFP8FastAccum,
+          cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperative>>();
+    }
+  } else if constexpr (is_input_fp8 and v3_meta.block_scale()) {  // Blocl/Group-wise Scaled GEMM
     return make_declval<cute::conditional_t<
-        is_input_fp8,
-        cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperativeFP8FastAccum,
-        cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperative>>();
-  } else if constexpr (is_input_fp8 and v3_meta.block_scale()) {  // Groupwise Scaled GEMM
-    // TODO(wenlei.bao): add hparams with ScaleGranularityM
-    return make_declval<cute::conditional_t<
-        v3_meta.fast_accum(),
-        cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum<>,
-        cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum<1>>>();
+        v3_hparams.blockscale_M() == _BlockScaleMPerRow{},
+        cute::conditional_t<
+            v3_hparams.blockscale_N() == _BlockScaleNPerCol{},
+            cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum<1, 1>,
+            cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum<1, 0>>,
+        cute::conditional_t<
+            v3_hparams.blockscale_N() == _BlockScaleNPerBlock{},
+            cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum<0, 0>,
+            cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum<0, 1>>>>();
   } else {  // Dense GEMM
     return make_declval<cute::conditional_t<
         is_input_fp8 and v3_meta.fast_accum(),
@@ -529,7 +548,7 @@ default_sm80_epilogue_params(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
   auto select_smem_layout = []() {
     auto meta = GemmMeta<Ts...>{};
     if constexpr (meta.comm_op() == _ReduceScatter{}) {
-      if constexpr (to_reduce_scatter_meta(meta.comm_spec()).comm_kind() == _AcrossNode{}) {
+      if constexpr (to_reduce_scatter_meta(meta.comm_spec()).comm_kind() == _InterNode{}) {
         return make_declval<PreSwizzleLayout>();
       } else {
         return make_declval<SwizzledSmemLayout>();
@@ -587,15 +606,19 @@ default_sm90_epilogue_params(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
   using ElementCNonVoid = decltype(base_params.element_c_unvoid());
   using LayoutCNonVoid = decltype(base_params.layout_c_unvoid());
   using ElementAccumulator = decltype(base_params.element_accumulator());
-
   using ElementBlockScale = cute::conditional_t<v3_meta.block_scale(), ElementAccumulator, float>;
+
+  static constexpr auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
+  static constexpr bool is_fp8_gemm = is_fp8_dtype(dt_conf.a()) && is_fp8_dtype(dt_conf.b());
 
   using EpilogueSchedule = decltype(default_epilogue_schedule(meta, hparams));
 
-  using ElementCompute = cute::conditional_t<v3_meta.block_scale(), float, ElementD>;
+  using ElementCompute =
+      cute::conditional_t<(v3_meta.block_scale() || is_fp8_gemm), float, ElementD>;
 
+  using EpilogueSchedule = decltype(default_epilogue_schedule(meta, hparams));
   using EpilogueFusion = cute::conditional_t<
-      v3_meta.block_scale(),
+      (v3_meta.block_scale() || is_fp8_gemm),
       cutlass::epilogue::fusion::ScaledLinCombPerRowBiasEltActAmaxAux<
           LayoutC,
           cutlass::epilogue::thread::Identity,

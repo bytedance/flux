@@ -102,6 +102,7 @@ struct GemmFP8Arguments {
   int m;
   int n;
   int k;
+  int l;
   float alpha;
   float beta;
   void const *A;  // m * k
@@ -109,7 +110,7 @@ struct GemmFP8Arguments {
   void const *C;  // m * n
   void *Aux;      // m * n
   void *D;        // output: m * n
-  void *Vector;   // bias: 1 * n
+  void *Vector;   // bias: 1 * n or m * n (for sm90)
   float *abs_max_Aux;
   float *abs_max_D;
   // scaling tensors
@@ -118,6 +119,15 @@ struct GemmFP8Arguments {
   float const *scaleC;
   float const *scaleD;    // require if D is fp8
   float const *scaleAux;  // require if Aux is fp8
+  // sm90 fp8 extra args
+  float const *alpha_ptr = nullptr;
+  float const *beta_ptr = nullptr;
+  float scale_a = 1.0f;
+  float scale_b = 1.0f;
+  float scale_c = 1.0f;
+  float scale_d = 1.0f;
+  float scale_aux = 1.0f;
+  int swizzle = 1;
 };
 
 struct GemmGroupedV2Arguments {
@@ -154,6 +164,23 @@ struct GemmGroupedV3Arguments {
   void **ptr_D;
   float **ptr_alpha = nullptr;
   int sm_margin = 0;
+};
+
+struct BlockScaleGroupedGemmV3Arguments {
+  // gemm args
+  int problem_count;
+  cute::tuple<int, int, int> *problem_sizes;
+  void const **ptr_A;
+  void const **ptr_B;
+  void const **ptr_C;
+  void **ptr_D;
+  float **ptr_alpha = nullptr;
+  void const **ptr_blockscale_A;
+  void const **ptr_blockscale_B;
+
+  // epilogue args
+  float alpha = 1.0f;
+  float beta = 0.0f;
 };
 
 }  // namespace bytedance::flux

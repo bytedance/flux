@@ -64,7 +64,7 @@ template <
     int Stages_,
     class ClusterShape_ = Shape<_1, _1, _1>,
     class KernelSchedule = KernelPtrArrayTmaWarpSpecializedCooperative>
-struct MainloopSm90ArrayTmaGmmaWarpSpecializedFP8 {
+struct FluxMainloopSm90ArrayTmaGmmaWarpSpecializedFP8 {
   constexpr static int Stages = Stages_;
   using ClusterShape = ClusterShape_;
   using ArchTag = arch::Sm90;

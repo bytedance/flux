@@ -28,6 +28,7 @@ namespace flux {
 template <class GemmMetaT, class GemmHParamsT>
 struct GemmV3BaseKernel {
   using ProblemShape = cute::tuple<int, int, int>;
+  using ProblemShapeMNKL = cute::tuple<int, int, int, int>;
   static constexpr auto meta = to_gemm_meta(GemmMetaT{});
   static constexpr auto hparams = to_gemm_hparams(GemmHParamsT{});
   static constexpr auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
