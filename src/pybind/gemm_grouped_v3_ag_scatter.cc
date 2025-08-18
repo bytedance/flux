@@ -15,9 +15,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "moe_ag_scatter/ths_op/gemm_grouped_v3_ag_scatter.h"
-
 #include "flux/ths_op/ths_pybind.h"
+#include "moe_ag_scatter/ths_op/gemm_grouped_v3_ag_scatter.h"
 
 namespace bytedance::flux::ths_op {
 

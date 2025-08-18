@@ -16,22 +16,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "flux/ths_op/ths_op.h"
-
-#include <c10/cuda/CUDAStream.h>
-
-#include <stdexcept>
-
-#include "a2a_transpose_gemm/ths_op/all_to_all_types.h"
-#include "coll/ths_op/all_gather_types.h"
-#include "coll/ths_op/reduce_scatter_op.h"
-#include "flux/cuda/moe_utils.h"
 #include "flux/ths_op/flux_shm.h"
 #include "flux/ths_op/ths_pybind.h"
-#include "flux/ths_op/util.h"
-#include "gemm_a2a_transpose/ths_op/pre_attn_a2a_types.h"
-#ifdef FLUX_SHM_USE_NVSHMEM
-#include <nvshmem.h>
-#endif
+#include "coll/ths_op/all_gather_types.h"
+#include "coll/ths_op/reduce_scatter_op.h"
+#include <c10/cuda/CUDAStream.h>
+#include "flux/cuda/moe_utils.h"
 
 namespace bytedance::flux::ths_op {
 
@@ -178,29 +168,6 @@ init_coll_arguments(py::module &m) {
   m.def("get_default_rs_ring_mode", []() -> RingMode { return get_default_rs_ring_mode(); });
 }
 
-void
-init_a2agemm_arguments(py::module &m) {
-  py::enum_<A2ARingMode>(m, "A2ARingMode", py::arithmetic())
-      .value("All2All", A2ARingMode::All2All)
-      .value("Ring1D", A2ARingMode::Ring1D)
-      .value("Ring2D", A2ARingMode::Ring2D);
-  py::class_<AllToAllOptionWithOptional>(m, "AllToAllOption")
-      .def(py::init([]() { return new AllToAllOptionWithOptional(); }))
-      .def_readwrite("input_buffer_copied", &AllToAllOptionWithOptional::input_buffer_copied)
-      .def_readwrite("use_cuda_core", &AllToAllOptionWithOptional::use_cuda_core)
-      .def_readwrite("fuse_sync", &AllToAllOptionWithOptional::fuse_sync)
-      .def_readwrite("use_read", &AllToAllOptionWithOptional::use_read)
-      .def_readwrite("skip_barrier", &AllToAllOptionWithOptional::skip_barrier)
-      .def_readwrite("mode", &AllToAllOptionWithOptional::mode);
-  m.def("get_default_a2a_ring_mode", []() -> A2ARingMode { return get_default_a2a_ring_mode(); });
-}
-
-void
-init_gemm_a2a_arguments(py::module &m) {
-  py::enum_<PreAttnAllToAllCommOp>(m, "PreAttnAllToAllCommOp", py::arithmetic())
-      .value("A2ATranspose", PreAttnAllToAllCommOp::A2ATranspose)
-      .value("QKVPackA2A", PreAttnAllToAllCommOp::QKVPackA2A);
-}
 
 PYBIND11_MODULE(FLUX_TORCH_EXTENSION_NAME, m) {
   m.def("bitwise_check", &bitwise_check);
@@ -215,92 +182,11 @@ PYBIND11_MODULE(FLUX_TORCH_EXTENSION_NAME, m) {
           const std::vector<int64_t> &,
           c10::ScalarType,
           c10::intrusive_ptr<c10d::ProcessGroup>,
-          bool,
           bool>(&flux_create_tensor_list),
       py::arg("shape"),
       py::arg("dtype"),
       py::arg("pg"),
-      py::arg("ring_mode") = false,
-      py::arg("init_zero") = false);
-
-#ifdef FLUX_SHM_USE_NVSHMEM
-  // some nvshmem bindings
-  py::class_<nvshmem_team_config_t>(m, "nvshmem_team_config_t");
-  m.def("_nvshmem_team_translate_pe", [](int src_team, int src_pe, int dest_team) {
-    return nvshmem_team_translate_pe((nvshmem_team_t)src_team, src_pe, (nvshmem_team_t)dest_team);
-  });
-  m.def("_nvshmem_team_get_config", [](int team) {
-    nvshmem_team_config_t config;
-    nvshmem_team_get_config((nvshmem_team_t)team, &config);
-    return config;
-  });  // leave nvshmem_team_config_t opaque to python
-  m.def(
-      "_nvshmem_team_split_strided",
-      [](int parent_team,
-         int PE_start,
-         int PE_stride,
-         int PE_size,
-         const nvshmem_team_config_t *config,
-         long config_mask) {
-        nvshmem_team_t team_new;
-        int rtn = nvshmem_team_split_strided(
-            (nvshmem_team_t)parent_team,
-            PE_start,
-            PE_stride,
-            PE_size,
-            config,
-            config_mask,
-            &team_new);
-        if (rtn) {
-          throw std::runtime_error("nvshmem_team_split_strided failed");
-        }
-        return team_new;
-      },
-      py::arg("parent_team"),
-      py::arg("PE_start"),
-      py::arg("PE_stride"),
-      py::arg("PE_size"),
-      py::arg("config") = nullptr,
-      py::arg("config_mask") = 0);
-  m.def(
-      "_nvshmem_team_split_2d",
-      [](int parent_team,
-         int xrange,
-         const nvshmem_team_config_t *xaxis_config,
-         long xaxis_mask,
-         const nvshmem_team_config_t *yaxis_config,
-         long yaxis_mask) {
-        nvshmem_team_t xaxis_team;
-        nvshmem_team_t yaxis_team;
-        auto rtn = nvshmem_team_split_2d(
-            (nvshmem_team_t)parent_team,
-            xrange,
-            xaxis_config,
-            xaxis_mask,
-            &xaxis_team,
-            yaxis_config,
-            yaxis_mask,
-            &yaxis_team);
-        if (rtn) {
-          throw std::runtime_error("nvshmem_team_split_2d failed");
-        }
-        return std::tuple(xaxis_team, yaxis_team);
-      },
-      py::arg("parent_team"),
-      py::arg("xrange"),
-      py::arg("xaxis_config") = nullptr,
-      py::arg("xaxis_mask") = 0,
-      py::arg("yaxis_config") = nullptr,
-      py::arg("yaxis_mask") = 0);
-
-  m.def("_nvshmem_team_destroy", [](int team) { nvshmem_team_destroy((nvshmem_team_t)team); });
-
-  m.def("_nvshmem_team_npes", [](int team) { return nvshmem_team_n_pes((nvshmem_team_t)team); });
-
-  m.def("_nvshmem_team_my_pe", [](int team) { return nvshmem_team_my_pe((nvshmem_team_t)team); });
-
-#endif
-
+      py::arg("ring_mode") = false);
   using GroupBarrierCls = TorchClassWrapper<GroupBarrier>;
   py::class_<GroupBarrierCls>(m, "GroupBarrier")
       .def(
@@ -325,8 +211,6 @@ PYBIND11_MODULE(FLUX_TORCH_EXTENSION_NAME, m) {
   init_dist_env_tp_with_ep(m);
   init_moe_arguments(m);
   init_coll_arguments(m);
-  init_a2agemm_arguments(m);
-  init_gemm_a2a_arguments(m);
 
   // Initialize ops in registry
   ThsOpsInitRegistry::instance().initialize_all(m);

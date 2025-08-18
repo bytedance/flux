@@ -80,40 +80,22 @@ struct GemmV3HParams : public FluxNamedTupleBase<GemmV3HParams, Ts...> {
   using Base::Base;
   static constexpr char const *Name = "GemmV3HParams";
   static constexpr char const *LowerName = "gemm_v3_hparams";
-  static constexpr std::array<char const *, 4> Fields = {
-      "cluster_shape", "kernel_schedule", "blockscale_M", "blockscale_N"};
+  static constexpr std::array<char const *, 2> Fields = {"cluster_shape", "kernel_schedule"};
 
   FLUX_NAMED_TUPLE_DEFINE_FIELD(cluster_shape, 0)
   FLUX_NAMED_TUPLE_DEFINE_FIELD(kernel_schedule, 1)
-  FLUX_NAMED_TUPLE_DEFINE_FIELD(blockscale_M, 2)
-  FLUX_NAMED_TUPLE_DEFINE_FIELD(blockscale_N, 3)
 
-  friend GemmV3HParams<
-      UnifiedTileShape,
-      GemmKernelScheduleEnum,
-      GemmBlockScaleMEnum,
-      GemmBlockScaleNEnum>
+  friend GemmV3HParams<UnifiedTileShape, GemmKernelScheduleEnum>
   unify_type(GemmV3HParams const &obj) {
-    return cute::make_tuple(
-        unify_type(obj.cluster_shape()),
-        unify_type(obj.kernel_schedule()),
-        unify_type(obj.blockscale_M()),
-        unify_type(obj.blockscale_N()));
+    return cute::make_tuple(unify_type(obj.cluster_shape()), unify_type(obj.kernel_schedule()));
   }
 };
 
-template <
-    class ClusterShape,
-    class KernelSchedule = _Cooperative,
-    class BlockScaleM = _BlockScaleMPerRow,
-    class BlockScaleN = _BlockScaleNPerBlock>
-constexpr GemmV3HParams<ClusterShape, KernelSchedule, BlockScaleM, BlockScaleN>
+template <class ClusterShape, class KernelSchedule = _Cooperative>
+constexpr GemmV3HParams<ClusterShape, KernelSchedule>
 make_gemm_v3_hparams(
-    ClusterShape const &cluster_shape,
-    KernelSchedule const &kernel_schedule = _Cooperative{},
-    BlockScaleM const &blockscale_M = _BlockScaleMPerRow{},
-    BlockScaleN const &blockscale_N = _BlockScaleNPerBlock{}) {
-  return {cute::make_tuple(cluster_shape, kernel_schedule, blockscale_M, blockscale_N)};
+    ClusterShape const &cluster_shape, KernelSchedule const &kernel_schedule = _Cooperative{}) {
+  return {cute::make_tuple(cluster_shape, kernel_schedule)};
 }
 
 template <class... Ts>
@@ -134,22 +116,22 @@ struct GatherRSHParams : FluxNamedTupleBase<GatherRSHParams, Ts...> {
 
   static constexpr char const *Name = "GatherRSHParams";
   static constexpr char const *LowerName = "gather_rs_hparams";
-  static constexpr std::array<char const *, 2> Fields = {"gather_rs_ctas", "n_dim_per_split"};
+  static constexpr std::array<char const *, 2> Fields = {"gather_rs_ctas", "n_dim"};
 
   FLUX_NAMED_TUPLE_DEFINE_FIELD(gather_rs_ctas, 0)
-  FLUX_NAMED_TUPLE_DEFINE_FIELD(n_dim_per_split, 1)
+  FLUX_NAMED_TUPLE_DEFINE_FIELD(n_dim, 1)
 
   friend GatherRSHParams<int, int>
   unify_type(GatherRSHParams const &obj) {
-    return cute::make_tuple(int(obj.gather_rs_ctas()), int(obj.n_dim_per_split()));
+    return cute::make_tuple(int(obj.gather_rs_ctas()), int(obj.n_dim()));
   }
 };
 
-template <class GatherRSCTAs = cute::Int<20>, class NDIM_PER_S = cute::_1024>
-constexpr GatherRSHParams<GatherRSCTAs, NDIM_PER_S>
+template <class GatherRSCTAs = cute::Int<20>, class NDIM = cute::_1024>
+constexpr GatherRSHParams<GatherRSCTAs, NDIM>
 make_gather_rs_hparams(
-    GatherRSCTAs const &nctas = cute::Int<20>{}, NDIM_PER_S ndim_per_s = cute::_1024{}) {
-  return {cute::make_tuple(nctas, ndim_per_s)};
+    GatherRSCTAs const &nctas = cute::Int<20>{}, NDIM ndim = cute::_1024{}) {
+  return {cute::make_tuple(nctas, ndim)};
 }
 
 template <class... Ts>
@@ -298,11 +280,7 @@ auto_impl_spec(GemmMeta<Ts...> meta) {
     if constexpr (meta.arch() == _Sm80{}) {
       return make_gemm_v3_hparams(Shape<_1, _1, _1>{});
     } else if constexpr (meta.arch() == _Sm90{}) {
-      if constexpr (to_gemm_v3_meta(meta.impl_spec()).block_scale()) {
-        return make_gemm_v3_hparams(Shape<_1, _2, _1>{});
-      } else {
-        return make_gemm_v3_hparams(Shape<_2, _1, _1>{});
-      }
+      return make_gemm_v3_hparams(Shape<_2, _1, _1>{});
     }
   } else {
     static_assert(cutlass::detail::dependent_false<decltype(meta.impl())>, "unsupported impl");
@@ -584,18 +562,6 @@ filter_kernel_schedule(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
     }
   }
   return true;
-}
-
-template <class... Ts, class... Us>
-constexpr bool
-filter_blockscale_granularity(GemmMeta<Ts...> meta, GemmHParams<Us...> hparams) {
-  auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
-  if constexpr (meta.impl() == _GemmV3{} and meta.impl_spec().blockscale()) {
-    auto v3_hparams = to_gemm_v3_hparams(hparams.impl_spec());
-    // TODO: add filter logic for blockscale gemm
-    return v3_hparams.blockscale_M() == _BlockScaleMPerRow{} and
-           v3_hparams.blockscale_N() == _BlockScaleNPerBlock{};
-  }
 }
 
 }  // namespace detail

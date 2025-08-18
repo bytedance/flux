@@ -48,11 +48,9 @@ run_rs(int m, int n, int k, int tp, int nnodes) {
 
   k = k / tp;
   auto arch = get_arch();
-  auto sm_core = get_sm_core();
   auto meta = make_gemm_meta(
       _FP16{},
       arch,
-      sm_core,
       _ReduceScatter{},
       _RCR{},
       ((int)arch < (int)_Sm90{}()) ? _GemmV2{}() : _GemmV3{}(),

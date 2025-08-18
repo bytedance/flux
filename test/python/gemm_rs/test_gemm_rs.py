@@ -30,11 +30,6 @@ import flux.testing
 from flux.testing import DTYPE_MAP, generate_data, initialize_distributed, matmul_int8
 from flux.testing.perf_db_helper import log_perf, set_global_args, should_log_to_rds
 
-try:
-    from flux.triton.gemm_rs import GemmRSTritonPCIe as GemmRSTriton
-except Exception as e:
-    pass
-
 
 class PerfResult:
     def __init__(
@@ -95,7 +90,6 @@ def perf_torch(
     op = (
         flux.GemmOnly(
             input_dtype=input.dtype,
-            weight_dtype=input.dtype,
             output_dtype=output_dtype,
             transpose_weight=transpose_weight,
             use_fp8_gemm=is_fp8,
@@ -186,7 +180,6 @@ def perf_flux(
     output_dtype = torch.bfloat16 if is_fp8 or is_s8_dequant else input.dtype
     gemm_only_op = flux.GemmOnly(
         w.dtype,
-        w.dtype,
         output_dtype,
         transpose_weight=transpose_weight,
         use_fp8_gemm=is_fp8,
@@ -271,105 +264,6 @@ def perf_flux(
     )
 
 
-@torch.no_grad()
-def perf_triton(
-    input: torch.Tensor,
-    weight: torch.Tensor,
-    bias: torch.Tensor,
-    transpose_weight: bool,
-    warmup: int,
-    iters: int,
-    input_scale: Optional[torch.Tensor] = None,
-    weight_scale: Optional[torch.Tensor] = None,
-):
-    is_fp8 = flux.util.is_fp8_dtype(input.dtype)
-    is_s8_dequant = input.dtype == torch.int8
-    M = input.size(0)
-    # todo: transpose here to avoid TN kernel, which has the worst performence
-    if transpose_weight:
-        with flux.util.with_torch_deterministic(False):
-            w = weight.t().contiguous()
-        N = w.size(1)
-    else:
-        w = weight
-        N = w.size(0)
-
-    output_dtype = torch.bfloat16 if is_fp8 or is_s8_dequant else input.dtype
-    gemm_only_op = flux.GemmOnly(
-        w.dtype,
-        w.dtype,
-        output_dtype,
-        transpose_weight=transpose_weight,
-        use_fp8_gemm=is_fp8,
-    )
-
-    gemm_rs_op = GemmRSTriton(
-        TP_GROUP,
-        input.dtype,
-        output_dtype,
-        (M + 1024 - 1) // 1024 * 1024,
-        N,
-    )
-
-    warmup_iters = warmup
-    total_iters = warmup_iters + iters
-    start_event: torch.cuda.Event = torch.cuda.Event(enable_timing=True)
-    end_event: torch.cuda.Event = torch.cuda.Event(enable_timing=True)
-    with flux.util.with_torch_deterministic(False):
-        gemm_only_output_buf = torch.empty(
-            [M, N], dtype=output_dtype, device=input.device, requires_grad=False
-        )
-
-    torch.distributed.barrier()
-    for i in range(total_iters):
-        if i == warmup_iters:
-            start_event.record()
-        _ = gemm_only_op.forward(
-            input,
-            w,
-            bias=bias,
-            output_buf=gemm_only_output_buf,
-            input_scale=input_scale,
-            weight_scale=weight_scale,
-            output_scale=None,
-            fast_accum=False,
-        )
-    end_event.record()
-    torch.cuda.current_stream().synchronize()
-    gemm_time = start_event.elapsed_time(end_event) / 1000
-
-    time.sleep(1)
-
-    torch.distributed.barrier()
-    for i in range(total_iters):
-        if i == warmup_iters:
-            start_event.record()
-        output = gemm_rs_op.forward(
-            input,
-            w,
-            bias=bias,
-            input_scale=input_scale,
-            weight_scale=weight_scale,
-            output_scale=None,
-            transpose_weight=transpose_weight,
-            fast_accum=False,
-        )
-    end_event.record()
-    torch.cuda.current_stream().synchronize()
-
-    gemm_rs_time = start_event.elapsed_time(end_event) / 1000
-
-    gemm_time_ms = gemm_time / iters * 1000
-    comm_time_ms = (gemm_rs_time - gemm_time) / iters * 1000
-
-    return PerfResult(
-        name=f"triton #{TP_GROUP.rank()}",
-        output=output,
-        gemm_time_ms=gemm_time_ms,
-        comm_time_ms=comm_time_ms,
-    )
-
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("M", type=int)
@@ -396,12 +290,6 @@ def parse_args():
     parser.add_argument("--has_bias", default=False, action="store_true", help="whether have bias")
     parser.add_argument(
         "--debug", action="store_true", help="debug mode. use human read input", default=False
-    )
-    parser.add_argument(
-        "--triton",
-        action="store_true",
-        help="also perf triton version",
-        default=False,
     )
     parser.add_argument(
         "--use_1d_ring",
@@ -503,16 +391,6 @@ if __name__ == "__main__":
         if bias is not None:
             bias.fill_(TP_GROUP.rank() + 1)
 
-    if args.triton:
-        if is_fp8 and flux.util.get_arch() < 90:
-            print(f"warning: triton L20 does not support FP8 now. skip triton...")
-            args.triton = False
-        if NNODES > 1:
-            print(f"warning: triton does not support multi-node now. skip multi-node...")
-            args.triton = False
-        if args.fuse_reduction:
-            print(f"warning: triton does not support fuse_reduction now. skip fuse_reduction...")
-
     reduce_scatter_option = ReduceScatterOption()
     reduce_scatter_option.use_1d_ring = args.use_1d_ring
     reduce_scatter_option.use_p2p_read = args.use_p2p_read
@@ -551,18 +429,6 @@ if __name__ == "__main__":
             weight_scale,
         )
 
-        if args.triton:
-            perf_res_triton = perf_triton(
-                input,
-                weight,
-                bias,
-                args.transpose_weight,
-                args.warmup,
-                args.iters,
-                input_scale,
-                weight_scale,
-            )
-
     if TP_GROUP.rank() == 0:
         flux.testing.print_gemm_sol_time(args.M, args.N, local_K, input_dtype)
     if should_log_to_rds():
@@ -575,11 +441,6 @@ if __name__ == "__main__":
         if i == TP_GROUP.rank():
             log_perf(perf_res_flux)
         TP_GROUP.barrier()
-    if args.triton:
-        for i in range(TP_GROUP.size()):
-            if i == TP_GROUP.rank():
-                log_perf(perf_res_triton)
-            TP_GROUP.barrier()
 
     TP_GROUP.barrier()
 
@@ -611,16 +472,6 @@ if __name__ == "__main__":
             print("✅ flux vs torch bitwise check passed")
         else:
             print("❌ flux vs torch bitwise check failed")
-    if args.triton:
-        triton_output = perf_res_triton.output
-        try:
-            flux.torch_allclose(torch_output, triton_output, atol=atol, rtol=rtol)
-            print("✅ triton check passed")
-        except Exception as e:
-            print("❌ triton check failed")
-            torch.save(triton_output, f"triton_output_{RANK}.pt")
-            torch.save(torch_output, f"torch_output_{RANK}.pt")
-            raise e
 
     TP_GROUP.barrier()
     torch.cuda.synchronize()

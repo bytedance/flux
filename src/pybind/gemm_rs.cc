@@ -16,9 +16,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "flux/ths_op/flux_shm.h"
-#include "flux/ths_op/ths_pybind.h"
 #include "gemm_rs/ths_op/gemm_reduce_scatter.h"
 #include "gemm_rs/ths_op/helper_ops.h"
+#include "flux/ths_op/ths_pybind.h"
 #include "gemm_rs/tile_scheduler/threadblock_swizzle_segment_util.hpp"
 
 namespace bytedance::flux::ths_op {

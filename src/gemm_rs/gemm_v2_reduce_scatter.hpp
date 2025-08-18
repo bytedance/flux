@@ -35,7 +35,7 @@
 #include "gemm_rs/epilogue_evt.hpp"
 #include "gemm_rs/epilogue_evt_nvshmem.hpp"
 #include "gemm_rs/tile_scheduler/threadblock_swizzle.hpp"
-#include "gemm_rs/tile_scheduler/threadblock_swizzle_internode.hpp"
+#include "gemm_rs/tile_scheduler/threadblock_swizzle_acrossnode.hpp"
 #include "gemm_rs/tile_scheduler/threadblock_swizzle_pcie.hpp"
 #include "gemm_rs/reduce_scatter_kernel.hpp"
 
@@ -176,8 +176,8 @@ struct GemmV2ReduceScatter_Kernel : public GemmV2BaseKernel<
     using namespace cutlass::gemm::threadblock;
     if constexpr (is_fp8_gemm && is_sm89) {
       return make_declval<GemmIdentityThreadblockSwizzlePcie>();
-    } else if constexpr (rs_meta.comm_kind() == _InterNode{}) {
-      return make_declval<ThreadblockSwizzleStreamKRankOffsetInterNode>();
+    } else if constexpr (rs_meta.comm_kind() == _AcrossNode{}) {
+      return make_declval<ThreadblockSwizzleStreamKRankOffsetAcrossNode>();
     } else if constexpr (rs_meta.comm_kind() == _IntraNodePcie{}) {
       return make_declval<ThreadblockSwizzleStreamKPcie>();
     } else {
@@ -207,7 +207,7 @@ struct GemmV2ReduceScatter_Kernel : public GemmV2BaseKernel<
           no_nvlink,      // PcieMode
           kFlattenTile>;  // FlattenOutput
       return make_declval<StoreD>();
-    } else if constexpr (rs_meta.comm_kind() == _InterNode{}) {
+    } else if constexpr (rs_meta.comm_kind() == _AcrossNode{}) {
       using OutputTileThreadMapStore = OutputTileThreadLayoutBSR<
           typename Base::ThreadblockShape,
           typename Base::WarpShape,
@@ -215,7 +215,7 @@ struct GemmV2ReduceScatter_Kernel : public GemmV2BaseKernel<
           params.alignment_c(),
           Base::EVTEpilogueStages,
           fuse_reduction>;
-      using StoreD = VisitorAuxStoreScatterInterNode<
+      using StoreD = VisitorAuxStoreScatterAccrossNode<
           OutputTileThreadMapStore,
           typename Base::ElementD,
           cutlass::FloatRoundStyle::round_to_nearest,
@@ -483,7 +483,7 @@ class GemmV2ReduceScatter_Device
       }
     }();
     auto evt_d_store_args = [&]() {
-      if constexpr (rs_meta.comm_kind() == _InterNode{}) {
+      if constexpr (rs_meta.comm_kind() == _AcrossNode{}) {
         return EvtStoreDArgumentType{
             ptr_scatter_D,
             stride_D,
@@ -679,7 +679,7 @@ class GemmV2ReduceScatter_Device
         typename Base::StrideD{}, cute::make_shape(args.m, args.n, 1));
 
     auto evt_d_store_args = [&]() {
-      if constexpr (rs_meta.comm_kind() == _InterNode{}) {
+      if constexpr (rs_meta.comm_kind() == _AcrossNode{}) {
         return EvtStoreDArgumentType{
             ptr_scatter_D,
             packed_stride_D,

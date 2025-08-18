@@ -89,7 +89,6 @@ ToUnifiedGemmMata(const proto::GemmMeta &config) {
           (DataTypeEnum)dtype.d(),
           (DataTypeEnum)dtype.acc()),
       (ArchEnum)config.arch(),
-      (SMCoreEnum)config.sm_core(),
       (CommOpEnum)config.comm_op(),
       (GemmLayoutEnum)config.gemm_layout(),
       (ImplEnum)config.impl(),
@@ -139,9 +138,7 @@ ToUnifiedGemmHparams(const proto::GemmHparams &hparams) {
               (long)gemm_v3_hparams.cluster_shape(0),
               (long)gemm_v3_hparams.cluster_shape(1),
               (long)gemm_v3_hparams.cluster_shape(2)),
-          GemmKernelScheduleEnum(gemm_v3_hparams.kernel_schedule()),
-          GemmBlockScaleMEnum(gemm_v3_hparams.blockscale_m()),
-          GemmBlockScaleNEnum(gemm_v3_hparams.blockscale_n()));
+          GemmKernelScheduleEnum(gemm_v3_hparams.kernel_schedule()));
     }
     FLUX_CHECK(false) << " unsupported impl_spec. oneof (GemmV2HParams, GemmV3HParams)";
     return None{};
@@ -150,7 +147,7 @@ ToUnifiedGemmHparams(const proto::GemmHparams &hparams) {
     if (hparams.has_gather_rs_hparams()) {
       const auto &gather_rs_hparams = hparams.gather_rs_hparams();
       return make_gather_rs_hparams(
-          gather_rs_hparams.gather_rs_ctas(), gather_rs_hparams.n_dim_per_split());
+          gather_rs_hparams.gather_rs_ctas(), gather_rs_hparams.n_dim());
     }
     return None{};
   }();

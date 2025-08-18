@@ -16,20 +16,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "flux/args/comm_none.h"
-#include "flux/gemm_meta.h"
 
 namespace bytedance {
 namespace flux {
 
 struct CutlassBlockScaleGemm {
-  CutlassBlockScaleGemm(const UnifiedGemmMeta meta, const GemmBlockScaleNEnum scale_type_b);
+  static void run(const BlockScaleGemmArguments &flux_args, void *workspace, cudaStream_t stream);
 
-  void run(const BlockScaleGemmArguments &flux_args, void *workspace, cudaStream_t stream);
-
-  size_t get_workspace_size(const BlockScaleGemmArguments &flux_args);
-
-  const UnifiedGemmMeta meta_;
-  GemmBlockScaleNEnum scale_type_b_;
+  static size_t get_workspace_size(const BlockScaleGemmArguments &flux_args);
 };
 
 }  // namespace flux

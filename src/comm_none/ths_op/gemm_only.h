@@ -25,7 +25,6 @@ class GemmOnly {
  public:
   GemmOnly(
       c10::ScalarType input_dtype,
-      c10::ScalarType weight_dtype,
       c10::ScalarType output_dtype,
       bool transpose_weight,
       bool use_fp8_gemm);

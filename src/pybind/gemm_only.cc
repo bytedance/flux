@@ -15,12 +15,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "comm_none/ths_op/gemm_only.h"
-
 #include "comm_none/ths_op/blockscale_gemm.h"
+#include "comm_none/ths_op/gemm_only.h"
+#include "flux/ths_op/ths_pybind.h"
 #include "comm_none/ths_op/gemm_grouped_v2.h"
 #include "comm_none/ths_op/gemm_grouped_v3.h"
-#include "flux/ths_op/ths_pybind.h"
 
 namespace bytedance::flux::ths_op {
 
@@ -35,18 +34,15 @@ static int _register_gemm_only_ops [[maybe_unused]] = []() {
     py::class_<GemmOnlyCls>(m, "GemmOnly")
         .def(
             py::init([](torch::ScalarType input_dtype,
-                        torch::ScalarType weight_dtype,
                         py::object py_output_dtype,
                         bool transpose_weight,
                         bool use_fp8_gemm) {
               auto output_dtype = py_output_dtype.is(py::none())
                                       ? input_dtype
                                       : torch::python::detail::py_object_to_dtype(py_output_dtype);
-              return new GemmOnlyCls(
-                  input_dtype, weight_dtype, output_dtype, transpose_weight, use_fp8_gemm);
+              return new GemmOnlyCls(input_dtype, output_dtype, transpose_weight, use_fp8_gemm);
             }),
             py::arg("input_dtype"),
-            py::arg("weight_dtype"),
             py::arg("output_dtype") = py::none(),
             py::arg("transpose_weight") = false,
             py::arg("use_fp8_gemm") = false)
@@ -77,30 +73,19 @@ static int _register_gemm_only_ops [[maybe_unused]] = []() {
     py::class_<BlockScaleGemmCls>(m, "BlockScaleGemm")
         .def(
             py::init([](torch::ScalarType input_dtype,
-                        torch::ScalarType weight_dtype,
                         py::object py_output_dtype,
                         int32_t num_streams) {
               auto output_dtype = py_output_dtype.is(py::none())
                                       ? input_dtype
                                       : torch::python::detail::py_object_to_dtype(py_output_dtype);
-              return new BlockScaleGemmCls(input_dtype, weight_dtype, output_dtype, num_streams);
+              return new BlockScaleGemmCls(input_dtype, output_dtype, num_streams);
             }),
             py::arg("input_dtype"),
-            py::arg("weight_dtype"),
             py::arg("output_dtype") = py::none(),
             py::arg("num_streams") = 2)
         .def(
             "forward",
             &BlockScaleGemmCls::forward,
-            py::arg("input"),
-            py::arg("weight"),
-            py::arg("bias") = py::none(),
-            py::arg("output") = py::none(),
-            py::arg("input_scale") = py::none(),
-            py::arg("weight_scale") = py::none())
-        .def(
-            "wgrad",
-            &BlockScaleGemmCls::wgrad,
             py::arg("input"),
             py::arg("weight"),
             py::arg("bias") = py::none(),
@@ -118,45 +103,14 @@ static int _register_gemm_only_ops [[maybe_unused]] = []() {
             py::arg("input_scale") = py::none(),
             py::arg("weight_scale") = py::none())
         .def(
-            "wgrad_multistream",
-            &BlockScaleGemmCls::wgrad_multistream,
-            py::arg("input"),
-            py::arg("input_splits"),
-            py::arg("weight"),
-            py::arg("bias") = py::none(),
-            py::arg("output") = py::none(),
-            py::arg("input_scale") = py::none(),
-            py::arg("weight_scale") = py::none())
-        .def(
-            "forward_grouped",
-            &BlockScaleGemmCls::forward_grouped,
-            py::arg("input"),
-            py::arg("input_splits"),
-            py::arg("weight"),
-            py::arg("bias") = py::none(),
-            py::arg("output") = py::none(),
-            py::arg("input_scale") = py::none(),
-            py::arg("weight_scale") = py::none())
-        .def(
-            "wgrad_grouped",
-            &BlockScaleGemmCls::wgrad_grouped,
-            py::arg("input"),
-            py::arg("input_splits"),
-            py::arg("weight"),
-            py::arg("bias") = py::none(),
-            py::arg("output") = py::none(),
-            py::arg("input_scale") = py::none(),
-            py::arg("weight_scale") = py::none())
-        .def(
             "reference",
-            &BlockScaleGemmCls::reference,
+            &BlockScaleGemmCls::forward,
             py::arg("input"),
             py::arg("weight"),
             py::arg("bias") = py::none(),
             py::arg("output") = py::none(),
             py::arg("input_scale") = py::none(),
-            py::arg("weight_scale") = py::none(),
-            py::arg("is_groupwise_b") = false)
+            py::arg("weight_scale") = py::none())
         .def(
             "profiling",
             &BlockScaleGemmCls::profiling,

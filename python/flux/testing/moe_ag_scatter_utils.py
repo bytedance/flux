@@ -69,6 +69,7 @@ class MoeMlp1Ctx:
 
         device = torch.cuda.current_device()
 
+        self.naive_impl = False
         is_s8_dequant = input_dtype == torch.int8
         is_fp8 = flux.is_fp8_dtype(input_dtype)
 
@@ -196,12 +197,13 @@ class MoeAgScatterWithTorch(object):
     @staticmethod
     def comm_impl(ctx, TP_GROUP):
         all_gather_into_tensor_with_fp8(ctx.inputs, ctx.inputs_shard, group=TP_GROUP)
-        if ctx.is_s8:
-            if ctx.input_scale is not None:
-                for i in range(ctx.weight_groups):
-                    torch.distributed.all_gather_into_tensor(
-                        ctx.full_input_scale[i], ctx.input_scale[i], group=TP_GROUP
-                    )
+        if not ctx.naive_impl:
+            if ctx.is_s8:
+                if ctx.input_scale is not None:
+                    for i in range(ctx.weight_groups):
+                        torch.distributed.all_gather_into_tensor(
+                            ctx.full_input_scale[i], ctx.input_scale[i], group=TP_GROUP
+                        )
 
     @staticmethod
     def scatter_impl(ctx):
@@ -212,14 +214,15 @@ class MoeAgScatterWithTorch(object):
         else:
             ctx.scatter_inputs.copy_(torch.index_select(ctx.inputs, dim=0, index=ctx.gather_index))
 
-        if ctx.is_s8 and ctx.input_scale is not None:
-            for n in range(ctx.weight_groups):
-                ctx.scatter_input_scale[n].copy_(
-                    torch.index_select(ctx.full_input_scale[n], dim=0, index=ctx.gather_index)
-                )
+        if not ctx.naive_impl:
+            if ctx.is_s8 and ctx.input_scale is not None:
+                for n in range(ctx.weight_groups):
+                    ctx.scatter_input_scale[n].copy_(
+                        torch.index_select(ctx.full_input_scale[n], dim=0, index=ctx.gather_index)
+                    )
 
     @staticmethod
-    def gemm_impl(ctx, gemm_only_op):
+    def gemm_impl(ctx, gemm_only_op = None):
         offset = 0
         expert_id_offset = ctx.nexperts_ep * ctx.ep_rank
         input_offset = torch.sum(ctx.splits_cpu[:expert_id_offset])
@@ -227,36 +230,44 @@ class MoeAgScatterWithTorch(object):
             nxt_offset = offset + ctx.splits_cpu[exp_id + expert_id_offset]
             if nxt_offset - offset > 0:
                 exp_input = ctx.scatter_inputs[offset + input_offset : nxt_offset + input_offset]
-                for i in range(ctx.weight_groups):
-                    out = ctx.outputs[i][offset:nxt_offset]
-                    if flux.is_fp8_dtype(exp_input.dtype):
-                        gemm_only_op.forward(
-                            exp_input,
-                            ctx.weights[i][exp_id],
-                            output_buf=out,
-                            fast_accum=ctx.fast_accum,
-                        )
-                    elif ctx.is_s8:
-                        input_scale = ctx.scatter_input_scale[i][
-                            offset + input_offset : nxt_offset + input_offset, :
-                        ]
-                        accum = matmul_int8(exp_input, ctx.weights[i][exp_id].t())
-                        out.copy_(
-                            (
-                                input_scale * ctx.weight_scale[i][exp_id] * accum.to(torch.float32)
-                            ).to(torch.bfloat16)
-                        )
-                    else:
-                        torch.matmul(
-                            exp_input,
-                            ctx.weights[i][exp_id].t(),
-                            out=out,
-                        )
+                if ctx.naive_impl:
+                    out = ctx.intermediate_output[offset:nxt_offset]
+                    torch.matmul(
+                        exp_input,
+                        ctx.weight0[exp_id].t(),
+                        out=out,
+                    )
+                else:
+                    for i in range(ctx.weight_groups):
+                        out = ctx.outputs[i][offset:nxt_offset]
+                        if flux.is_fp8_dtype(exp_input.dtype):
+                            gemm_only_op.forward(
+                                exp_input,
+                                ctx.weights[i][exp_id],
+                                output_buf=out,
+                                fast_accum=ctx.fast_accum,
+                            )
+                        elif ctx.is_s8:
+                            input_scale = ctx.scatter_input_scale[i][
+                                offset + input_offset : nxt_offset + input_offset, :
+                            ]
+                            accum = matmul_int8(exp_input, ctx.weights[i][exp_id].t())
+                            out.copy_(
+                                (
+                                    input_scale * ctx.weight_scale[i][exp_id] * accum.to(torch.float32)
+                                ).to(torch.bfloat16)
+                            )
+                        else:
+                            torch.matmul(
+                                exp_input,
+                                ctx.weights[i][exp_id].t(),
+                                out=out,
+                            )
 
-                    # TODO(houqi.1993) xperf_gpt has no output_scale. so don't know the order of output_scale and bias, leave it as bias first.
-                    if ctx.bias is not None:
-                        out.add_(ctx.bias[i][exp_id])
-                    if not ctx.is_s8:
-                        out.mul_(ctx.output_scale[i][exp_id])
+                        # TODO(houqi.1993) xperf_gpt has no output_scale. so don't know the order of output_scale and bias, leave it as bias first.
+                        if ctx.bias is not None:
+                            out.add_(ctx.bias[i][exp_id])
+                        if not ctx.is_s8:
+                            out.mul_(ctx.output_scale[i][exp_id])
 
             offset = nxt_offset

@@ -61,30 +61,19 @@ class GemmGroupedV3CommNone_Device
   static constexpr auto hparams = to_gemm_hparams(GemmHParamsT{});
   static constexpr auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(meta.dtype()));
   static_assert(meta.comm_op() == _CommNone{}, "requires _CommNone{}");
-  static constexpr bool is_blockscale_gemm = meta.impl_spec().block_scale();
 
   // Preparing args from host to device workspace
   std::size_t
   get_args_workspace_size(std::any const &unify_args) const override {
-    if constexpr (this->is_blockscale_gemm) {
-      const auto &args = std::any_cast<BlockScaleGroupedGemmV3Arguments>(unify_args);
-      return this->get_args_workspace_size_impl(args);
-    } else {
-      const auto &args = std::any_cast<GemmGroupedV3Arguments>(unify_args);
-      return this->get_args_workspace_size_impl(args);
-    }
+    const auto &args = std::any_cast<GemmGroupedV3Arguments>(unify_args);
+    return this->get_args_workspace_size_impl(args);
   }
 
   void
   initialize_args_workspace(
       std::any const &unify_args, void *args_workspace, void *stream) const override {
-    if constexpr (this->is_blockscale_gemm) {
-      const auto &args = std::any_cast<BlockScaleGroupedGemmV3Arguments>(unify_args);
-      this->initialize_args_workspace_impl(args, args_workspace, stream);
-    } else {
-      const auto &args = std::any_cast<GemmGroupedV3Arguments>(unify_args);
-      this->initialize_args_workspace_impl(args, args_workspace, stream);
-    }
+    const auto &args = std::any_cast<GemmGroupedV3Arguments>(unify_args);
+    this->initialize_args_workspace_impl(args, args_workspace, stream);
   }
 
   auto
@@ -135,89 +124,22 @@ class GemmGroupedV3CommNone_Device
       scheduler.raster_order = TileScheduler::RasterOrderOptions::AlongN;
     }
 
-    return GemmArguments{/*mode=*/cutlass::gemm::GemmUniversalMode::kGrouped,
-                         {args.problem_count, problem_sizes_device, problem_sizes_host},
-                         /*MMA*/
-                         {ptr_A, ptr_Stride_A, ptr_B, ptr_Stride_B},
-                         /*Epilogue*/
-                         {epi_params, ptr_C, ptr_Stride_C, ptr_D, ptr_Stride_D},
-                         hw_info,
-                         scheduler};
-  }
-
-  auto
-  to_blockscale_gemm_args_impl(
-      BlockScaleGroupedGemmV3Arguments const &args, void *args_workspace) const {
-    using Gemm = identity_t<decltype(this->gemm_device())>;
-    using GemmArguments = typename Gemm::Arguments;
-    using UnderlyingProblemShape = typename Base::ProblemShape::UnderlyingProblemShape;
-    using ElementAccumulator = typename Base::ElementAccumulator;
-
-    cutlass::KernelHardwareInfo hw_info;
-    // Change device_id to another value if you are running on a machine with multiple GPUs and
-    // wish to use a GPU other than that with device ID 0.
-    hw_info.device_id = 0;
-    hw_info.sm_count =
-        cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
-    // problem_sizes on host can be None
-    auto problem_sizes_host = static_cast<UnderlyingProblemShape *>(args.problem_sizes);
-
-    auto
-        [problem_sizes_device,
-         ptr_A,
-         ptr_Stride_A,
-         ptr_B,
-         ptr_Stride_B,
-         ptr_C,
-         ptr_Stride_C,
-         ptr_D,
-         ptr_Stride_D,
-         ptr_blockscale_A,
-         ptr_blockscale_B,
-         ptr_alpha] = this->parse_common_gemm_args_from_workspace(args, args_workspace);
-
-    auto epi_params = decltype(GemmArguments{}.epilogue.thread){
-        .alpha = args.alpha,
-        .beta = args.beta,
-        .alpha_ptr = nullptr,
-        .beta_ptr = nullptr,
-        .alpha_ptr_array = nullptr,
-        .beta_ptr_array = nullptr,
-        .dAlpha = {cute::_0{}, cute::_0{}, 0},
-        .dBeta = {cute::_0{}, cute::_0{}, 0},
-    };
-
-    GemmArguments gemm_args{
-        cutlass::gemm::GemmUniversalMode::kGrouped,
+    return GemmArguments{
+        /*mode=*/cutlass::gemm::GemmUniversalMode::kGrouped,
         {args.problem_count, problem_sizes_device, problem_sizes_host},
         /*MMA*/
-        {ptr_A, ptr_Stride_A, ptr_B, ptr_Stride_B, ptr_blockscale_A, ptr_blockscale_B},
+        {ptr_A, ptr_Stride_A, ptr_B, ptr_Stride_B},
         /*Epilogue*/
         {epi_params, ptr_C, ptr_Stride_C, ptr_D, ptr_Stride_D},
-        hw_info};
-
-    using RasterOrderOptions =
-        typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90GroupParams<
-            cute::Shape<int, int, int>>::RasterOrderOptions;
-    if constexpr (hparams.raster_order() == _RasterAlongM{}) {
-      gemm_args.scheduler.raster_order = RasterOrderOptions::AlongM;
-    } else if constexpr (hparams.raster_order() == _RasterAlongN{}) {
-      gemm_args.scheduler.raster_orderr = RasterOrderOptions::AlongN;
-    }
-
-    return gemm_args;
+        hw_info,
+        scheduler};
   }
 
  public:
   auto
   to_gemm_args(std::any const &unified_args, void *args_workspace) const {
-    if constexpr (this->is_blockscale_gemm) {
-      return to_blockscale_gemm_args_impl(
-          std::any_cast<BlockScaleGroupedGemmV3Arguments>(unified_args), args_workspace);
-    } else {
-      return to_gemm_args_impl(
-          std::any_cast<GemmGroupedV3Arguments>(unified_args), args_workspace);
-    }
+    auto const &args = std::any_cast<GemmGroupedV3Arguments>(unified_args);
+    return to_gemm_args_impl(args, args_workspace);
   }
 };
 

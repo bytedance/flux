@@ -131,7 +131,6 @@ def perf_flux(
     use_fp8_gemm = True if is_fp8 else False
     op = flux.GemmOnly(
         input_dtype=input.dtype,
-        weight_dtype=weight.dtype,
         output_dtype=output_dtype,
         transpose_weight=transpose_weight,
         use_fp8_gemm=use_fp8_gemm,
@@ -169,13 +168,7 @@ def parse_args():
     parser.add_argument("K", type=int)
     parser.add_argument("--iters", default=50, type=int, help="perf iterations")
     parser.add_argument(
-        "--input_dtype",
-        default="bfloat16",
-        type=str,
-        choices=list(DTYPE_MAP.keys()),
-    )
-    parser.add_argument(
-        "--weight_dtype",
+        "--dtype",
         default="bfloat16",
         type=str,
         choices=list(DTYPE_MAP.keys()),
@@ -208,14 +201,13 @@ THRESHOLD_MAP = {
 if __name__ == "__main__":
     init_seed()
     args = parse_args()
-    input_dtype = DTYPE_MAP[args.input_dtype]
-    weight_dtype = DTYPE_MAP[args.weight_dtype]
-    is_fp8 = is_fp8_dtype(input_dtype) and is_fp8_dtype(weight_dtype)
+    dtype = DTYPE_MAP[args.dtype]
+    is_fp8 = is_fp8_dtype(dtype)
     if args.output_dtype == "":
-        output_dtype = torch.bfloat16 if is_fp8 or input_dtype == torch.int8 else input_dtype
+        output_dtype = torch.bfloat16 if is_fp8 or dtype == torch.int8 else dtype
     else:
         output_dtype = DTYPE_MAP[args.output_dtype]
-    is_s8_dequant = input_dtype == torch.int8 and output_dtype == torch.bfloat16
+    is_s8_dequant = dtype == torch.int8 and output_dtype == torch.bfloat16
 
     if is_s8_dequant:
         if args.transpose_weight:
@@ -225,8 +217,8 @@ if __name__ == "__main__":
     if is_fp8:
         torch.use_deterministic_algorithms(False, warn_only=True)
 
-    input = rand_tensor((args.M, args.K), dtype=input_dtype)
-    weight = rand_tensor((args.N, args.K), dtype=weight_dtype)
+    input = rand_tensor((args.M, args.K), dtype=dtype)
+    weight = rand_tensor((args.N, args.K), dtype=dtype)
 
     input_scale = None
     weight_scale = None
@@ -241,11 +233,7 @@ if __name__ == "__main__":
     bias = None
     if args.has_bias:
         bias_dtype = output_dtype
-        bias_shape = (
-            (1, args.N)
-            if (is_fp8 and flux.util.get_arch() < 90) or is_s8_dequant
-            else (args.M, args.N)
-        )
+        bias_shape = (1, args.N) if is_fp8 or is_s8_dequant else (args.M, args.N)
         bias = rand_tensor(bias_shape, bias_dtype)
 
     perf_result_flux = perf_flux(
@@ -272,7 +260,7 @@ if __name__ == "__main__":
         output_dtype,
     )
 
-    flux.testing.print_gemm_sol_time(args.M, args.N, args.K, input_dtype)
+    flux.testing.print_gemm_sol_time(args.M, args.N, args.K, dtype)
     print(perf_result_torch)
     print(perf_result_flux)
 

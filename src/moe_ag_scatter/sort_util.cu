@@ -15,23 +15,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <cuda_fp16.h>
-#include <cutlass/device_kernel.h>
-
-#include <algorithm>
-#include <climits>
-#include <cute/layout.hpp>
-#include <cute/tensor.hpp>
-#include <iterator>
-#include <numeric>
-#include <set>
-
-#include "flux/cuda/cuda_common.h"
+#include "sort_util.h"
 #include "flux/cuda/cuda_common_device.hpp"
+#include "flux/cuda/cuda_common.h"
 #include "flux/cuda/reduce_utils.cuh"
 #include "flux/flux.h"
 #include "flux/utils.h"
-#include "sort_util.h"
+#include <algorithm>
+#include <climits>
+#include <cuda_fp16.h>
+#include <cute/layout.hpp>
+#include <cute/tensor.hpp>
+#include <cutlass/device_kernel.h>
+#include <iterator>
+#include <numeric>
+#include <set>
 
 namespace bytedance::flux {
 using namespace cute;
@@ -624,13 +622,12 @@ get_sorted_problem_schedule(
     int e = *pool.begin();
     pool.erase(pool.begin());
 
-    schedule.emplace_back(
-        ProblemSchedule{
-            .expert_id = e,
-            .m_start = offsets[e],
-            .m_end = nxt_offsets[e],
-            .source_rank_start = split_idxs[e],
-            .source_rank_end = nxt_split_idxs[e] + is_next_split_used(e)});
+    schedule.emplace_back(ProblemSchedule{
+        .expert_id = e,
+        .m_start = offsets[e],
+        .m_end = nxt_offsets[e],
+        .source_rank_start = split_idxs[e],
+        .source_rank_end = nxt_split_idxs[e] + is_next_split_used(e)});
 
     split_idxs[e] = nxt_split_idxs[e];
     rem_split_sizes[e] = nxt_rem_split_sizes[e];

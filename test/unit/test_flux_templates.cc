@@ -118,11 +118,10 @@ test_tuple_has_elem() {
 void
 test_gemm_meta() {
   auto dt_conf = make_gemm_dtype_config(_FP16{});
-  auto meta = make_gemm_meta(dt_conf, _Sm90{}, _H800{}, _CommNone{}, _RCR{}, _GemmV3{});
+  auto meta = make_gemm_meta(dt_conf, _Sm90{}, _CommNone{}, _RCR{}, _GemmV3{});
   auto unified_meta = unify_type(meta);
   FLUX_CHECK_EQ(unified_meta.dtype(), unify_type(dt_conf));
   FLUX_CHECK_EQ(unified_meta.arch(), _Sm90{}());
-  FLUX_CHECK_EQ(unified_meta.sm_core(), _H800{}());
   FLUX_CHECK_EQ(unified_meta.comm_op(), _CommNone{}());
   FLUX_CHECK_EQ(unified_meta.gemm_layout(), _RCR{}());
   FLUX_CHECK_EQ(unified_meta.impl(), _GemmV3{}());
@@ -131,7 +130,7 @@ test_gemm_meta() {
 void
 test_gemm_hparams() {
   auto dt_conf = make_gemm_dtype_config(_FP16{});
-  auto meta = make_gemm_meta(dt_conf, _Sm90{}, _H800{}, _CommNone{}, _RCR{}, _GemmV3{});
+  auto meta = make_gemm_meta(dt_conf, _Sm90{}, _CommNone{}, _RCR{}, _GemmV3{});
   auto auto_hparams = _AutoHParams{};
   auto hparams = materialize_hparams(meta, auto_hparams);
   auto unified_hparams = unify_type(hparams);

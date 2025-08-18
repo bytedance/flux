@@ -14,29 +14,26 @@
 // limitations under the License.
 //
 //===----------------------------------------------------------------------===//
-#include "flux/ths_op/flux_shm.h"
-
-#include <ATen/ops/from_blob.h>
-#include <c10/core/ScalarType.h>
-#include <c10/cuda/CUDAFunctions.h>
-#include <c10/cuda/CUDAGuard.h>
-#include <c10/util/intrusive_ptr.h>
-#include <errno.h>     // for errno
-#include <sys/mman.h>  // for mmap, shm_open, munmap, shm_unlink
-#include <sys/stat.h>  // for fstat, stat
-#include <torch/cuda.h>
-#include <unistd.h>
-
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <torch/csrc/distributed/c10d/Types.hpp>
 #include <vector>
-
+#include <ATen/ops/from_blob.h>
+#include <c10/core/ScalarType.h>
+#include <c10/cuda/CUDAFunctions.h>
+#include <c10/util/intrusive_ptr.h>
+#include <torch/cuda.h>
+#include <c10/cuda/CUDAGuard.h>
 #include "flux/cuda/cuda_common.h"
 #include "flux/cuda/helper_kernels.h"
 #include "flux/flux.h"
 #include "flux/utils.h"
+#include "flux/ths_op/flux_shm.h"
+#include <sys/mman.h>  // for mmap, shm_open, munmap, shm_unlink
+#include <sys/stat.h>  // for fstat, stat
+#include <errno.h>     // for errno
+#include <unistd.h>
 #ifdef FLUX_SHM_USE_NVSHMEM
 #include <nvshmemx.h>
 #endif
@@ -59,27 +56,20 @@ check_nvshmem_init() {
 }  // namespace
 
 torch::Tensor
-nvshmem_create_tensor(const std::vector<int64_t> &shape, c10::ScalarType dtype, bool init_zero) {
+nvshmem_create_tensor(const std::vector<int64_t> &shape, c10::ScalarType dtype) {
   check_nvshmem_init();
   auto current_device = c10::cuda::current_device();
   auto option_gpu =
       at::TensorOptions().dtype(dtype).device(at::kCUDA).device_index(current_device);
   int64_t element_size = torch::elementSize(dtype);
-  int64_t count = std::accumulate(shape.begin(), shape.end(), 1LL, std::multiplies<>());
-  int64_t size = element_size * count;
+  int64_t size =
+      element_size * std::accumulate(shape.begin(), shape.end(), 1LL, std::multiplies<>());
 
   FLUX_CHECK(size != 0);
   at::cuda::device_synchronize();
-  void *ptr;
-  if (init_zero) {
-    // https://docs.nvidia.com/nvshmem/api/gen/api/memory.html#c.nvshmem_calloc
-    ptr = nvshmem_calloc(count, element_size);
-  } else {
-    ptr = nvshmem_malloc(size);
-  }
-  FLUX_CHECK(ptr != nullptr) << "NVSHMEM_MALLOC failed, please set larger "
-                                "NVSHMEM_SYMMETRIC_SIZE(1000000000 by default)\n";
-
+  void *ptr = nvshmem_malloc(size);
+  FLUX_CHECK(ptr != nullptr);
+  CUDA_CHECK(cudaMemset(ptr, 0, size));  // memset the allocated buffer
   return at::from_blob(
       ptr,
       shape,
@@ -92,50 +82,45 @@ nvshmem_create_tensor(const std::vector<int64_t> &shape, c10::ScalarType dtype, 
 }
 
 std::vector<torch::Tensor>
-nvshmem_create_tensor_list(
-    const std::vector<int64_t> &shape, c10::ScalarType dtype, bool init_zero) {
+nvshmem_create_tensor_list(const std::vector<int64_t> &shape, c10::ScalarType dtype) {
   check_nvshmem_init();
   auto current_device = c10::cuda::current_device();
   auto option_gpu = at::TensorOptions(at::kCUDA).dtype(dtype).device_index(current_device);
-  auto element_size = torch::elementSize(dtype);
-  auto count = std::accumulate(shape.begin(), shape.end(), (size_t)1, std::multiplies<>());
-  auto size = element_size * count;
+  auto size = torch::elementSize(dtype) *
+              std::accumulate(shape.begin(), shape.end(), (size_t)1, std::multiplies<>());
   FLUX_CHECK_NE(size, 0);
   int local_world_size = nvshmem_team_n_pes(NVSHMEMX_TEAM_NODE);
   int rank = nvshmem_my_pe();
   int local_rank = nvshmem_team_my_pe(NVSHMEMX_TEAM_NODE);
   std::vector<torch::Tensor> tensors;
   tensors.reserve(local_world_size);
-
+  // std::cerr << "enter nvshmem_malloc\n";
   at::cuda::device_synchronize();
-  void *ptr;
-  if (init_zero) {
-    ptr = nvshmem_calloc(count, element_size);
-  } else {
-    ptr = nvshmem_malloc(size);
-  }
-  FLUX_CHECK(ptr != nullptr);
+  // std::cerr << "do nvshmem_malloc\n";
+  void *ptr = nvshmem_malloc(size);
+  // std::cerr << "exit nvshmem_malloc " << ptr << "\n";
 
+  CUDA_CHECK(cudaMemset(ptr, 0, size));  // memset the allocated buffer
+  FLUX_CHECK(ptr != nullptr);
   int rank_offset = rank - local_rank;
   for (int i = 0; i < local_world_size; i++) {
     // runs this call nvshmem failure, don't know why
     //  nvshmem_team_translate_pe(NVSHMEMX_TEAM_NODE, local_rank, NVSHMEM_TEAM_WORLD)
     int rank_global = i + rank_offset;
     if (rank == rank_global) {
-      tensors.emplace_back(
-          at::from_blob(
-              ptr,
-              shape,
-              [=](void *ptr) {
-                // std::cerr << "enter nvshmem_free " << ptr << "\n";
-                at::cuda::CUDAGuard guard(current_device);
-                at::cuda::device_synchronize();
-                // std::cerr << "do nvshmem_free " << ptr << "\n";
-                nvshmem_free(ptr);
-                at::cuda::device_synchronize();
-                // std::cerr << "exit nvshmem_free " << ptr << "\n";
-              },
-              option_gpu));
+      tensors.emplace_back(at::from_blob(
+          ptr,
+          shape,
+          [=](void *ptr) {
+            // std::cerr << "enter nvshmem_free " << ptr << "\n";
+            at::cuda::CUDAGuard guard(current_device);
+            at::cuda::device_synchronize();
+            // std::cerr << "do nvshmem_free " << ptr << "\n";
+            nvshmem_free(ptr);
+            at::cuda::device_synchronize();
+            // std::cerr << "exit nvshmem_free " << ptr << "\n";
+          },
+          option_gpu));
     } else {
       void *rptr = nvshmem_ptr(ptr, rank_global);
       FLUX_CHECK(rptr != nullptr) << "rank " << rank;
@@ -274,11 +259,7 @@ C10dProcessGroup::broadcast_cpu(void *ptr, int64_t nbytes, int root_rank) {
 
 std::vector<torch::Tensor>
 cudaipc_create_tensor_list(
-    Group *group,
-    const std::vector<int64_t> &shape,
-    c10::ScalarType dtype,
-    bool ring_mode,
-    bool init_zero) {
+    Group *group, const std::vector<int64_t> &shape, c10::ScalarType dtype, bool ring_mode) {
   FLUX_CHECK(group != nullptr);
   int cur_rank = group->get_rank();
   int world_size = group->get_size();
@@ -304,9 +285,7 @@ cudaipc_create_tensor_list(
   FLUX_CHECK(size != 0);
   void *ptr = nullptr;
   CUDA_CHECK(cudaMalloc(&ptr, size));
-  if (init_zero) {
-    CUDA_CHECK(cudaMemset(ptr, 0, size));  // memset the allocated buffer
-  }
+  CUDA_CHECK(cudaMemset(ptr, 0, size));  // memset the allocated buffer
   cudaIpcMemHandle_t handle;
   CUDA_CHECK(cudaIpcGetMemHandle(&handle, ptr));
   std::vector<cudaIpcMemHandle_t> handles(world_size);
@@ -370,10 +349,9 @@ cudaipc_create_tensor_list(
     c10::intrusive_ptr<c10d::ProcessGroup> pg,
     const std::vector<int64_t> &shape,
     c10::ScalarType dtype,
-    bool ring_mode,
-    bool init_zero) {
+    bool ring_mode) {
   auto group = std::make_unique<C10dProcessGroup>("", pg);
-  return cudaipc_create_tensor_list(group.get(), shape, dtype, ring_mode, init_zero);
+  return cudaipc_create_tensor_list(group.get(), shape, dtype, ring_mode);
 }
 
 void
@@ -433,21 +411,17 @@ flux_create_tensor(
 
 std::vector<torch::Tensor>
 flux_create_tensor_list(
-    const std::vector<int64_t> &shape,
-    c10::ScalarType dtype,
-    Group *group,
-    bool ring_mode,
-    bool init_zero) {
+    const std::vector<int64_t> &shape, c10::ScalarType dtype, Group *group, bool ring_mode) {
 #ifdef FLUX_SHM_USE_NVSHMEM
   static bool use_nvshmem = get_bool_from_env("FLUX_USE_NVSHMEM", true);
   if (torch::cuda::device_count() <= kMaxLocalWorldSize && use_nvshmem) {
-    return nvshmem_create_tensor_list(shape, dtype, init_zero);
+    return nvshmem_create_tensor_list(shape, dtype);
   } else {
-    return cudaipc_create_tensor_list(group, shape, dtype, ring_mode, init_zero);
+    return cudaipc_create_tensor_list(group, shape, dtype, ring_mode);
   }
 #else
   FLUX_CHECK(group != nullptr);
-  return cudaipc_create_tensor_list(group, shape, dtype, ring_mode, init_zero);
+  return cudaipc_create_tensor_list(group, shape, dtype, ring_mode);
 #endif
 }
 
@@ -456,10 +430,9 @@ flux_create_tensor_list(
     const std::vector<int64_t> &shape,
     c10::ScalarType dtype,
     c10::intrusive_ptr<c10d::ProcessGroup> pg,
-    bool ring_mode,
-    bool init_zero) {
+    bool ring_mode) {
   auto group = std::make_unique<C10dProcessGroup>("", pg);
-  return flux_create_tensor_list(shape, dtype, group.get(), ring_mode, init_zero);
+  return flux_create_tensor_list(shape, dtype, group.get(), ring_mode);
 }
 
 void
@@ -488,10 +461,9 @@ flux_barrier_all_on_stream(
     cudaStream_t stream,
     c10::optional<std::vector<torch::Tensor>> sync_buffers,
     c10::optional<int> rank,
-    bool ring_mode,
-    bool force_flux_impl) {
+    bool ring_mode) {
 #ifdef FLUX_SHM_USE_NVSHMEM
-  if (!ring_mode && !force_flux_impl)
+  if (!ring_mode)
     nvshmemx_barrier_all_on_stream(stream);
   else
     cudaipc_barrier_all_on_stream(stream, sync_buffers, rank, ring_mode);
@@ -625,19 +597,17 @@ flux_create_shm_tensor_list(
   std::vector<torch::Tensor> tensors;
   for (int i = 0; i < world_size; i++) {
     if (i == rank) {
-      tensors.emplace_back(
-          at::from_blob(
-              handle.dptr, shape, [=](void *ptr) { shared_memory_close_or_die(handle); }, option));
+      tensors.emplace_back(at::from_blob(
+          handle.dptr, shape, [=](void *ptr) { shared_memory_close_or_die(handle); }, option));
     } else {
       char *shm_path = shm_names.data() + FLUX_SHM_PATH_MAXLEN * i;
       ShmHandle tmp_handle;
       shared_memory_open_or_die(shm_path, heap_size, -1, &tmp_handle);
-      tensors.emplace_back(
-          at::from_blob(
-              tmp_handle.dptr,
-              shape,
-              [=](void *ptr) { shared_memory_close_or_die(tmp_handle); },
-              option));
+      tensors.emplace_back(at::from_blob(
+          tmp_handle.dptr,
+          shape,
+          [=](void *ptr) { shared_memory_close_or_die(tmp_handle); },
+          option));
     }
   }
   group->sync();
@@ -695,14 +665,14 @@ class FluxGroupBarrier : public BarrierInterface {
 
 class GroupBarrier::BarrierImpl {
  public:
-  BarrierImpl(std::shared_ptr<Group> group, bool ring_mode, bool force_flux_impl) {
+  BarrierImpl(std::shared_ptr<Group> group, bool ring_mode) {
     bool force_ring_mode = torch::cuda::device_count() > kMaxLocalWorldSize;
     if (force_ring_mode) {
       FLUX_LOG_FIRST_N(INFO, 1) << "too many devices. use ring_mode for barrier instead";
       ring_mode = true;
     }
     static bool use_nvshmem = get_bool_from_env("FLUX_USE_NVSHMEM", true);
-    if (ring_mode || !use_nvshmem || force_flux_impl) {  // always use flux barrier for ring mode
+    if (ring_mode || !use_nvshmem) {  // always use flux barrier for ring mode
       impl_ = std::make_unique<FluxGroupBarrier>(group, ring_mode);
     } else {
 #if defined(FLUX_SHM_USE_NVSHMEM)
@@ -721,8 +691,8 @@ class GroupBarrier::BarrierImpl {
   std::unique_ptr<BarrierInterface> impl_;
 };
 
-GroupBarrier::GroupBarrier(std::shared_ptr<Group> pg, bool ring_mode, bool force_flux_impl) {
-  impl_ = new BarrierImpl(std::move(pg), ring_mode, force_flux_impl);
+GroupBarrier::GroupBarrier(std::shared_ptr<Group> pg, bool ring_mode) {
+  impl_ = new BarrierImpl(std::move(pg), ring_mode);
 }
 
 void

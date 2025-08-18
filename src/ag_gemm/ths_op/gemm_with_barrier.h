@@ -19,7 +19,6 @@
 #include <stdint.h>
 #include <cuda_runtime_api.h>
 #include "coll/ths_op/all_gather_types.h"
-#include "flux/flux.h"
 #include "flux/gemm_hparams.h"
 #include "flux/runtime_config.h"
 #include "flux/op_registry.h"
@@ -96,7 +95,6 @@ using AGGemmMeta = GemmMeta<
         DataTypeEnum,
         DataTypeEnum>,
     ArchEnum,
-    SMCoreEnum,
     cute::C<bytedance::flux::CommOpEnum::AGKernel>,
     GemmLayoutEnum,
     ImplEnum,

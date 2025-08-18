@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.17)
 set(OP_REGS "")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/registers")
 execute_process(
-  COMMAND ${FLUX_GENERATOR_BINARY_DIR}/gen_ag_gemm "--dir=./registers" "--archs=${CUDAARCHS}" "--sm_cores=${SM_CORES}"
+  COMMAND ${FLUX_GENERATOR_BINARY_DIR}/gen_ag_gemm "--dir=./registers" "--archs=${CUDAARCHS}"
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   COMMAND_ERROR_IS_FATAL ANY
   COMMAND_ECHO STDOUT

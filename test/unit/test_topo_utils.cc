@@ -30,9 +30,8 @@ main() {
   NVML_CHECK(nvml_stub().nvmlDeviceGetHandleByIndex_v2(0, &device));
   unsigned int cap_out = 0;
   for (int cap = 0; cap < NVML_NVLINK_CAP_COUNT; cap++) {
-    NVML_CHECK(
-        nvml_stub().nvmlDeviceGetNvLinkCapability(
-            device, 0, (nvmlNvLinkCapability_t)cap, &cap_out));
+    NVML_CHECK(nvml_stub().nvmlDeviceGetNvLinkCapability(
+        device, 0, (nvmlNvLinkCapability_t)cap, &cap_out));
     printf("cap: %d, cap_out: %d\n", cap, cap_out);
   }
 

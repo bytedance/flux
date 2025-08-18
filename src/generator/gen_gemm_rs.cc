@@ -31,7 +31,6 @@ struct GemmV2ReduceScatter_Space {
               make_gemm_dtype_config(_FP16{}, _FP16{}, _Void{}, _FP16{}),
               make_gemm_dtype_config(_BF16{}, _BF16{}, _Void{}, _BF16{})),
           cute::make_tuple(_Sm80{}, _Sm89{}),
-          cute::make_tuple(_A100{}, _L20{}),
           cute::make_tuple(_ReduceScatter{}),
           cute::make_tuple(_RCR{}, _RRR{}),
           cute::make_tuple(_GemmV2{}),
@@ -39,7 +38,7 @@ struct GemmV2ReduceScatter_Space {
           tuple_transform(
               tuple_cartesian_product(
                   cute::make_tuple(_True{}, _False{}),
-                  cute::make_tuple(_IntraNode{}, _InterNode{}, _IntraNodePcie{})),
+                  cute::make_tuple(_IntraNode{}, _AcrossNode{}, _IntraNodePcie{})),
               [](auto tup) { return to_reduce_scatter_meta(tup); })),
       [](const auto tup) {
         auto meta = to_gemm_meta(tup);
@@ -72,7 +71,6 @@ struct GemmV2ReduceScatter_Space {
           make_gemm_dtype_config(_E5M2{}, _E5M2{}, _Void{}, _BF16{}),
           make_gemm_dtype_config(_E5M2{}, _E5M2{}, _BF16{}, _BF16{})),
       cute::make_tuple(_Sm89{}),
-      cute::make_tuple(_L20{}),
       cute::make_tuple(_ReduceScatter{}),
       cute::make_tuple(_RCR{}),
       cute::make_tuple(_GemmV2{}),
@@ -92,7 +90,6 @@ struct GemmV2ReduceScatter_Space {
           make_gemm_dtype_config(_S8{}, _S8{}, _BF16{}, _BF16{}, _S32{}),
           make_gemm_dtype_config(_S8{}, _S8{}, _Void{}, _BF16{}, _S32{})),
       cute::make_tuple(_Sm80{}, _Sm89{}),
-      cute::make_tuple(_A100{}, _L20{}),
       cute::make_tuple(_ReduceScatter{}),
       cute::make_tuple(_RCR{}),
       cute::make_tuple(_GemmV2{}),
@@ -141,7 +138,6 @@ struct GemmV3ReduceScatter_Space {
               make_gemm_dtype_config(_FP16{}, _FP16{}, _Void{}, _FP16{}),
               make_gemm_dtype_config(_BF16{}, _BF16{}, _Void{}, _BF16{})),
           cute::make_tuple(_Sm90{}),
-          cute::make_tuple(_H20{}, _H800{}),
           cute::make_tuple(_ReduceScatter{}),
           cute::make_tuple(_RCR{}, _RRR{}),
           cute::make_tuple(_GemmV3{}),
@@ -149,25 +145,23 @@ struct GemmV3ReduceScatter_Space {
           tuple_transform(
               tuple_cartesian_product(
                   cute::make_tuple(_True{}, _False{}),
-                  cute::make_tuple(_IntraNode{}, _InterNode{})),
+                  cute::make_tuple(_IntraNode{}, _AcrossNode{})),
               [](auto tup) { return to_reduce_scatter_meta(tup); })),
       [](auto meta_tuple) {
         constexpr auto meta = to_gemm_meta(decltype(meta_tuple){});
         constexpr auto rs_meta = to_reduce_scatter_meta(meta.comm_spec());
         return not(meta.arch() == _Sm80{} and meta.gemm_layout() == _RRR{}) and
-               not(rs_meta.fuse_reduction() == _False{} and rs_meta.comm_kind() == _InterNode{});
+               not(rs_meta.fuse_reduction() == _False{} and rs_meta.comm_kind() == _AcrossNode{});
       });
 
-  static constexpr auto AllGemmHParams_FP16 = make_space_gemm_hparams(
-      cute::make_tuple(
-          make_gemm_v3_hparams(Shape<_2, _1, _1>{}), make_gemm_v3_hparams(Shape<_1, _2, _1>{})));
+  static constexpr auto AllGemmHParams_FP16 = make_space_gemm_hparams(cute::make_tuple(
+      make_gemm_v3_hparams(Shape<_2, _1, _1>{}), make_gemm_v3_hparams(Shape<_1, _2, _1>{})));
 
   static constexpr auto AllGemmMeta_S8 = make_space_gemm_meta(
       cute::make_tuple(
           make_gemm_dtype_config(_S8{}, _S8{}, _BF16{}, _BF16{}, _S32{}),
           make_gemm_dtype_config(_S8{}, _S8{}, _Void{}, _BF16{}, _S32{})),
       cute::make_tuple(_Sm90{}),
-      cute::make_tuple(_H20{}, _H800{}),
       cute::make_tuple(_ReduceScatter{}),
       cute::make_tuple(_RCR{}),
       cute::make_tuple(_GemmV3{}),

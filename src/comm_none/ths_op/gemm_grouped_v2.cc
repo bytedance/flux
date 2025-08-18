@@ -73,7 +73,7 @@ class GemmGroupedV2::GemmGroupedV2Impl {
         num_experts(num_experts),
         in_type(in_type),
         out_type(out_type),
-        is_fp8_gemm(is_fp8_torch_dtype(in_type)) {
+        is_fp8_gemm(c10::isFloat8Type(in_type)) {
     CHECK_INPUT(weight, in_type);
     FLUX_CHECK_EQ(weight.dim(), 3) << "gemm grouped weight shape is not 3";
     FLUX_CHECK_EQ(weight.size(0), num_experts) << "gemm grouped 0-dim is not equal to num_experts";
@@ -184,7 +184,6 @@ class GemmGroupedV2::GemmGroupedV2Impl {
         .sm_margin = sm_margin};
 
     auto arch = get_arch();
-    auto sm_core = get_sm_core();
     auto input_dtype = from_torch_dtype(this->in_type);
     auto output_dtype = from_torch_dtype(this->out_type);
     auto dtype_c = is_fp8_gemm ? _BF16{} : input_dtype;
@@ -193,8 +192,7 @@ class GemmGroupedV2::GemmGroupedV2Impl {
     auto v2_meta = make_gemm_v2_meta(fast_accum);
 
     // Here use RCR layout, but support both RCR and RCC
-    auto meta = make_gemm_meta(
-        dtype_config, arch, sm_core, _CommNone{}, _RCR{}, _GemmGroupedV2{}, v2_meta);
+    auto meta = make_gemm_meta(dtype_config, arch, _CommNone{}, _RCR{}, _GemmGroupedV2{}, v2_meta);
     auto rt_conf = make_runtime_config(cute::ceil_div(M, args.problem_count), N, K);
     auto gemm_op = OpRegistry::instance().get_op(meta, rt_conf);
 

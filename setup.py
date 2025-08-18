@@ -12,23 +12,17 @@ import setuptools
 import torch
 import subprocess
 from torch.utils.cpp_extension import BuildExtension
-from packaging.version import parse
+from packaging.version import parse, Version
 from typing import Optional, Tuple
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
-
-
-def _get_bool_from_env(env_name: str) -> bool:
-    return os.getenv(env_name, "0").lower() in ["1", "true", "on"]
-
 
 # Project directory root
 root_path: Path = Path(__file__).resolve().parent
 enable_nvshmem = int(os.getenv("FLUX_SHM_USE_NVSHMEM", 0))
 PACKAGE_NAME = "byte_flux"
 BASE_WHEEL_URL = "https://github.com/bytedance/flux/releases/download/{tag_name}/{wheel_name}"
-FLUX_FORCE_BUILD = _get_bool_from_env("FLUX_FORCE_BUILD")
-USE_LOCAL_VERSION = _get_bool_from_env("FLUX_USE_LOCAL_VERSION")
-WITH_TRITON_AOT = _get_bool_from_env("FLUX_WITH_TRITON_AOT")
+FORCE_BUILD = os.getenv("FLASH_ATTENTION_FORCE_BUILD", "FALSE") == "TRUE"
+USE_LOCAL_VERSION = int(os.getenv("FLUX_USE_LOCAL_VERSION", 0))
 
 
 def cuda_version() -> Tuple[int, ...]:
@@ -64,11 +58,14 @@ def cuda_version() -> Tuple[int, ...]:
     return tuple(int(v) for v in version)
 
 
-def get_local_version():
+def get_local_version(public_version):
     cuda_version_major, cuda_version_minor = cuda_version()
     torch_version_splits = torch.__version__.split(".")
     torch_version = f"{torch_version_splits[0]}.{torch_version_splits[1]}"
-    return f"+cu{cuda_version_major}{cuda_version_minor}torch{torch_version}"
+    version = (
+        public_version + f"+cu{cuda_version_major}{cuda_version_minor}" + f"torch{torch_version}"
+    )
+    return version
 
 
 def get_public_version():
@@ -82,7 +79,7 @@ def get_package_version():
     global USE_LOCAL_VERSION
     public_version = get_public_version()
     if USE_LOCAL_VERSION:
-        public_version = public_version + get_local_version()
+        return get_local_version(public_version)
     return public_version
 
 
@@ -122,23 +119,12 @@ def read_flux_ths_targets():
     return [x for x in variables["FLUX_THS_TARGETS"].split(";") if x]
 
 
-def _nvshmem_path_by_pip():
-    try:
-        import nvidia.nvshmem
-
-        return nvidia.nvshmem.__path__[0]
-    except:
-        raise Exception(
-            "Failed to find nvshmem, please run `pip3 install nvidia-nvshmem-cu12` first"
-        )
-        return ""
-
-
 @pathlib_wrapper
 def nvshmem_deps():
-    nvshmem_home = Path(os.environ.get("NVSHMEM_HOME", _nvshmem_path_by_pip()))
+    nvshmem_home = Path(os.environ.get("NVSHMEM_HOME", root_path / "3rdparty/nvshmem/build/src"))
     include_dirs = [nvshmem_home / "include"]
     library_dirs = [nvshmem_home / "lib"]
+    # libraries = ["nvshmem"]
     libraries = ["nvshmem_host"]
     return include_dirs, library_dirs, libraries
 
@@ -169,14 +155,6 @@ def nccl_deps():
     return include_dirs, library_dirs, libraries
 
 
-@pathlib_wrapper
-def triton_aot_deps():
-    include_dirs = [root_path / "src" / "triton_aot_generated"]
-    library_dirs = [root_path / "build" / "lib"]
-    libraries = ["flux_triton_aot"]
-    return include_dirs, library_dirs, libraries
-
-
 def setup_pytorch_extension() -> setuptools.Extension:
     """Setup CppExtension for PyTorch support"""
     include_dirs, library_dirs, libraries = [], [], []
@@ -184,8 +162,6 @@ def setup_pytorch_extension() -> setuptools.Extension:
     deps = [nccl_deps(), cutlass_deps(), flux_cuda_deps(), cuda_deps()]
     if enable_nvshmem:
         deps.append(nvshmem_deps())
-    if WITH_TRITON_AOT:
-        deps.append(triton_aot_deps())
     for include_dir, library_dir, library in deps:
         include_dirs += include_dir
         library_dirs += library_dir
@@ -202,8 +178,6 @@ def setup_pytorch_extension() -> setuptools.Extension:
     ]
     if enable_nvshmem:
         cxx_flags.append("-DFLUX_SHM_USE_NVSHMEM")
-    if WITH_TRITON_AOT:
-        cxx_flags.append("-DFLUX_WITH_TRITON_AOT")
     ld_flags = ["-Wl,--exclude-libs=libnccl_static"]
     flux_ths_targets = [
         str(x.relative_to(root_path))  # relative path for include_package_data
@@ -223,7 +197,6 @@ def setup_pytorch_extension() -> setuptools.Extension:
         extra_link_args=ld_flags,
     )
 
-
 def get_wheel_url():
     flux_tag_version = get_public_version()
     python_version = f"cp{sys.version_info.major}{sys.version_info.minor}"
@@ -236,7 +209,6 @@ def get_wheel_url():
     wheel_url = BASE_WHEEL_URL.format(tag_name=f"v{flux_tag_version}", wheel_name=wheel_filename)
     return wheel_url, wheel_filename
 
-
 class CachedWheelsCommand(_bdist_wheel):
     """
     The CachedWheelsCommand plugs into the default bdist wheel, which is ran by pip when it cannot
@@ -246,7 +218,7 @@ class CachedWheelsCommand(_bdist_wheel):
     """
 
     def run(self):
-        if FLUX_FORCE_BUILD:
+        if FORCE_BUILD:
             return super().run()
 
         wheel_url, wheel_filename = get_wheel_url()
@@ -270,7 +242,6 @@ class CachedWheelsCommand(_bdist_wheel):
             # If the wheel could not be downloaded, build from source
             super().run()
 
-
 def main():
     flux_version = get_package_version()
     packages = setuptools.find_packages(
@@ -278,16 +249,16 @@ def main():
         include=[
             "flux",
             "flux.testing",
-            "flux.triton",
-            "flux_triton",
-            "flux_triton.extra",
-            "flux_triton.kernels",
-            "flux_triton.tools",
-            "flux_triton.tools.runtime",
-            "flux_triton.tools.compile",
         ],
     )
-    data_file_list = ["python/flux/lib/libflux_cuda.so", "python/flux/lib/libflux_cuda_ths_op.so"]
+    data_file_list = ["python/flux/lib/libflux_cuda.so"]
+    data_file_list += ["python/flux/lib/libflux_cuda_ths_op.so"]
+    if enable_nvshmem:
+        data_file_list += [
+            "python/flux/lib/nvshmem_bootstrap_uid.so",
+            "python/flux/lib/nvshmem_transport_ibrc.so.3",
+            "python/flux/lib/libnvshmem_host.so.3",
+        ]
     # Configure package
     setuptools.setup(
         name=PACKAGE_NAME,
@@ -305,7 +276,6 @@ def main():
             "python/flux/lib": ["*.so"],
             "python/flux/include": ["*.h"],
             "python/flux/share": ["*.cmake"],
-            "python/flux_triton/extra": ["*.bc", "*.ll"],
         },  # only works for bdist_wheel under package
         python_requires=">=3.8",
         include_package_data=True,

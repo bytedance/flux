@@ -5,10 +5,9 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 FLUX_SRC_DIR=${SCRIPT_DIR}
 
 # add flux python package to PYTHONPATH
-export NVSHMEM_BOOTSTRAP=UID
+export NVSHMEM_BOOTSTRAP_MPI_PLUGIN=nvshmem_bootstrap_torch.so
 export NVSHMEM_DISABLE_CUDA_VMM=1 # moving from cpp to shell
-export CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-1}
-export CUDA_MODULE_LOADING=LAZY # EAGER if launch the consumer kernel before the producer kernel on host
+export CUDA_DEVICE_MAX_CONNECTIONS=1
 
 # set default communication env vars
 export BYTED_TORCH_BYTECCL=O0

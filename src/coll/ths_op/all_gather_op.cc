@@ -158,7 +158,6 @@ class AllGatherOp::AllGatherOpImpl {
   int rank;
   int local_world_size;
   int local_rank;
-  int node_id;
 
   int max_m_dim, k_dim;
   at::ScalarType input_dtype;
@@ -202,7 +201,6 @@ AllGatherOp::AllGatherOpImpl::AllGatherOpImpl(
       rank(tp_group_->get_rank()),
       local_world_size(world_size / nnodes),
       local_rank(rank % local_world_size),
-      node_id(rank / local_world_size),
       max_m_dim(max_m_dim),
       k_dim(k_dim),
       input_dtype(input_dtype),
@@ -234,8 +232,12 @@ AllGatherOp::AllGatherOpImpl::create_symetric_buffers() {
       this->tp_group.get(),
       this->local_world_size > kMaxLocalWorldSize);
   this->input_buffer_ = this->input_buffers[this->local_rank];
-  for (int i = 0; i < this->local_world_size; ++i) {
-    this->input_ptrs[i] = this->input_buffers[i].data_ptr();
+  for (int i = 0; i < world_size; ++i) {
+    if (i / this->local_world_size == rank / this->local_world_size) {
+      this->input_ptrs[i] = this->input_buffers[i].data_ptr();
+    } else {
+      this->input_ptrs[i] = nullptr;
+    }
   }
 
   // barrier buffer
@@ -245,8 +247,12 @@ AllGatherOp::AllGatherOpImpl::create_symetric_buffers() {
       this->tp_group.get(),
       this->local_world_size > kMaxLocalWorldSize);
   this->barrier_buffer = this->barrier_buffers[this->local_rank];
-  for (int i = 0; i < this->local_world_size; ++i) {
-    this->barrier_ptrs[i] = (int32_t *)this->barrier_buffers[i].data_ptr();
+  for (int i = 0; i < world_size; ++i) {
+    if (i / this->local_world_size == rank / this->local_world_size) {
+      this->barrier_ptrs[i] = (int32_t *)this->barrier_buffers[i].data_ptr();
+    } else {
+      this->barrier_ptrs[i] = (int32_t *)nullptr;
+    }
   }
 
   // counter buffer
@@ -261,7 +267,7 @@ AllGatherOp::AllGatherOpImpl::create_symetric_buffers() {
   create_sync_buffers();
 
   // init params for d2d kernel
-  for (int i = 0; i < this->local_world_size; ++i) {
+  for (int i = 0; i < world_size; ++i) {
     this->copy_param.input_ptrs[i] = this->input_ptrs[i];
     this->copy_param.scale_ptrs[i] = this->input_scale_ptrs[i];
     this->copy_param.ag_barriers[i] = this->barrier_ptrs[i];
@@ -285,8 +291,12 @@ AllGatherOp::AllGatherOpImpl::create_symetric_buffers_with_input_scale() {
       this->tp_group.get(),
       this->local_world_size > kMaxLocalWorldSize);
   this->input_scale_buffer_ = this->input_scale_buffers[this->local_rank];
-  for (int i = 0; i < this->local_world_size; ++i) {
-    this->input_scale_ptrs[i] = this->input_scale_buffers[i].data_ptr();
+  for (int i = 0; i < world_size; ++i) {
+    if (i / this->local_world_size == rank / this->local_world_size) {
+      this->input_scale_ptrs[i] = this->input_scale_buffers[i].data_ptr();
+    } else {
+      this->input_scale_ptrs[i] = nullptr;
+    }
   }
 }
 
@@ -299,15 +309,19 @@ AllGatherOp::AllGatherOpImpl::create_sync_buffers() {
       c10::ScalarType::Int,
       this->tp_group.get(),
       this->local_world_size > kMaxLocalWorldSize);
-  this->sync_buffers[this->local_rank].zero_();  // zeros the sync buffer for cuda ipc at the start
+  this->sync_buffers[this->rank].zero_();  // zeros the sync buffer for cuda ipc at the start
 
-  size_t sync_ptrs_buffer_size = sizeof(void *) * (this->local_world_size);
+  size_t sync_ptrs_buffer_size = sizeof(void *) * (this->world_size);
   auto options = at::TensorOptions(at::kCUDA)
                      .device_index(at::cuda::current_device())
                      .dtype(c10::ScalarType::Byte);
   this->sync_ptrs_buffer = torch::empty({static_cast<long>(sync_ptrs_buffer_size)}, options);
-  for (int i = 0; i < this->local_world_size; ++i) {
-    this->sync_ptrs[i] = reinterpret_cast<int32_t *>(this->sync_buffers[i].data_ptr());
+  for (int i = 0; i < world_size; ++i) {
+    if (i / this->local_world_size == rank / this->local_world_size) {
+      this->sync_ptrs[i] = reinterpret_cast<int32_t *>(this->sync_buffers[i].data_ptr());
+    } else {
+      this->sync_ptrs[i] = nullptr;
+    }
   }
   CUDA_CHECK(cudaMemcpy(
       this->sync_ptrs_buffer.data_ptr(),

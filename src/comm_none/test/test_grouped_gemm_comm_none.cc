@@ -58,12 +58,11 @@ void
 run_grouped_gemm_comm_none(int groups, int m, int n, int k) {
   cudaSetDevice(0);
   auto arch = get_arch();
-  auto sm_core = get_sm_core();
+
   auto dt_conf = to_gemm_dtype_config(make_gemm_dtype_config(DType{}));
   bool fast_accum = (is_fp8_dtype(dt_conf.a()) and is_fp8_dtype(dt_conf.b())) ? _True{} : _False{};
   auto v3_meta = make_gemm_v3_meta(fast_accum);
-  auto meta =
-      make_gemm_meta(dt_conf, arch, sm_core, _CommNone{}, _RCC{}, _GemmGroupedV3{}(), v3_meta);
+  auto meta = make_gemm_meta(dt_conf, arch, _CommNone{}, _RCC{}, _GemmGroupedV3{}(), v3_meta);
 
   using ElementA = decltype(to_cutlass_element(dt_conf.a()));
   using ElementB = decltype(to_cutlass_element(dt_conf.b()));

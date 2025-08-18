@@ -30,7 +30,6 @@ struct GemmV2CommNone_Space {
           make_gemm_dtype_config(_FP16{}, _FP16{}, _Void{}, _FP16{}),
           make_gemm_dtype_config(_BF16{}, _BF16{}, _Void{}, _BF16{})),
       cute::make_tuple(_Sm80{}, _Sm89{}),
-      cute::make_tuple(_A100{}, _L20{}),
       cute::make_tuple(_CommNone{}),
       cute::make_tuple(_RCR{}, _RRR{}),
       cute::make_tuple(_GemmV2{}));
@@ -44,7 +43,6 @@ struct GemmV2CommNone_Space {
           make_gemm_dtype_config(_E5M2{}, _E5M2{}, _Void{}, _BF16{}),
           make_gemm_dtype_config(_E5M2{}, _E5M2{}, _BF16{}, _BF16{})),
       cute::make_tuple(_Sm89{}),
-      cute::make_tuple(_L20{}),
       cute::make_tuple(_CommNone{}),
       cute::make_tuple(_RCR{}),  // Only register RCR layout for FP8 GEMM
       cute::make_tuple(_GemmV2{}),
@@ -63,7 +61,6 @@ struct GemmV2CommNone_Space {
           make_gemm_dtype_config(_S8{}, _S8{}, _BF16{}, _BF16{}, _S32{}),
           make_gemm_dtype_config(_S8{}, _S8{}, _Void{}, _BF16{}, _S32{})),
       cute::make_tuple(_Sm80{}, _Sm89{}),
-      cute::make_tuple(_A100{}, _L20{}),
       cute::make_tuple(_CommNone{}),
       cute::make_tuple(_RCR{}),
       cute::make_tuple(_GemmV2{}));
@@ -111,7 +108,6 @@ struct GemmV3CommNone_Space {
           make_gemm_dtype_config(_E5M2{}, _E5M2{}, _BF16{}, _BF16{}),
           make_gemm_dtype_config(_E5M2{}, _E5M2{}, _Void{}, _BF16{})),
       cute::make_tuple(_Sm90{}),
-      cute::make_tuple(_H20{}, _H800{}),
       cute::make_tuple(_CommNone{}),
       cute::make_tuple(_RCR{}, _RRR{}),
       cute::make_tuple(_GemmV3{}),
@@ -123,10 +119,7 @@ struct GemmV3CommNone_Space {
               tuple_cartesian_product(
                   cute::make_tuple(Shape<_2, _1, _1>{}, Shape<_1, _2, _1>{}),
                   cute::make_tuple(_Cooperative{}, _PingPong{})),
-              [](auto tup) {
-                auto [cluster_shape, kernel_schedule] = tup;
-                return make_gemm_v3_hparams(cluster_shape, kernel_schedule);
-              }),
+              [](auto tup) { return to_gemm_v3_hparams(tup); }),
           cute::make_tuple(Auto{}),
           cute::make_tuple(Auto{}),
           cute::make_tuple(_GemmDefault{}, _GemmStreamK{})),
@@ -139,56 +132,30 @@ struct GemmV3CommNone_Space {
 
   static constexpr auto AllGemmMeta_FP8_BlockScale = make_space_gemm_meta(
       cute::make_tuple(
+          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _E4M3{}, _E4M3{}),
+          make_gemm_dtype_config(_E5M2{}, _E5M2{}, _E5M2{}, _E5M2{}),
+          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _Void{}, _E4M3{}),
+          make_gemm_dtype_config(_E5M2{}, _E5M2{}, _Void{}, _E5M2{}),
+          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _BF16{}, _BF16{}),
+          make_gemm_dtype_config(_E5M2{}, _E5M2{}, _BF16{}, _BF16{}),
           make_gemm_dtype_config(_E4M3{}, _E4M3{}, _Void{}, _BF16{}),
-          make_gemm_dtype_config(_E5M2{}, _E4M3{}, _Void{}, _BF16{}),
-          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _Void{}, _FP32{}),
-          make_gemm_dtype_config(_E5M2{}, _E4M3{}, _Void{}, _FP32{})),
+          make_gemm_dtype_config(_E5M2{}, _E5M2{}, _Void{}, _BF16{}),
+          make_gemm_dtype_config(_E4M3{}, _E5M2{}, _BF16{}, _BF16{}),
+          make_gemm_dtype_config(_E5M2{}, _E4M3{}, _BF16{}, _BF16{}),
+          make_gemm_dtype_config(_E4M3{}, _E5M2{}, _Void{}, _BF16{}),
+          make_gemm_dtype_config(_E5M2{}, _E4M3{}, _Void{}, _BF16{})),
       cute::make_tuple(_Sm90{}),
-      cute::make_tuple(_H20{}, _H800{}),
       cute::make_tuple(_CommNone{}),
       cute::make_tuple(_RCC{}, _RCR{}),
       cute::make_tuple(_GemmV3{}),
       cute::make_tuple(make_gemm_v3_meta(_False{}, _True{})));
 
   static constexpr auto AllGEMMHParam_FP8_BlockScale = make_space_gemm_hparams(
-      tuple_transform(
-          tuple_cartesian_product(
-              cute::make_tuple(Shape<_1, _2, _1>{}),
-              cute::make_tuple(_Cooperative{}),
-              cute::make_tuple(_BlockScaleMPerRow{}),
-              cute::make_tuple(_BlockScaleNPerBlock{}, _BlockScaleNPerCol{})),
-          [](auto tup) { return to_gemm_v3_hparams(tup); }),
+      cute::make_tuple(make_gemm_v3_hparams(Shape<_1, _2, _1>{}, _Cooperative{})),
       cute::make_tuple(Auto{}),
       cute::make_tuple(Shape<_128, _128, _128>{}),
-      cute::make_tuple(_GemmDefault{}, _GemmStreamK{}),
+      cute::make_tuple(_GemmDefault{}),
       cute::make_tuple(cute::_0{}),  // auto calculate
-      cute::make_tuple(_RasterAlongM{}));
-
-  static constexpr auto AllGemmMeta_FP8 = make_space_gemm_meta(
-      cute::make_tuple(
-          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _Void{}, _BF16{}),
-          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _BF16{}, _BF16{}),
-          make_gemm_dtype_config(_E5M2{}, _E4M3{}, _Void{}, _BF16{}),
-          make_gemm_dtype_config(_E5M2{}, _E4M3{}, _BF16{}, _BF16{})),
-      cute::make_tuple(_Sm90{}),
-      cute::make_tuple(_H20{}, _H800{}),
-      cute::make_tuple(_CommNone{}),
-      cute::make_tuple(_RCR{}),  // Only register RCR layout for FP8 GEMM
-      cute::make_tuple(_GemmV3{}),
-      cute::make_tuple(make_gemm_v3_meta(_False{})));
-
-  static constexpr auto AllGemmHParams_FP8 = make_space_gemm_hparams(
-      tuple_transform(
-          tuple_cartesian_product(
-              cute::make_tuple(Shape<_2, _1, _1>{}), cute::make_tuple(_Cooperative{})),
-          [](auto tup) {
-            auto [cluster_shape, kernel_schedule] = tup;
-            return make_gemm_v3_hparams(cluster_shape, kernel_schedule);
-          }),
-      cute::make_tuple(None{}),                     // comm_specs
-      cute::make_tuple(Shape<_128, _128, _128>{}),  // Tile Shape
-      cute::make_tuple(_GemmDefault{}),             // GemmKinds
-      cute::make_tuple(Auto{}),                     // auto calculate
       cute::make_tuple(_RasterAlongM{}));
 
   static constexpr auto AllGemmMeta_S8 = make_space_gemm_meta(
@@ -200,7 +167,6 @@ struct GemmV3CommNone_Space {
           make_gemm_dtype_config(_S8{}, _S8{}, _S32{}, _S32{}, _S32{}),
           make_gemm_dtype_config(_S8{}, _S8{}, _Void{}, _S32{}, _S32{})),
       cute::make_tuple(_Sm90{}),
-      cute::make_tuple(_H20{}, _H800{}),
       cute::make_tuple(_CommNone{}),
       cute::make_tuple(_RCR{}),
       cute::make_tuple(_GemmV3{}),
@@ -256,7 +222,6 @@ struct GemmV3CommNone_Space {
         build_gen_space(AllGemmMeta_FP16, AllGemmHParams_FP16),
         build_gen_space(AllGemmMeta_S8, AllGemmHParams_S8),
         build_gen_space(AllGemmMeta_FP8_BlockScale, AllGEMMHParam_FP8_BlockScale),
-        build_gen_space(AllGemmMeta_FP8, AllGemmHParams_FP8),
     });
   }
 };
@@ -269,7 +234,6 @@ struct GemmGroupedV2CommNone_Space {
           make_gemm_dtype_config(_FP16{}, _FP16{}, _Void{}, _FP16{}),
           make_gemm_dtype_config(_BF16{}, _BF16{}, _Void{}, _BF16{})),
       cute::make_tuple(_Sm80{}, _Sm89{}),
-      cute::make_tuple(_A100{}, _L20{}),
       cute::make_tuple(_CommNone{}),
       cute::make_tuple(_RCR{}, _RCC{}),
       cute::make_tuple(_GemmGroupedV2{}),
@@ -284,7 +248,6 @@ struct GemmGroupedV2CommNone_Space {
           make_gemm_dtype_config(_E5M2{}, _E5M2{}, _Void{}, _BF16{}),
           make_gemm_dtype_config(_E5M2{}, _E5M2{}, _BF16{}, _BF16{})),
       cute::make_tuple(_Sm89{}),
-      cute::make_tuple(_L20{}),
       cute::make_tuple(_CommNone{}),
       cute::make_tuple(_RCR{}, _RCC{}),
       cute::make_tuple(_GemmGroupedV2{}),
@@ -312,7 +275,6 @@ struct GemmGroupedV3CommNone_Space {
       make_space_gemm_meta(
           cute::make_tuple(_FP16{}, _BF16{}),
           cute::make_tuple(_Sm90{}),
-          cute::make_tuple(_H20{}, _H800{}),
           cute::make_tuple(_CommNone{}),
           cute::make_tuple(_RCR{}, _RRR{}, _RCC{}),
           cute::make_tuple(_GemmGroupedV3{}),
@@ -332,7 +294,6 @@ struct GemmGroupedV3CommNone_Space {
           make_gemm_dtype_config(_E4M3{}, _E4M3{}, _BF16{}, _BF16{}),
           make_gemm_dtype_config(_E5M2{}, _E5M2{}, _BF16{}, _BF16{})),
       cute::make_tuple(_Sm90{}),
-      cute::make_tuple(_H20{}, _H800{}),
       cute::make_tuple(_CommNone{}),
       cute::make_tuple(_RCR{}, _RCC{}),
       cute::make_tuple(_GemmGroupedV3{}),
@@ -341,39 +302,11 @@ struct GemmGroupedV3CommNone_Space {
   static constexpr auto AllGemmHParams_FP8 = make_space_gemm_hparams(
       cute::make_tuple(make_gemm_v3_hparams(Shape<_2, _1, _1>{})), cute::make_tuple(Auto{}));
 
-  static constexpr auto AllGemmMeta_FP8_BlockScale = make_space_gemm_meta(
-      cute::make_tuple(
-          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _BF16{}, _BF16{}),
-          make_gemm_dtype_config(_E5M2{}, _E4M3{}, _BF16{}, _BF16{}),
-          make_gemm_dtype_config(_E4M3{}, _E4M3{}, _FP32{}, _FP32{}),
-          make_gemm_dtype_config(_E5M2{}, _E4M3{}, _FP32{}, _FP32{})),
-      cute::make_tuple(_Sm90{}),
-      cute::make_tuple(_H20{}, _H800{}),
-      cute::make_tuple(_CommNone{}),
-      cute::make_tuple(_RCR{}),
-      cute::make_tuple(_GemmGroupedV3{}),
-      cute::make_tuple(make_gemm_v3_meta(_False{}, _True{})));
-
-  static constexpr auto AllGEMMHParam_FP8_BlockScale = make_space_gemm_hparams(
-      tuple_transform(
-          tuple_cartesian_product(
-              cute::make_tuple(Shape<_1, _2, _1>{}),
-              cute::make_tuple(_Cooperative{}),
-              cute::make_tuple(_BlockScaleMPerRow{}),
-              cute::make_tuple(_BlockScaleNPerBlock{}, _BlockScaleNPerCol{})),
-          [](auto tup) { return to_gemm_v3_hparams(tup); }),
-      cute::make_tuple(Auto{}),
-      cute::make_tuple(Shape<_128, _128, _128>{}),
-      cute::make_tuple(_GemmDefault{}, _GemmStreamK{}),
-      cute::make_tuple(cute::_0{}),  // auto calculate
-      cute::make_tuple(_RasterAlongM{}));
-
   static auto
   get_space() {
     return merge_gen_space({
         build_gen_space(AllGemmMeta_FP16, AllGemmHParams_FP16),
         build_gen_space(AllGemmMeta_FP8, AllGemmHParams_FP8),
-        build_gen_space(AllGemmMeta_FP8_BlockScale, AllGEMMHParam_FP8_BlockScale),
     });
   }
 };

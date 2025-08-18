@@ -1,5 +1,3 @@
 global-exclude *.so*
 recursive-include python/flux/include *
 recursive-include python/flux/share *
-include python/flux_triton/extra/cuda_extra.bc
-include python/flux_triton/extra/cuda_extra.ll

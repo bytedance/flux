@@ -15,17 +15,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "moe_gather_rs/moe_utils.h"
-
-#include <c10/cuda/CUDAStream.h>
-#include <nvshmem.h>
-#include <torch/all.h>
-#include <torch/library.h>
-
-#include "flux/cuda/cuda_common.h"
 #include "flux/flux.h"
 #include "flux/ths_op/ths_op.h"
 #include "flux/ths_op/util.h"
+#include "torch/all.h"
+#include "torch/library.h"
+#include <c10/cuda/CUDAStream.h>
+#include "flux/cuda/cuda_common.h"
+#include <nvshmem.h>
+
+#include "moe_gather_rs/moe_utils.h"
 #include "moe_gather_rs/ths_op/moe_utils.h"
 
 using torch::Tensor;

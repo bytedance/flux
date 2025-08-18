@@ -253,6 +253,7 @@ def gate_func(
         weights = torch.ones(num_experts, dtype=torch.float32, device="cuda")
     else:
         raise ValueError(f"Unknown distribution: {dist}")
+
     weights = torch.ones(num_experts, dtype=torch.float32, device="cuda")
     args = gen_moe_gating_args(
         E=num_experts,

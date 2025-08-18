@@ -64,14 +64,12 @@ std::vector<torch::Tensor> flux_create_tensor_list(
     const std::vector<int64_t> &shape,
     c10::ScalarType dtype,
     c10::intrusive_ptr<c10d::ProcessGroup> pg = nullptr,
-    bool ring_mode = false,
-    bool init_zero = false);
+    bool ring_mode = false);
 void flux_barrier_all_on_stream(
     cudaStream_t stream,
     c10::optional<std::vector<torch::Tensor>> barrier_tensors = c10::nullopt,
     c10::optional<int> rank = c10::nullopt,
-    bool ring_mode = false,
-    bool force_flux_impl = false);
+    bool ring_mode = false);
 
 void init_flux_shm(Group *pg);
 torch::Tensor flux_create_tensor(
@@ -80,12 +78,11 @@ std::vector<torch::Tensor> flux_create_tensor_list(
     const std::vector<int64_t> &shape,
     c10::ScalarType dtype,
     Group *group = nullptr,
-    bool ring_mode = false,
-    bool init_zero = false);
+    bool ring_mode = false);
 
 class GroupBarrier {
  public:
-  GroupBarrier(std::shared_ptr<Group> group, bool ring_mode = false, bool force_flux_impl = false);
+  GroupBarrier(std::shared_ptr<Group> group, bool ring_mode = false);
   ~GroupBarrier();
   void barrier_all(cudaStream_t stream);
 
@@ -99,15 +96,13 @@ std::vector<torch::Tensor> cudaipc_create_tensor_list(
     Group *group,
     const std::vector<int64_t> &shape,
     c10::ScalarType dtype,
-    bool ring_mode = false,
-    bool init_zero = false);
+    bool ring_mode = false);
 
 #ifdef FLUX_SHM_USE_NVSHMEM
-torch::Tensor nvshmem_create_tensor(
-    const std::vector<int64_t> &shape, c10::ScalarType dtype, bool init_zero = false);
-
 std::vector<torch::Tensor> nvshmem_create_tensor_list(
-    const std::vector<int64_t> &shape, c10::ScalarType dtype, bool init_zero = false);
+    const std::vector<int64_t> &shape, c10::ScalarType dtype);
+
+torch::Tensor nvshmem_create_tensor(const std::vector<int64_t> &shape, c10::ScalarType dtype);
 #endif
 
 // NOTE: this should be a symetric operation
