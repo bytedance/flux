@@ -49,9 +49,6 @@ Install Flux either from source or from PyPI.
 ```bash
 git clone --recursive https://github.com/bytedance/flux.git && cd flux
 
-# Install dependencies
-bash ./install_deps.sh
-
 # For Ampere(sm80) GPU
 ./build.sh --arch 80 --nvshmem
 # For Ada Lovelace(sm89) GPU
